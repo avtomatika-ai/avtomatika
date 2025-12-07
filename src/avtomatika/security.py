@@ -79,7 +79,7 @@ def worker_auth_middleware_factory(
 
         # If no worker_id could be determined from path or body, we can only validate against the global token.
         if not worker_id:
-            if provided_token == config.WORKER_TOKEN:
+            if provided_token == config.GLOBAL_WORKER_TOKEN:
                 # We don't know the worker_id, so we can't attach it.
                 return await handler(request)
             else:
@@ -102,7 +102,7 @@ def worker_auth_middleware_factory(
                 )
 
         # --- Global Token Fallback ---
-        if config.WORKER_TOKEN and provided_token == config.WORKER_TOKEN:
+        if config.GLOBAL_WORKER_TOKEN and provided_token == config.GLOBAL_WORKER_TOKEN:
             request["worker_id"] = worker_id  # Attach authenticated worker_id
             return await handler(request)
 

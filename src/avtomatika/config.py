@@ -54,3 +54,4 @@ class Config:
 
         # External config files
         self.WORKERS_CONFIG_PATH: str = getenv("WORKERS_CONFIG_PATH", "")
+        self.CLIENTS_CONFIG_PATH: str = getenv("CLIENTS_CONFIG_PATH", "")

@@ -40,6 +40,9 @@ async def compression_middleware(
 
     response = await handler(request)
 
+    if isinstance(response, web.WebSocketResponse):
+        return response
+
     if (
         not compress_func
         or not encoding

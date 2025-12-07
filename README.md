@@ -62,73 +62,147 @@ You can easily integrate and run the orchestrator engine within your own applica
 # my_app.py
 import asyncio
 from avtomatika import OrchestratorEngine, StateMachineBlueprint
+from avtomatika.context import ActionFactory
 from avtomatika.storage import MemoryStorage
 from avtomatika.config import Config
 
-# 1. Define your pipeline (Blueprint)
+# 1. General Configuration
+storage = MemoryStorage()
+config = Config() # Loads configuration from environment variables
+
+# Explicitly set tokens for this example
+# Client token must be sent in the 'X-Avtomatika-Token' header.
+config.CLIENT_TOKEN = "my-secret-client-token"
+# Worker token must be sent in the 'X-Worker-Token' header.
+config.GLOBAL_WORKER_TOKEN = "my-secret-worker-token"
+
+# 2. Define the Workflow Blueprint
 my_blueprint = StateMachineBlueprint(
     name="my_first_blueprint",
     api_version="v1",
     api_endpoint="/jobs/my_flow"
 )
 
+# Use dependency injection to get only the data you need.
 @my_blueprint.handler_for("start", is_start=True)
-async def start_handler(context):
+async def start_handler(job_id: str, initial_data: dict, actions: ActionFactory):
     """The initial state for each new job."""
-    print(f"Job {context.job_id} | Start: {context.initial_data}")
-    # Tell the orchestrator what to do next
-    context.actions.transition_to("end")
+    print(f"Job {job_id} | Start: {initial_data}")
+    actions.transition_to("end")
 
+# You can still request the full context object if you prefer.
 @my_blueprint.handler_for("end", is_end=True)
 async def end_handler(context):
     """The final state. The pipeline ends here."""
     print(f"Job {context.job_id} | Complete.")
 
-# 2. Configure and run the engine
-async def main():
-    # Using in-memory storage for this example
-    storage = MemoryStorage()
-    config = Config() # Loads configuration from environment variables
+# 3. Initialize the Orchestrator Engine
+engine = OrchestratorEngine(storage, config)
+engine.register_blueprint(my_blueprint)
 
-    engine = OrchestratorEngine(storage, config)
-    engine.register_blueprint(my_blueprint)
+# 4. Define the main entrypoint to run the server
+async def main():
+    await engine.start()
     
-    print("Starting Orchestrator engine...")
-    # engine.run() is a blocking call that starts the web server.
-    # For integration into an existing asyncio app, use engine.start()
-    engine.run()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await engine.stop()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Stopping server.")
+        print("\nStopping server.")
 ```
-## Key Concepts: JobContext and Actions
 
-Each state handler receives one argument: `context` (**JobContext**). This object contains all information about the current job and the methods to control the workflow.
+### Engine Lifecycle: `run()` vs. `start()`
 
-*   `context.job_id`: The ID of the current job.
-*   `context.initial_data`: The data the job was created with.
-*   `context.state_history`: A dictionary for storing and passing data between steps.
-*   `context.actions`: An object used to tell the orchestrator what to do next. Only one actions method can be called per handler.
-    *   `context.actions.transition_to("next_state")`: Moves the job to a new state.
-    *   `context.actions.dispatch_task(...)`: Delegates work to a Worker.## Blueprint Cookbook: Key Features
+The `OrchestratorEngine` offers two ways to start the server:
+
+*   **`engine.run()`**: This is a simple, **blocking** method. It's useful for dedicated scripts where the orchestrator is the only major component. It handles starting and stopping the server for you. You should not use this inside an `async def` function that is part of a larger application, as it can conflict with the event loop.
+
+*   **`await engine.start()`** and **`await engine.stop()`**: These are the non-blocking methods for integrating the engine into a larger `asyncio` application.
+    *   `start()` sets up and starts the web server in the background.
+    *   `stop()` gracefully shuts down the server and cleans up resources.
+    The "Quick Start" example above demonstrates the correct way to use these methods.
+## Handler Arguments & Dependency Injection
+
+State handlers are the core of your workflow logic. Avtomatika provides a powerful dependency injection system to make writing handlers clean and efficient.
+
+Instead of receiving a single, large `context` object, your handler can ask for exactly what it needs as function arguments. The engine will automatically provide them.
+
+The following arguments can be injected by name:
+
+*   **From the core job context:**
+    *   `job_id` (str): The ID of the current job.
+    *   `initial_data` (dict): The data the job was created with.
+    *   `state_history` (dict): A dictionary for storing and passing data between steps. Data returned by workers is automatically merged into this dictionary.
+    *   `actions` (ActionFactory): The object used to tell the orchestrator what to do next (e.g., `actions.transition_to(...)`).
+    *   `client` (ClientConfig): Information about the API client that started the job.
+    *   `data_stores` (SimpleNamespace): Access to shared resources like database connections or caches.
+*   **From worker results:**
+    *   Any key from a dictionary returned by a previous worker can be injected by name.
+
+### Example: Dependency Injection
+
+This is the recommended way to write handlers.
+
+```python
+# A worker for this task returned: {"output_path": "/videos/123.mp4", "duration": 95}
+# This dictionary was automatically merged into `state_history`.
+
+@my_blueprint.handler_for("publish_video")
+async def publish_handler(
+    job_id: str,
+    output_path: str, # Injected from state_history
+    duration: int,    # Injected from state_history
+    actions: ActionFactory
+):
+    print(f"Job {job_id}: Publishing video at {output_path} ({duration}s).")
+    actions.transition_to("complete")
+```
+
+### The `actions` Object
+
+This is the most important injected argument. It tells the orchestrator what to do next. **Only one** `actions` method can be called in a single handler.
+
+*   `actions.transition_to("next_state")`: Moves the job to a new state.
+*   `actions.dispatch_task(...)`: Delegates work to a Worker.
+*   `actions.dispatch_parallel(...)`: Runs multiple tasks at once.
+*   `actions.await_human_approval(...)`: Pauses the workflow for external input.
+*   `actions.run_blueprint(...)`: Starts a child workflow.
+
+### Backward Compatibility: The `context` Object
+
+For backward compatibility or if you prefer to have a single object, you can still ask for `context`.
+
+```python
+# This handler is equivalent to the one above.
+@my_blueprint.handler_for("publish_video")
+async def publish_handler_old_style(context):
+    output_path = context.state_history.get("output_path")
+    duration = context.state_history.get("duration")
+
+    print(f"Job {context.job_id}: Publishing video at {output_path} ({duration}s).")
+    context.actions.transition_to("complete")
+```
+## Blueprint Cookbook: Key Features
 
 ### 1. Conditional Transitions (`.when()`)
 
-Use `.when()` to create conditional logic branches without `if/else` inside your handler. The first handler whose `.when()` condition evaluates to `True` will be executed.
+Use `.when()` to create conditional logic branches. The condition string is evaluated by the engine before the handler is called, so it still uses the `context.` prefix. The handler itself, however, can use dependency injection.
 
 ```python
-# Will only run if initial_data had a field "type" with value "urgent"
+# The `.when()` condition still refers to `context`.
 @my_blueprint.handler_for("decision_step").when("context.initial_data.type == 'urgent'")
-async def handle_urgent(context):
-    context.actions.transition_to("urgent_processing")
+async def handle_urgent(actions):
+    actions.transition_to("urgent_processing")
 
-# Default handler for the "decision_step" state if no .when() matches
+# The default handler if no `.when()` condition matches.
 @my_blueprint.handler_for("decision_step")
-async def handle_normal(context):
-    context.actions.transition_to("normal_processing")
+async def handle_normal(actions):
+    actions.transition_to("normal_processing")
 ```
 
 ### 2. Delegating Tasks to Workers (`dispatch_task`)
@@ -137,10 +211,10 @@ This is the primary function for delegating work. The orchestrator will queue th
 
 ```python
 @my_blueprint.handler_for("transcode_video")
-async def transcode_handler(context):
-    context.actions.dispatch_task(
+async def transcode_handler(initial_data, actions):
+    actions.dispatch_task(
         task_type="video_transcoding",
-        params={"input_path": context.initial_data.get("path")},
+        params={"input_path": initial_data.get("path")},
         # Define the next step based on the worker's response status
         transitions={
             "success": "publish_video",
@@ -156,28 +230,30 @@ If the worker returns a status not listed in `transitions`, the job will automat
 Run multiple tasks simultaneously and gather their results.
 
 ```python
-# 1. Fan-out: Dispatch multiple tasks leading to one aggregation state
+# 1. Fan-out: Dispatch multiple tasks to be aggregated into a single state
 @my_blueprint.handler_for("process_files")
-async def fan_out_handler(context):
-    for file in context.initial_data.get("files", []):
-        context.actions.dispatch_task(
-            task_type="file_analysis",
-            params={"file": file},
-            transitions={"success": "aggregate_results"}
-        )
+async def fan_out_handler(initial_data, actions):
+    tasks_to_dispatch = [
+        {"task_type": "file_analysis", "params": {"file": file}}
+        for file in initial_data.get("files", [])
+    ]
+    # Use dispatch_parallel to send all tasks at once.
+    # All successful tasks will implicitly lead to the 'aggregate_into' state.
+    actions.dispatch_parallel(
+        tasks=tasks_to_dispatch,
+        aggregate_into="aggregate_results"
+    )
 
 # 2. Fan-in: Collect results using the @aggregator_for decorator
 @my_blueprint.aggregator_for("aggregate_results")
-async def aggregator_handler(context):
+async def aggregator_handler(aggregation_results, state_history, actions):
     # This handler will only execute AFTER ALL tasks
-    # leading to "aggregate_results" are complete.
+    # dispatched by dispatch_parallel are complete.
 
-    all_results = context.aggregation_results
-    # all_results is a dictionary of {task_id: result_dict}
-
-    summary = [res.get("data") for res in all_results.values()]
-    context.state_history["summary"] = summary
-    context.actions.transition_to("processing_complete")
+    # aggregation_results is a dictionary of {task_id: result_dict}
+    summary = [res.get("data") for res in aggregation_results.values()]
+    state_history["summary"] = summary
+    actions.transition_to("processing_complete")
 ```
 
 ### 4. Dependency Injection (DataStore)
@@ -194,14 +270,16 @@ bp = StateMachineBlueprint(
     data_stores={"cache": redis_client}
 )
 
-# 2. Use it in a handler via the context
+# 2. Use it in a handler via dependency injection
 @bp.handler_for("get_from_cache")
-async def cache_handler(context):
+async def cache_handler(data_stores):
     # Access the redis_client by the name "cache"
-    user_data = await context.data_stores.cache.get("user:123")
+    user_data = await data_stores.cache.get("user:123")
     print(f"User from cache: {user_data}")
 ```
 ## Production Configuration
+
+The orchestrator's behavior can be configured through environment variables. Additionally, any configuration parameter loaded from environment variables can be programmatically overridden in your application code after the `Config` object has been initialized. This provides flexibility for different deployment and testing scenarios.
 
 ### Fault Tolerance
 
@@ -236,6 +314,15 @@ By default, the engine uses in-memory storage. For production, you must configur
         ```
         *   SQLite: `sqlite:///path/to/history.db`
         *   PostgreSQL: `postgresql://user:pass@host/db`
+
+### Security
+
+The orchestrator uses tokens to authenticate API requests.
+
+*   **Client Authentication**: All API clients must provide a token in the `X-Avtomatika-Token` header. The orchestrator validates this token against client configurations.
+*   **Worker Authentication**: Workers must provide a token in the `X-Worker-Token` header.
+    *   `GLOBAL_WORKER_TOKEN`: You can set a global token for all workers using this environment variable. For development and testing, it defaults to `"secure-worker-token"`.
+    *   **Individual Tokens**: For production, it is recommended to define individual tokens for each worker in a separate configuration file and provide its path via the `WORKERS_CONFIG_PATH` environment variable.
 
 ### Observability
 

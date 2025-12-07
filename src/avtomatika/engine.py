@@ -102,9 +102,13 @@ class OrchestratorEngine:
 
         elif uri.startswith("sqlite:"):
             try:
+                from urllib.parse import urlparse
+
                 module = import_module(".history.sqlite", package="avtomatika")
                 storage_class = module.SQLiteHistoryStorage
-                storage_args = [uri.split(":", 1)[1]]
+                parsed_uri = urlparse(uri)
+                db_path = parsed_uri.path
+                storage_args = [db_path]
             except ImportError as e:
                 logger.error(f"Could not import SQLiteHistoryStorage, perhaps aiosqlite is not installed? Error: {e}")
                 self.history_storage = NoOpHistoryStorage()
@@ -147,7 +151,22 @@ class OrchestratorEngine:
                 "opentelemetry-instrumentation-aiohttp-client not found. AIOHTTP client instrumentation is disabled."
             )
         await self._setup_history_storage()
-        await load_client_configs_to_redis(self.storage)
+
+        # Load client configs if the path is provided
+        if self.config.CLIENTS_CONFIG_PATH:
+            from os.path import exists
+
+            if exists(self.config.CLIENTS_CONFIG_PATH):
+                await load_client_configs_to_redis(self.storage, self.config.CLIENTS_CONFIG_PATH)
+            else:
+                logger.warning(
+                    f"CLIENTS_CONFIG_PATH is set to '{self.config.CLIENTS_CONFIG_PATH}', but the file was not found."
+                )
+        else:
+            logger.warning(
+                "CLIENTS_CONFIG_PATH is not set. The system will rely on a single global CLIENT_TOKEN if configured, "
+                "or deny access if no token is found."
+            )
 
         # Load individual worker configs if the path is provided
         if self.config.WORKERS_CONFIG_PATH:
@@ -560,6 +579,11 @@ class OrchestratorEngine:
         await self.storage.enqueue_job(job_id)
         return web.json_response({"status": "approval_received", "job_id": job_id})
 
+    async def _get_quarantined_jobs_handler(self, request: web.Request) -> web.Response:
+        """Returns a list of all job IDs in the quarantine queue."""
+        jobs = await self.storage.get_quarantined_jobs()
+        return web.json_response(jobs)
+
     async def _flush_db_handler(self, request: web.Request) -> web.Response:
         logger.warning("Received request to flush the database.")
         await self.storage.flush_all()
@@ -583,6 +607,7 @@ class OrchestratorEngine:
         public_app.router.add_post("/webhooks/approval/{job_id}", self._human_approval_webhook_handler)
         public_app.router.add_post("/debug/flush_db", self._flush_db_handler)
         public_app.router.add_get("/docs", self._docs_handler)
+        public_app.router.add_get("/jobs/quarantined", self._get_quarantined_jobs_handler)
         self.app.add_subapp("/_public/", public_app)
 
         auth_middleware = client_auth_middleware_factory(self.storage)
@@ -738,6 +763,10 @@ class OrchestratorEngine:
         ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
         await self.storage.register_worker(worker_id, worker_data, ttl)
 
+        logger.info(
+            f"Worker '{worker_id}' registered with info: {worker_data}",
+        )
+
         await self.history_storage.log_worker_event(
             {
                 "worker_id": worker_id,
@@ -749,5 +778,25 @@ class OrchestratorEngine:
 
     def run(self):
         self.setup()
-        print(f"Starting OrchestratorEngine API server on {self.config.API_HOST}:{self.config.API_PORT}")
+        print(
+            f"Starting OrchestratorEngine API server on {self.config.API_HOST}:{self.config.API_PORT} in blocking mode."
+        )
         web.run_app(self.app, host=self.config.API_HOST, port=self.config.API_PORT)
+
+    async def start(self):
+        """Starts the orchestrator engine non-blockingly."""
+        self.setup()
+        self.runner = web.AppRunner(self.app)
+        await self.runner.setup()
+        self.site = web.TCPSite(self.runner, self.config.API_HOST, self.config.API_PORT)
+        await self.site.start()
+        print(f"OrchestratorEngine API server running on http://{self.config.API_HOST}:{self.config.API_PORT}")
+
+    async def stop(self):
+        """Stops the orchestrator engine."""
+        print("Stopping OrchestratorEngine API server...")
+        if hasattr(self, "site"):
+            await self.site.stop()
+        if hasattr(self, "runner"):
+            await self.runner.cleanup()
+        print("OrchestratorEngine API server stopped.")

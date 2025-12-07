@@ -1,4 +1,5 @@
 from logging import getLogger
+from os import getenv
 
 logger = getLogger(__name__)
 
@@ -44,7 +45,27 @@ def setup_telemetry(service_name: str = "avtomatika"):
 
     resource = Resource(attributes={"service.name": service_name})
     provider = TracerProvider(resource=resource)
-    processor = BatchSpanProcessor(ConsoleSpanExporter())
+
+    otlp_endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if otlp_endpoint:
+        logger.info(f"OTLP exporter enabled, sending traces to {otlp_endpoint}")
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter,
+            )
+
+            processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True))
+        except ImportError:
+            logger.error(
+                "OTLP exporter is configured but 'opentelemetry-exporter-otlp' is not installed. "
+                "Please install it with: pip install opentelemetry-exporter-otlp"
+            )
+            # Fallback to console exporter
+            processor = BatchSpanProcessor(ConsoleSpanExporter())
+    else:
+        logger.info("Using ConsoleSpanExporter for telemetry.")
+        processor = BatchSpanProcessor(ConsoleSpanExporter())
+
     provider.add_span_processor(processor)
 
     # Sets the global default tracer provider

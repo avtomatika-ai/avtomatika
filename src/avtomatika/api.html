@@ -190,10 +190,9 @@
                         name: 'Create a New Job',
                         method: 'POST',
                         path: '/api/{version}/{blueprint_name}',
-                        description: 'Creates a new job based on a blueprint.',
                         parameters: [
                             { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
-                            { name: 'blueprint_name', type: 'string', description: 'Blueprint Name', example: 'example_blueprint' }
+                            { name: 'blueprint_name', type: 'string', description: 'Blueprint Name', example: 'full_showcase' }
                         ],
                         request: { body: { "initial_data": "..." } },
                         responses: [
@@ -201,12 +200,12 @@
                         ]
                     },
                     {
-                        id: 'post-create-parallel-job',
-                        name: 'Create a Job for Parallel Execution',
+                        id: 'post-create-showcase-job',
+                        name: 'Create a Full Showcase Job',
                         method: 'POST',
-                        path: '/api/v1/jobs/parallel_flow',
-                        description: 'Creates and starts a new instance (Job) of the `parallel_flow_blueprint`, demonstrating parallel task execution.',
-                        request: { body: { "input_a": "data_for_task_A", "input_b": "data_for_task_B" } },
+                        path: '/api/v1/jobs/full_showcase',
+                        description: 'Creates and starts a new instance (Job) of the `full_showcase` blueprint. This blueprint demonstrates most of the features of the Avtomatika library.',
+                        request: { body: { "path": "/path/to/video.mp4", "user_id": "user-123", "quality": "high" } },
                         responses: [
                             { code: '202 Accepted', description: 'Job successfully accepted for processing.', body: { "status": "accepted", "job_id": "..." } }
                         ]

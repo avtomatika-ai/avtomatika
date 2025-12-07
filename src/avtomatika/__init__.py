@@ -13,13 +13,18 @@ from .context import ActionFactory
 from .data_types import JobContext
 from .engine import OrchestratorEngine
 from .storage.base import StorageBackend
-from .storage.redis import RedisStorage
 
 __all__ = [
     "ActionFactory",
     "JobContext",
     "OrchestratorEngine",
-    "RedisStorage",
     "StateMachineBlueprint",
     "StorageBackend",
 ]
+
+try:
+    from .storage.redis import RedisStorage  # noqa: F401
+
+    __all__.append("RedisStorage")
+except ImportError:
+    pass

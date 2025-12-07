@@ -91,6 +91,7 @@ def test_setup_multiple_calls(engine):
 async def test_on_startup(engine, monkeypatch):
     # Set the config path to ensure the conditional logic is triggered
     monkeypatch.setattr(engine.config, "WORKERS_CONFIG_PATH", "/fake/path.toml")
+    monkeypatch.setattr(engine.config, "CLIENTS_CONFIG_PATH", "/fake/path.toml")
 
     app = web.Application()
     app[ENGINE_KEY] = engine

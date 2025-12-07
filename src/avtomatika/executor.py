@@ -1,15 +1,50 @@
 from asyncio import CancelledError, Task, create_task, sleep
+from inspect import signature
 from logging import getLogger
 from time import monotonic
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict
 from uuid import uuid4
 
-from opentelemetry import trace  # type: ignore[import]
-from opentelemetry.propagate import inject  # type: ignore[import]
-from opentelemetry.trace.propagation.tracecontext import (  # type: ignore[import]
-    TraceContextTextMapPropagator,
-)
+# Conditional import for OpenTelemetry
+try:
+    from opentelemetry import trace
+    from opentelemetry.propagate import inject
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    tracer = trace.get_tracer(__name__)
+except ImportError:
+    logger = getLogger(__name__)
+    logger.info("OpenTelemetry not found. Tracing will be disabled.")
+
+    class NoOpTracer:
+        def start_as_current_span(self, *args, **kwargs):
+            class NoOpSpan:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc_val, exc_tb):
+                    pass
+
+                def set_attribute(self, *args, **kwargs):
+                    pass
+
+            return NoOpSpan()
+
+    class NoOpPropagate:
+        def inject(self, *args, **kwargs):
+            pass
+
+        def extract(self, *args, **kwargs):
+            return None
+
+    class NoOpTraceContextTextMapPropagator:
+        def extract(self, *args, **kwargs):
+            return None
+
+    trace = NoOpTracer()
+    inject = NoOpPropagate().inject
+    TraceContextTextMapPropagator = NoOpTraceContextTextMapPropagator()  # Instantiate the class
 
 from .context import ActionFactory
 from .data_types import ClientConfig, JobContext
@@ -18,8 +53,9 @@ from .history.base import HistoryStorageBase
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
 
-logger = getLogger(__name__)
-tracer = trace.get_tracer(__name__)
+logger = getLogger(
+    __name__
+)  # Re-declare logger after potential redefinition in except block if opentelemetry was missing
 
 TERMINAL_STATES = {"finished", "failed", "error", "quarantined"}
 
@@ -126,7 +162,30 @@ class JobExecutor:
                     handler = blueprint.aggregator_handlers[job_state["current_state"]]
                 else:
                     handler = blueprint.find_handler(context.current_state, context)
-                await handler(context, action_factory)
+
+                # Build arguments for the handler dynamically.
+                handler_signature = signature(handler)
+                params_to_inject = {}
+
+                if "context" in handler_signature.parameters:
+                    params_to_inject["context"] = context
+                    if "actions" in handler_signature.parameters:
+                        params_to_inject["actions"] = action_factory
+                else:
+                    # New injection logic with prioritized lookup.
+                    context_as_dict = context._asdict()
+                    for param_name in handler_signature.parameters:
+                        # Look in JobContext fields first.
+                        if param_name in context_as_dict:
+                            params_to_inject[param_name] = context_as_dict[param_name]
+                        # Then look in state_history (data from previous steps/workers).
+                        elif param_name in context.state_history:
+                            params_to_inject[param_name] = context.state_history[param_name]
+                        # Finally, look in the initial data the job was created with.
+                        elif param_name in context.initial_data:
+                            params_to_inject[param_name] = context.initial_data[param_name]
+
+                await handler(**params_to_inject)
 
                 duration_ms = int((monotonic() - start_time) * 1000)
 
