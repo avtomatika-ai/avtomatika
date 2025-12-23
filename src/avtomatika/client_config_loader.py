@@ -26,25 +26,37 @@ async def load_client_configs_to_redis(
             config_path,
         )
         return
+    except Exception as e:
+        logger.error(f"Failed to parse client config file '{config_path}': {e}")
+        raise ValueError(f"Invalid client configuration file: {e}") from e
 
     loaded_count = 0
     for client_name, config in clients_data.items():
+        if not isinstance(config, dict):
+            logger.error(f"Client '{client_name}' configuration must be a table (dict).")
+            raise ValueError(f"Invalid configuration for client '{client_name}'")
+
         token = config.get("token")
         if not token:
-            logger.warning(
-                "Skipping client '%s' due to missing 'token' field.",
-                client_name,
-            )
-            continue
+            logger.error(f"Client '{client_name}' is missing required 'token' field.")
+            raise ValueError(f"Missing token for client '{client_name}'")
+
+        if not isinstance(token, str):
+            logger.error(f"Token for client '{client_name}' must be a string.")
+            raise ValueError(f"Invalid token type for client '{client_name}'")
 
         # Separate static config from dynamic quota values
         static_config = {k: v for k, v in config.items() if k != "monthly_attempts"}
         quota = config.get("monthly_attempts")
 
+        if quota is not None and not isinstance(quota, int):
+            logger.error(f"Quota 'monthly_attempts' for client '{client_name}' must be an integer.")
+            raise ValueError(f"Invalid quota type for client '{client_name}'")
+
         try:
             # Assume these storage methods will be implemented
             await storage.save_client_config(token, static_config)
-            if quota is not None and isinstance(quota, int):
+            if quota is not None:
                 await storage.initialize_client_quota(token, quota)
 
             loaded_count += 1

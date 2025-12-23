@@ -25,9 +25,7 @@ class RedisStorage(StorageBackend):
         """Get the job state from Redis."""
         key = self._get_key(job_id)
         data = await self._redis.get(key)
-        if data:
-            return loads(data)
-        return None
+        return loads(data) if data else None
 
     async def get_priority_queue_stats(self, task_type: str) -> Dict[str, Any]:
         """Gets statistics for the priority queue (Sorted Set) for a given task type."""
@@ -74,7 +72,7 @@ class RedisStorage(StorageBackend):
         self,
         job_id: str,
         update_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> dict[Any, Any] | None | Any:
         """Atomically update the job state in Redis using a transaction."""
         key = self._get_key(job_id)
 
@@ -134,10 +132,7 @@ class RedisStorage(StorageBackend):
         try:
             # BZPOPMAX returns a tuple (key, member, score)
             result = await self._redis.bzpopmax([key], timeout=timeout)
-            if result:
-                # result[1] contains the element (task data) in bytes
-                return loads(result[1])
-            return None
+            return loads(result[1]) if result else None
         except CancelledError:
             return None
         except ResponseError as e:
@@ -228,18 +223,13 @@ class RedisStorage(StorageBackend):
 
     async def get_available_workers(self) -> list[dict[str, Any]]:
         """Gets a list of active workers by scanning keys in Redis."""
-        workers = []
         worker_keys = [key async for key in self._redis.scan_iter("orchestrator:worker:info:*")]  # type: ignore[attr-defined]
 
         if not worker_keys:
             return []
 
         worker_data_list = await self._redis.mget(worker_keys)
-        for data in worker_data_list:
-            if data:
-                workers.append(loads(data))
-
-        return workers
+        return [loads(data) for data in worker_data_list if data]
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
         """Adds a job to a Redis sorted set.
@@ -277,9 +267,7 @@ class RedisStorage(StorageBackend):
         try:
             # Lock for 1 second so that the while loop in the executor is not too tight
             result = await self._redis.brpop(["orchestrator:job_queue"], timeout=1)  # type: ignore[misc]
-            if result:
-                return result[1].decode("utf-8")
-            return None
+            return result[1].decode("utf-8") if result else None
         except CancelledError:
             return None
 
@@ -407,6 +395,35 @@ class RedisStorage(StorageBackend):
         """Gets the full info for a worker by its ID."""
         key = f"orchestrator:worker:info:{worker_id}"
         data = await self._redis.get(key)
-        if data:
-            return loads(data)
-        return None
+        return loads(data) if data else None
+
+    async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
+        """Attempts to acquire a lock using Redis SET NX."""
+        redis_key = f"orchestrator:lock:{key}"
+        # Returns True if set was successful (key didn't exist), None otherwise
+        result = await self._redis.set(redis_key, holder_id, nx=True, ex=ttl)
+        return bool(result)
+
+    async def release_lock(self, key: str, holder_id: str) -> bool:
+        """Releases the lock using a Lua script to ensure ownership."""
+        redis_key = f"orchestrator:lock:{key}"
+
+        LUA_RELEASE_SCRIPT = """
+        if redis.call("get", KEYS[1]) == ARGV[1] then
+            return redis.call("del", KEYS[1])
+        else
+            return 0
+        end
+        """
+        try:
+            result = await self._redis.eval(LUA_RELEASE_SCRIPT, 1, redis_key, holder_id)
+            return bool(result)
+        except ResponseError as e:
+            # Fallback for fakeredis if needed, though fakeredis usually supports eval
+            if "unknown command" in str(e):
+                current_val = await self._redis.get(redis_key)
+                if current_val and current_val.decode("utf-8") == holder_id:
+                    await self._redis.delete(redis_key)
+                    return True
+                return False
+            raise e

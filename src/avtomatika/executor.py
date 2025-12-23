@@ -35,11 +35,13 @@ except ImportError:
         def inject(self, *args, **kwargs):
             pass
 
-        def extract(self, *args, **kwargs):
+        @staticmethod
+        def extract(*args, **kwargs):
             return None
 
     class NoOpTraceContextTextMapPropagator:
-        def extract(self, *args, **kwargs):
+        @staticmethod
+        def extract(*args, **kwargs):
             return None
 
     trace = NoOpTracer()
@@ -485,7 +487,8 @@ class JobExecutor:
         await self.storage.save_job_state(parent_job_id, parent_job_state)
         await self.storage.enqueue_job(parent_job_id)
 
-    def _handle_task_completion(self, task: Task):
+    @staticmethod
+    def _handle_task_completion(task: Task):
         """Callback to handle completion of a job processing task."""
         try:
             # This will re-raise any exception caught in the task

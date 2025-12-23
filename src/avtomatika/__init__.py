@@ -4,6 +4,7 @@
 This module exposes the primary classes for building and running state-driven automations.
 """
 
+import contextlib
 from importlib.metadata import version
 
 __version__ = version("avtomatika")
@@ -22,9 +23,7 @@ __all__ = [
     "StorageBackend",
 ]
 
-try:
+with contextlib.suppress(ImportError):
     from .storage.redis import RedisStorage  # noqa: F401
 
     __all__.append("RedisStorage")
-except ImportError:
-    pass

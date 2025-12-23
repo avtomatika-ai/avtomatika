@@ -264,3 +264,26 @@ class StorageBackend(ABC):
         Used for metrics.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
+        """
+        Attempts to acquire a distributed lock.
+
+        :param key: The unique key of the lock (e.g., 'watcher_lock').
+        :param holder_id: A unique identifier for the caller (e.g., UUID).
+        :param ttl: Time-to-live for the lock in seconds.
+        :return: True if the lock was acquired, False otherwise.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def release_lock(self, key: str, holder_id: str) -> bool:
+        """
+        Releases a distributed lock if it is held by the specified holder_id.
+
+        :param key: The unique key of the lock.
+        :param holder_id: The identifier of the caller who presumably holds the lock.
+        :return: True if the lock was successfully released, False otherwise.
+        """
+        raise NotImplementedError

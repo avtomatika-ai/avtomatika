@@ -44,7 +44,7 @@ async def test_load_client_configs_file_not_found(caplog):
 
 @pytest.mark.asyncio
 async def test_load_client_configs_missing_token(caplog):
-    """Tests that a warning is logged when a client config is missing a token."""
+    """Tests that a ValueError is raised when a client config is missing a token."""
     storage = AsyncMock()
     config_path = "missing_token_clients.toml"
 
@@ -54,8 +54,9 @@ async def test_load_client_configs_missing_token(caplog):
 plan = "premium"
 """)
 
-    await load_client_configs_to_redis(storage, config_path)
-
-    assert "Skipping client 'client-1' due to missing 'token' field." in caplog.text
-
-    os.remove(config_path)
+    try:
+        with pytest.raises(ValueError, match="Missing token for client 'client-1'"):
+            await load_client_configs_to_redis(storage, config_path)
+    finally:
+        if os.path.exists(config_path):
+            os.remove(config_path)

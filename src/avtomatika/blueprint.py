@@ -168,8 +168,7 @@ class StateMachineBlueprint:
         for handler in self.conditional_handlers:
             if handler.state == state and handler.evaluate(context):
                 return handler.func
-        default_handler = self.handlers.get(state)
-        if default_handler:
+        if default_handler := self.handlers.get(state):
             return default_handler
         raise ValueError(
             f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context.",
@@ -230,12 +229,11 @@ class StateMachineBlueprint:
                     f"Could not parse handler '{handler_func.__name__}' for state '{handler_state}'. "
                     f"Graph may be incomplete. Error: {e}"
                 )
-                pass
         for state in states:
             dot.node(state, state)
 
-        if output_filename:
-            dot.render(output_filename, format=output_format, cleanup=True)
-            print(f"Graph rendered to {output_filename}.{output_format}")
-        else:
+        if not output_filename:
             return dot.source
+        dot.render(output_filename, format=output_format, cleanup=True)
+        print(f"Graph rendered to {output_filename}.{output_format}")
+        return None

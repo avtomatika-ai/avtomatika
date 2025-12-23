@@ -27,7 +27,8 @@ except ImportError:
             pass
 
     class DummyTracer:
-        def start_as_current_span(self, name, context=None):
+        @staticmethod
+        def start_as_current_span(name, context=None):
             return DummySpan()
 
     class NoOpTrace:
@@ -46,8 +47,7 @@ def setup_telemetry(service_name: str = "avtomatika"):
     resource = Resource(attributes={"service.name": service_name})
     provider = TracerProvider(resource=resource)
 
-    otlp_endpoint = getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if otlp_endpoint:
+    if otlp_endpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         logger.info(f"OTLP exporter enabled, sending traces to {otlp_endpoint}")
         try:
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (

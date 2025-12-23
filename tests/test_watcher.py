@@ -17,6 +17,9 @@ async def test_watcher_run():
             "blueprint_name": "test_bp",
         }
     )
+    engine.storage.acquire_lock = AsyncMock(return_value=True)
+    engine.storage.release_lock = AsyncMock(return_value=True)
+    engine.storage.save_job_state = AsyncMock()  # Mock save_job_state too
 
     watcher = Watcher(engine)
     watcher.watch_interval_seconds = 0.1

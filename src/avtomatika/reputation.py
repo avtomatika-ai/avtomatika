@@ -1,6 +1,7 @@
 from asyncio import CancelledError, sleep
 from logging import getLogger
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
@@ -20,14 +21,22 @@ class ReputationCalculator:
         self.history_storage = engine.history_storage
         self.interval_seconds = interval_seconds
         self._running = False
+        self._instance_id = str(uuid4())
 
     async def run(self):
         """The main loop that periodically triggers reputation recalculation."""
-        logger.info("ReputationCalculator started.")
+        logger.info(f"ReputationCalculator started (Instance ID: {self._instance_id}).")
         self._running = True
         while self._running:
             try:
-                await self.calculate_all_reputations()
+                # Attempt to acquire lock
+                if await self.storage.acquire_lock("global_reputation_lock", self._instance_id, 300):
+                    try:
+                        await self.calculate_all_reputations()
+                    finally:
+                        await self.storage.release_lock("global_reputation_lock", self._instance_id)
+                else:
+                    logger.debug("ReputationCalculator lock held by another instance. Skipping.")
             except CancelledError:
                 break
             except Exception:

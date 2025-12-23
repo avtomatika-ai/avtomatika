@@ -485,8 +485,7 @@ class OrchestratorEngine:
             await self.storage.save_job_state(job_id, job_state)
             # Optionally, trigger a specific 'cancelled' transition if defined in the blueprint
             transitions = job_state.get("current_task_transitions", {})
-            next_state = transitions.get("cancelled")
-            if next_state:
+            if next_state := transitions.get("cancelled"):
                 job_state["current_state"] = next_state
                 job_state["status"] = "running"  # It's running the cancellation handler now
                 await self.storage.save_job_state(job_id, job_state)
@@ -494,9 +493,7 @@ class OrchestratorEngine:
             return web.json_response({"status": "result_accepted_cancelled"}, status=200)
 
         transitions = job_state.get("current_task_transitions", {})
-        next_state = transitions.get(result_status)
-
-        if next_state:
+        if next_state := transitions.get(result_status):
             logging.info(f"Job {job_id} transitioning based on worker status '{result_status}' to state '{next_state}'")
 
             worker_data = result.get("data")
@@ -602,7 +599,8 @@ class OrchestratorEngine:
         await load_client_configs_to_redis(self.storage)
         return web.json_response({"status": "db_flushed"}, status=200)
 
-    async def _docs_handler(self, request: web.Request) -> web.Response:
+    @staticmethod
+    async def _docs_handler(request: web.Request) -> web.Response:
         from importlib import resources
 
         try:
@@ -647,16 +645,7 @@ class OrchestratorEngine:
             all_protected_apps.append(protected_app)
 
         for app in all_protected_apps:
-            app.router.add_get("/jobs/{job_id}", self._get_job_status_handler)
-            app.router.add_post("/jobs/{job_id}/cancel", self._cancel_job_handler)
-            if not isinstance(self.history_storage, NoOpHistoryStorage):
-                app.router.add_get("/jobs/{job_id}/history", self._get_job_history_handler)
-            app.router.add_get("/blueprints/{blueprint_name}/graph", self._get_blueprint_graph_handler)
-            app.router.add_get("/workers", self._get_workers_handler)
-            app.router.add_get("/jobs", self._get_jobs_handler)
-            app.router.add_get("/dashboard", self._get_dashboard_handler)
-            app.router.add_post("/admin/reload-workers", self._reload_worker_configs_handler)
-
+            self._register_common_routes(app)
         if has_unversioned_routes:
             self.app.add_subapp("/api/", protected_app)
         for version, app in versioned_apps.items():
@@ -675,6 +664,17 @@ class OrchestratorEngine:
         worker_app.router.add_post("/tasks/result", self._task_result_handler)
         worker_app.router.add_get("/ws/{worker_id}", self._websocket_handler)
         self.app.add_subapp("/_worker/", worker_app)
+
+    def _register_common_routes(self, app):
+        app.router.add_get("/jobs/{job_id}", self._get_job_status_handler)
+        app.router.add_post("/jobs/{job_id}/cancel", self._cancel_job_handler)
+        if not isinstance(self.history_storage, NoOpHistoryStorage):
+            app.router.add_get("/jobs/{job_id}/history", self._get_job_history_handler)
+        app.router.add_get("/blueprints/{blueprint_name}/graph", self._get_blueprint_graph_handler)
+        app.router.add_get("/workers", self._get_workers_handler)
+        app.router.add_get("/jobs", self._get_jobs_handler)
+        app.router.add_get("/dashboard", self._get_dashboard_handler)
+        app.router.add_post("/admin/reload-workers", self._reload_worker_configs_handler)
 
     async def _websocket_handler(self, request: web.Request) -> web.WebSocketResponse:
         worker_id = request.match_info.get("worker_id")

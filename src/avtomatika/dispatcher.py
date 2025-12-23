@@ -28,15 +28,13 @@ class Dispatcher:
         self.config = config
         self._round_robin_indices: Dict[str, int] = defaultdict(int)
 
+    @staticmethod
     def _is_worker_compliant(
-        self,
         worker: Dict[str, Any],
         requirements: Dict[str, Any],
     ) -> bool:
         """Checks if a worker meets the specified resource requirements."""
-        # GPU check
-        required_gpu = requirements.get("gpu_info")
-        if required_gpu:
+        if required_gpu := requirements.get("gpu_info"):
             gpu_info = worker.get("resources", {}).get("gpu_info")
             if not gpu_info:
                 return False
@@ -51,17 +49,15 @@ class Dispatcher:
             ):
                 return False
 
-        # Installed models check
-        required_models = requirements.get("installed_models")
-        if required_models:
+        if required_models := requirements.get("installed_models"):
             installed_models = {m["name"] for m in worker.get("installed_models", [])}
             if not set(required_models).issubset(installed_models):
                 return False
 
         return True
 
+    @staticmethod
     def _select_default(
-        self,
         workers: List[Dict[str, Any]],
         task_type: str,
     ) -> Dict[str, Any]:
@@ -74,7 +70,7 @@ class Dispatcher:
         """
         warm_workers = [w for w in workers if task_type in w.get("hot_cache", [])]
 
-        target_pool = warm_workers if warm_workers else workers
+        target_pool = warm_workers or workers
 
         # The `cost` field is deprecated but maintained for backward compatibility.
         min_cost = min(w.get("cost", float("inf")) for w in target_pool)
@@ -95,8 +91,8 @@ class Dispatcher:
         self._round_robin_indices[task_type] = idx + 1
         return selected_worker
 
+    @staticmethod
     def _select_least_connections(
-        self,
         workers: List[Dict[str, Any]],
         task_type: str,
     ) -> Dict[str, Any]:
@@ -105,15 +101,16 @@ class Dispatcher:
         """
         return min(workers, key=lambda w: w.get("load", 0.0))
 
+    @staticmethod
     def _select_cheapest(
-        self,
         workers: List[Dict[str, Any]],
         task_type: str,
     ) -> Dict[str, Any]:
         """Selects the cheapest worker based on 'cost_per_second'."""
         return min(workers, key=lambda w: w.get("cost_per_second", float("inf")))
 
-    def _get_best_value_score(self, worker: Dict[str, Any]) -> float:
+    @staticmethod
+    def _get_best_value_score(worker: Dict[str, Any]) -> float:
         """Calculates a "score" for a worker using the formula cost / reputation.
         The lower the score, the better.
         """
@@ -121,9 +118,7 @@ class Dispatcher:
         # Default reputation is 1.0 if absent
         reputation = worker.get("reputation", 1.0)
         # Avoid division by zero
-        if reputation == 0:
-            return float("inf")
-        return cost / reputation
+        return float("inf") if reputation == 0 else cost / reputation
 
     def _select_best_value(
         self,
@@ -153,10 +148,9 @@ class Dispatcher:
         idle_workers = [w for w in all_workers if w.get("status", "idle") == "idle"]
         logger.debug(f"Idle workers: {[w['worker_id'] for w in idle_workers]}")
         if not idle_workers:
-            # If there are no idle workers, check if there are any busy workers in multi-orchestrator mode.
-            # This doesn't change the logic (an error will still occur), but it makes the logs more informative.
-            busy_mo_workers = [w for w in all_workers if w.get("status") == "busy" and "multi_orchestrator_info" in w]
-            if busy_mo_workers:
+            if busy_mo_workers := [
+                w for w in all_workers if w.get("status") == "busy" and "multi_orchestrator_info" in w
+            ]:
                 logger.warning(
                     f"No idle workers. Found {len(busy_mo_workers)} busy workers "
                     f"in multi-orchestrator mode. They are likely performing tasks for other Orchestrators.",

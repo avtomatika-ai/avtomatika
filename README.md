@@ -239,7 +239,7 @@ Run multiple tasks simultaneously and gather their results.
 @my_blueprint.handler_for("process_files")
 async def fan_out_handler(initial_data, actions):
     tasks_to_dispatch = [
-        {"task_type": "file_analysis", "params": {"file": file}}
+        {"task_type": "file_analysis", "params": {"file": file}})
         for file in initial_data.get("files", [])
     ]
     # Use dispatch_parallel to send all tasks at once.
@@ -286,6 +286,8 @@ async def cache_handler(data_stores):
 
 The orchestrator's behavior can be configured through environment variables. Additionally, any configuration parameter loaded from environment variables can be programmatically overridden in your application code after the `Config` object has been initialized. This provides flexibility for different deployment and testing scenarios.
 
+**Important:** The system employs **strict validation** for configuration files (`clients.toml`, `workers.toml`) at startup. If a configuration file is invalid (e.g., malformed TOML, missing required fields), the application will **fail fast** and exit with an error, rather than starting in a partially broken state. This ensures the security and integrity of the deployment.
+
 ### Fault Tolerance
 
 The orchestrator has built-in mechanisms for handling failures based on the `error.code` field in a worker's response.
@@ -293,6 +295,13 @@ The orchestrator has built-in mechanisms for handling failures based on the `err
 *   **TRANSIENT_ERROR**: A temporary error (e.g., network failure, rate limit). The orchestrator will automatically retry the task several times.
 *   **PERMANENT_ERROR**: A permanent error (e.g., a corrupted file). The task will be immediately sent to quarantine for manual investigation.
 *   **INVALID_INPUT_ERROR**: An error in the input data. The entire pipeline (Job) will be immediately moved to the failed state.
+
+### High Availability & Distributed Locking
+
+The architecture supports horizontal scaling. Multiple Orchestrator instances can run behind a load balancer.
+
+*   **Stateless API:** The API is stateless; all state is persisted in Redis.
+*   **Distributed Locking:** Background processes (`Watcher`, `ReputationCalculator`) use distributed locks (via Redis `SET NX`) to coordinate and prevent race conditions when multiple instances are active.
 
 ### Storage Backend
 
@@ -362,3 +371,12 @@ To run the `avtomatika` test suite:
 ```bash
 pytest avtomatika/tests/
 ```
+
+## Detailed Documentation
+
+For a deeper dive into the system, please refer to the following documents in the `docs/` directory:
+
+- [**Architecture Guide**](docs/architecture.md): A detailed overview of the system components and their interactions.
+- [**API Reference**](docs/api_reference.md): Full specification of the HTTP API.
+- [**Deployment Guide**](docs/deployment.md): Instructions for deploying with Gunicorn/Uvicorn and NGINX.
+- [**Cookbook**](docs/cookbook/README.md): Examples and best practices for creating blueprints.

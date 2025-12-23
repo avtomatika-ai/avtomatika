@@ -28,14 +28,19 @@ async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str
             workers_config: Dict[str, Any] = load(f)
     except Exception as e:
         logger.error(f"Failed to load or parse worker config file '{config_path}': {e}")
-        return
+        raise ValueError(f"Invalid worker configuration file: {e}") from e
 
     for worker_id, config in workers_config.items():
+        if not isinstance(config, dict):
+            logger.error(f"Worker '{worker_id}' configuration must be a table.")
+            raise ValueError(f"Invalid configuration for worker '{worker_id}'")
+
         token = config.get("token")
         if not token:
             logger.warning(f"No token found for worker_id '{worker_id}' in {config_path}. Skipping.")
+            # Skipping might be safer here if we want to allow partial configs, but strict is better.
+            # Let's keep existing skip logic but log error? No, let's allow skip if user really wants.
             continue
-
         try:
             # Hash the token before storing it
             hashed_token = sha256(token.encode()).hexdigest()

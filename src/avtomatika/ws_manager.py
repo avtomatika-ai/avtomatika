@@ -46,7 +46,8 @@ class WebSocketManager:
                 logger.warning(f"Cannot send command: No active WebSocket connection for worker {worker_id}.")
                 return False
 
-    async def handle_message(self, worker_id: str, message: dict):
+    @staticmethod
+    async def handle_message(worker_id: str, message: dict):
         """Handles an incoming message from a worker."""
         event_type = message.get("event")
         if event_type == "progress_update":

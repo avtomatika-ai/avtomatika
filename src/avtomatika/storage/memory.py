@@ -25,6 +25,7 @@ class MemoryStorage(StorageBackend):
         self._worker_tokens: Dict[str, str] = {}
         self._generic_keys: Dict[str, Any] = {}
         self._generic_key_ttls: Dict[str, float] = {}
+        self._locks: Dict[str, tuple[str, float]] = {}  # key -> (holder_id, expiry_time)
 
         self._lock = Lock()
 
@@ -128,9 +129,11 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             now = monotonic()
             active_workers = []
-            for worker_id, worker_info in self._workers.items():
-                if self._worker_ttls.get(worker_id, 0) > now:
-                    active_workers.append(worker_info)
+            active_workers.extend(
+                worker_info
+                for worker_id, worker_info in self._workers.items()
+                if self._worker_ttls.get(worker_id, 0) > now
+            )
             return active_workers
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
@@ -226,6 +229,7 @@ class MemoryStorage(StorageBackend):
             self._quotas.clear()
             self._generic_keys.clear()
             self._generic_key_ttls.clear()
+            self._locks.clear()
 
     async def get_job_queue_length(self) -> int:
         # No lock needed for asyncio.Queue.qsize()
@@ -234,13 +238,9 @@ class MemoryStorage(StorageBackend):
     async def get_active_worker_count(self) -> int:
         async with self._lock:
             now = monotonic()
-            count = 0
             # Create a copy of keys to avoid issues with concurrent modifications
             worker_ids = list(self._workers.keys())
-            for worker_id in worker_ids:
-                if self._worker_ttls.get(worker_id, 0) > now:
-                    count += 1
-            return count
+            return sum(self._worker_ttls.get(worker_id, 0) > now for worker_id in worker_ids)
 
     async def get_worker_info(self, worker_id: str) -> Optional[Dict[str, Any]]:
         async with self._lock:
@@ -273,3 +273,29 @@ class MemoryStorage(StorageBackend):
             "average_bid": 0,
             "error": "Statistics are not supported for MemoryStorage backend.",
         }
+
+    async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
+        async with self._lock:
+            now = monotonic()
+            current_lock = self._locks.get(key)
+
+            # If lock exists and hasn't expired
+            if current_lock and current_lock[1] > now:
+                # If explicitly owned by us, we can extend/re-enter (optional behavior)
+                # But for strict locking, if it's held, return False (unless it's us? let's simpler: just False if held)
+                return False
+
+            # Acquire lock
+            self._locks[key] = (holder_id, now + ttl)
+            return True
+
+    async def release_lock(self, key: str, holder_id: str) -> bool:
+        async with self._lock:
+            current_lock = self._locks.get(key)
+            if current_lock:
+                owner, expiry = current_lock
+                # Only release if we are the owner
+                if owner == holder_id:
+                    del self._locks[key]
+                    return True
+            return False

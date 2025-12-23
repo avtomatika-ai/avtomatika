@@ -1,11 +1,11 @@
+import contextlib
+
 from .base import StorageBackend
 from .memory import MemoryStorage
 
 __all__ = ["StorageBackend", "MemoryStorage"]
 
-try:
+with contextlib.suppress(ImportError):
     from .redis import RedisStorage  # noqa: F401
 
     __all__.append("RedisStorage")
-except ImportError:
-    pass

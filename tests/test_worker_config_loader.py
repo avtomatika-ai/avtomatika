@@ -44,15 +44,18 @@ async def test_load_worker_configs_file_not_found(caplog):
 
 @pytest.mark.asyncio
 async def test_load_worker_configs_parse_error(caplog):
-    """Tests that an error is logged when the config file is invalid."""
+    """Tests that an error is logged and ValueError is raised when the config file is invalid."""
     storage = AsyncMock()
     config_path = "invalid_workers.toml"
 
     with open(config_path, "w") as f:
         f.write("invalid toml")
 
-    await load_worker_configs_to_redis(storage, config_path)
+    try:
+        with pytest.raises(ValueError, match="Invalid worker configuration file"):
+            await load_worker_configs_to_redis(storage, config_path)
+    finally:
+        if os.path.exists(config_path):
+            os.remove(config_path)
 
     assert "Failed to load or parse worker config file" in caplog.text
-
-    os.remove(config_path)
