@@ -1,6 +1,6 @@
 from abc import ABC
 from logging import getLogger
-from typing import Any, Dict, List
+from typing import Any
 from uuid import uuid4
 
 from asyncpg import Pool, PostgresError, create_pool  # type: ignore[import-untyped]
@@ -9,7 +9,6 @@ from .base import HistoryStorageBase
 
 logger = getLogger(__name__)
 
-# SQL queries to create tables, adapted for PostgreSQL
 CREATE_JOB_HISTORY_TABLE_PG = """
 CREATE TABLE IF NOT EXISTS job_history (
     event_id UUID PRIMARY KEY,
@@ -68,7 +67,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             await self._pool.close()
             logger.info("PostgreSQL history storage connection pool closed.")
 
-    async def log_job_event(self, event_data: Dict[str, Any]):
+    async def log_job_event(self, event_data: dict[str, Any]):
         """Logs a job lifecycle event to PostgreSQL."""
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
@@ -98,7 +97,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         except PostgresError as e:
             logger.error(f"Failed to log job event to PostgreSQL: {e}")
 
-    async def log_worker_event(self, event_data: Dict[str, Any]):
+    async def log_worker_event(self, event_data: dict[str, Any]):
         """Logs a worker lifecycle event to PostgreSQL."""
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
@@ -120,7 +119,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         except PostgresError as e:
             logger.error(f"Failed to log worker event to PostgreSQL: {e}")
 
-    async def get_job_history(self, job_id: str) -> List[Dict[str, Any]]:
+    async def get_job_history(self, job_id: str) -> list[dict[str, Any]]:
         """Gets the full history for the specified job from PostgreSQL."""
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
@@ -129,7 +128,6 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         try:
             async with self._pool.acquire() as conn:
                 rows = await conn.fetch(query, job_id)
-                # asyncpg.Record can be easily converted to a dict
                 return [dict(row) for row in rows]
         except PostgresError as e:
             logger.error(
@@ -137,7 +135,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             )
             return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
 
@@ -161,7 +159,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             logger.error(f"Failed to get jobs list from PostgreSQL: {e}")
             return []
 
-    async def get_job_summary(self) -> Dict[str, int]:
+    async def get_job_summary(self) -> dict[str, int]:
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
 
@@ -195,7 +193,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         self,
         worker_id: str,
         since_days: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
 

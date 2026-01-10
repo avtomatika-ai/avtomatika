@@ -2,7 +2,7 @@ from hashlib import sha256
 from logging import getLogger
 from os.path import exists
 from tomllib import load
-from typing import Any, Dict
+from typing import Any
 
 from .storage.base import StorageBackend
 
@@ -25,7 +25,7 @@ async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str
 
     try:
         with open(config_path, "rb") as f:
-            workers_config: Dict[str, Any] = load(f)
+            workers_config: dict[str, Any] = load(f)
     except Exception as e:
         logger.error(f"Failed to load or parse worker config file '{config_path}': {e}")
         raise ValueError(f"Invalid worker configuration file: {e}") from e

@@ -1,7 +1,7 @@
 from collections import defaultdict
 from logging import getLogger
 from random import choice
-from typing import Any, Dict, List
+from typing import Any
 from uuid import uuid4
 
 try:
@@ -26,12 +26,12 @@ class Dispatcher:
     def __init__(self, storage: StorageBackend, config: Config):
         self.storage = storage
         self.config = config
-        self._round_robin_indices: Dict[str, int] = defaultdict(int)
+        self._round_robin_indices: dict[str, int] = defaultdict(int)
 
     @staticmethod
     def _is_worker_compliant(
-        worker: Dict[str, Any],
-        requirements: Dict[str, Any],
+        worker: dict[str, Any],
+        requirements: dict[str, Any],
     ) -> bool:
         """Checks if a worker meets the specified resource requirements."""
         if required_gpu := requirements.get("gpu_info"):
@@ -58,9 +58,9 @@ class Dispatcher:
 
     @staticmethod
     def _select_default(
-        workers: List[Dict[str, Any]],
+        workers: list[dict[str, Any]],
         task_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Default strategy: first selects "warm" workers (those that have the
         task in their cache), and then selects the cheapest among them.
 
@@ -80,9 +80,9 @@ class Dispatcher:
 
     def _select_round_robin(
         self,
-        workers: List[Dict[str, Any]],
+        workers: list[dict[str, Any]],
         task_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """ "Round Robin" strategy: distributes tasks sequentially among all
         available workers.
         """
@@ -93,9 +93,9 @@ class Dispatcher:
 
     @staticmethod
     def _select_least_connections(
-        workers: List[Dict[str, Any]],
+        workers: list[dict[str, Any]],
         task_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """ "Least Connections" strategy: selects the worker with the fewest
         active tasks (based on the `load` field).
         """
@@ -103,14 +103,14 @@ class Dispatcher:
 
     @staticmethod
     def _select_cheapest(
-        workers: List[Dict[str, Any]],
+        workers: list[dict[str, Any]],
         task_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Selects the cheapest worker based on 'cost_per_second'."""
         return min(workers, key=lambda w: w.get("cost_per_second", float("inf")))
 
     @staticmethod
-    def _get_best_value_score(worker: Dict[str, Any]) -> float:
+    def _get_best_value_score(worker: dict[str, Any]) -> float:
         """Calculates a "score" for a worker using the formula cost / reputation.
         The lower the score, the better.
         """
@@ -122,13 +122,13 @@ class Dispatcher:
 
     def _select_best_value(
         self,
-        workers: List[Dict[str, Any]],
+        workers: list[dict[str, Any]],
         task_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Selects the worker with the best price-quality (reputation) ratio."""
         return min(workers, key=self._get_best_value_score)
 
-    async def dispatch(self, job_state: Dict[str, Any], task_info: Dict[str, Any]):
+    async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]):
         job_id = job_state["id"]
         task_type = task_info.get("type")
         if not task_type:
@@ -142,7 +142,6 @@ class Dispatcher:
         if not all_workers:
             raise RuntimeError("No available workers")
 
-        # 1. Filter by 'idle' status
         # A worker is considered available if its status is 'idle' or not specified (for backward compatibility)
         logger.debug(f"All available workers: {[w['worker_id'] for w in all_workers]}")
         idle_workers = [w for w in all_workers if w.get("status", "idle") == "idle"]
@@ -157,13 +156,13 @@ class Dispatcher:
                 )
             raise RuntimeError("No idle workers (all are 'busy')")
 
-        # 2. Filter by task type
+        # Filter by task type
         capable_workers = [w for w in idle_workers if task_type in w.get("supported_tasks", [])]
         logger.debug(f"Capable workers for task '{task_type}': {[w['worker_id'] for w in capable_workers]}")
         if not capable_workers:
             raise RuntimeError(f"No suitable workers for task type '{task_type}'")
 
-        # 3. Filter by resource requirements
+        # Filter by resource requirements
         if resource_requirements:
             compliant_workers = [w for w in capable_workers if self._is_worker_compliant(w, resource_requirements)]
             logger.debug(
@@ -176,7 +175,7 @@ class Dispatcher:
                 )
             capable_workers = compliant_workers
 
-        # 4. Filter by maximum cost
+        # Filter by maximum cost
         max_cost = task_info.get("max_cost")
         if max_cost is not None:
             cost_compliant_workers = [w for w in capable_workers if w.get("cost_per_second", float("inf")) <= max_cost]
@@ -189,7 +188,7 @@ class Dispatcher:
                 )
             capable_workers = cost_compliant_workers
 
-        # 5. Select worker according to strategy
+        # Select worker according to strategy
         if dispatch_strategy == "round_robin":
             selected_worker = self._select_round_robin(capable_workers, task_type)
         elif dispatch_strategy == "least_connections":

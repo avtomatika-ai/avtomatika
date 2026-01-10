@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b4"
+version = "1.0b5"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,11 +21,13 @@ dependencies = [
     "graphviz~=0.21",
     "zstandard~=0.24",
     "aioprometheus~=23.12",
+    "msgpack~=1.1",
+    "orjson~=3.11",
 ]
 
 [project.optional-dependencies]
-redis = ["redis~=7.1", "orjson~=3.11"]
-history = ["aiosqlite~=0.22", "asyncpg~=0.30", "orjson~=3.11"]
+redis = ["redis~=7.1"]
+history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
 telemetry = [
     "opentelemetry-api~=1.39",
     "opentelemetry-sdk~=1.39",

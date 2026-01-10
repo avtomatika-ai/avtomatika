@@ -87,3 +87,31 @@ To do this, send a POST request (with a valid client token) to the endpoint:
 `POST /api/v1/admin/reload-workers`
 
 This forces the Orchestrator to re-read the file and update token hashes in Redis.
+
+---
+
+## Environment Variables
+
+In addition to configuration files, the Orchestrator is configured via environment variables.
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `API_HOST` | Host to bind the API server to. | `0.0.0.0` |
+| `API_PORT` | Port to bind the API server to. | `8080` |
+| `REDIS_HOST` | Hostname of the Redis server. Required for production. | `""` (MemoryStorage) |
+| `REDIS_PORT` | Redis server port. | `6379` |
+| `REDIS_DB` | Redis database index. | `0` |
+| `INSTANCE_ID` | **Important for Scaling:** Unique identifier for this Orchestrator instance. Used as consumer name in Redis Streams. Defaults to hostname if not set. | `hostname` |
+| `CLIENT_TOKEN` | Global token for API clients (fallback if `clients.toml` not used). | `secure-orchestrator-token` |
+| `GLOBAL_WORKER_TOKEN` | Global token for workers (fallback if `workers.toml` not used). | `secure-worker-token` |
+| `WORKERS_CONFIG_PATH` | Path to `workers.toml`. | `""` |
+| `CLIENTS_CONFIG_PATH` | Path to `clients.toml`. | `""` |
+| `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
+| `LOG_FORMAT` | Log format (`text` or `json`). | `json` |
+| `WORKER_TIMEOUT_SECONDS` | Maximum time allowed for a worker to complete a task. | `300` |
+| `WORKER_POLL_TIMEOUT_SECONDS` | Timeout for long-polling task requests from workers. | `30` |
+| `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Interval for updating worker TTL (used for health checks). | `60` |
+| `JOB_MAX_RETRIES` | Maximum number of retries for transient task failures. | `3` |
+| `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
+| `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
+| `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |

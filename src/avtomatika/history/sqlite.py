@@ -1,5 +1,5 @@
 from logging import getLogger
-from typing import Any, Dict, List
+from typing import Any
 from uuid import uuid4
 
 from aiosqlite import Connection, Error, Row, connect
@@ -9,7 +9,6 @@ from .base import HistoryStorageBase
 
 logger = getLogger(__name__)
 
-# SQL queries for creating tables
 CREATE_JOB_HISTORY_TABLE = """
 CREATE TABLE IF NOT EXISTS job_history (
     event_id TEXT PRIMARY KEY,
@@ -67,7 +66,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             await self._conn.close()
             logger.info("SQLite history storage connection closed.")
 
-    async def log_job_event(self, event_data: Dict[str, Any]):
+    async def log_job_event(self, event_data: dict[str, Any]):
         """Logs a job lifecycle event to the job_history table."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -79,7 +78,6 @@ class SQLiteHistoryStorage(HistoryStorageBase):
                 context_snapshot
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        # Ensure all keys are present to avoid errors
         params = (
             str(uuid4()),
             event_data.get("job_id"),
@@ -98,9 +96,8 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             await self._conn.commit()
         except Error as e:
             logger.error(f"Failed to log job event: {e}")
-            # According to "Option A", we log the error but do not interrupt execution
 
-    async def log_worker_event(self, event_data: Dict[str, Any]):
+    async def log_worker_event(self, event_data: dict[str, Any]):
         """Logs a worker lifecycle event to the worker_history table."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -123,7 +120,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         except Error as e:
             logger.error(f"Failed to log worker event: {e}")
 
-    async def get_job_history(self, job_id: str) -> List[Dict[str, Any]]:
+    async def get_job_history(self, job_id: str) -> list[dict[str, Any]]:
         """Gets the full history for the specified job, sorted by time."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -145,7 +142,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             logger.error(f"Failed to get job history for job_id {job_id}: {e}")
             return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         """Gets a list of the latest unique jobs with pagination."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -177,7 +174,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             logger.error(f"Failed to get jobs list: {e}")
             return []
 
-    async def get_job_summary(self) -> Dict[str, int]:
+    async def get_job_summary(self) -> dict[str, int]:
         """Returns a summary of job statuses."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -213,7 +210,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         self,
         worker_id: str,
         since_days: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
 

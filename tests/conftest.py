@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 
@@ -36,18 +35,20 @@ def tracing_setup():
     provider.shutdown()
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for each test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# @pytest.fixture(scope="session")
+# def event_loop():
+#     """Create an instance of the default event loop for each test session."""
+#     loop = asyncio.get_event_loop_policy().new_event_loop()
+#     yield loop
+#     loop.close()
 
 
 @pytest.fixture
 def config():
     """Provides a default Config instance."""
-    return Config()
+    c = Config()
+    c.INSTANCE_ID = "test-consumer-1"
+    return c
 
 
 @pytest_asyncio.fixture
@@ -65,9 +66,9 @@ def memory_storage():
 
 
 @pytest.fixture
-def redis_storage(redis_client):
+def redis_storage(redis_client, config):
     """Provides a RedisStorage instance, using the managed redis_client."""
-    return RedisStorage(redis_client)
+    return RedisStorage(redis_client, consumer_name=config.INSTANCE_ID, min_idle_time_ms=100)
 
 
 @pytest_asyncio.fixture
@@ -98,8 +99,6 @@ async def app(request, config, redis_storage):
     engine.app[ENGINE_KEY] = engine
 
     yield engine.app
-
-    await engine.on_shutdown(engine.app)
 
     if hasattr(storage, "close"):
         await storage.close()

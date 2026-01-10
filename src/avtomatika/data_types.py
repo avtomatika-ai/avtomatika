@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from .context import ActionFactory
@@ -9,8 +9,7 @@ class ClientConfig(NamedTuple):
 
     token: str
     plan: str
-    # Use Dict to support any custom fields
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 class JobContext(NamedTuple):
@@ -18,13 +17,13 @@ class JobContext(NamedTuple):
 
     job_id: str
     current_state: str
-    initial_data: Dict[str, Any]
-    state_history: Dict[str, Any]
+    initial_data: dict[str, Any]
+    state_history: dict[str, Any]
     client: ClientConfig
     actions: "ActionFactory"
     data_stores: Any = None
-    tracing_context: Dict[str, Any] = {}
-    aggregation_results: Optional[Dict[str, Any]] = None
+    tracing_context: dict[str, Any] = {}
+    aggregation_results: dict[str, Any] | None = None
 
 
 class GPUInfo(NamedTuple):

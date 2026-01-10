@@ -26,8 +26,10 @@ def job_executor(mock_engine):
 @pytest.mark.asyncio
 async def test_process_job_not_found(job_executor, caplog):
     job_executor.storage.get_job_state.return_value = None
-    await job_executor._process_job("test-job")
+    job_executor.storage.ack_job = AsyncMock()
+    await job_executor._process_job("test-job", "msg-123")
     assert "Job test-job not found in storage" in caplog.text
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -37,8 +39,10 @@ async def test_process_job_in_terminal_state(job_executor, caplog):
         "blueprint_name": "test-bp",
         "current_state": "start",
     }
-    await job_executor._process_job("test-job")
+    job_executor.storage.ack_job = AsyncMock()
+    await job_executor._process_job("test-job", "msg-123")
     assert "Job test-job is already in a terminal state" in caplog.text
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -46,7 +50,8 @@ async def test_process_job_blueprint_not_found(job_executor):
     job_executor.engine.config.JOB_MAX_RETRIES = 3
     job_state = {"id": "test-job", "blueprint_name": "test-bp", "current_state": "start", "initial_data": {}}
     job_executor.storage.get_job_state.return_value = job_state
-    await job_executor._process_job("test-job")
+    job_executor.storage.ack_job = AsyncMock()
+    await job_executor._process_job("test-job", "msg-123")
     job_executor.storage.save_job_state.assert_called_with(
         "test-job",
         {
@@ -60,6 +65,7 @@ async def test_process_job_blueprint_not_found(job_executor):
             "tracing_context": ANY,
         },
     )
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -70,7 +76,8 @@ async def test_process_job_handler_not_found(job_executor):
     job_executor.engine.config.JOB_MAX_RETRIES = 3
     job_state = {"id": "test-job", "blueprint_name": "test-bp", "current_state": "start", "initial_data": {}}
     job_executor.storage.get_job_state.return_value = job_state
-    await job_executor._process_job("test-job")
+    job_executor.storage.ack_job = AsyncMock()
+    await job_executor._process_job("test-job", "msg-123")
     job_executor.storage.save_job_state.assert_called_with(
         "test-job",
         {
@@ -84,6 +91,7 @@ async def test_process_job_handler_not_found(job_executor):
             "tracing_context": ANY,
         },
     )
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -127,9 +135,10 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
         "client_config": {},
     }
     job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
 
     # Run the job processor
-    await job_executor._process_job(job_id)
+    await job_executor._process_job(job_id, "msg-123")
 
     # --- Assertions ---
     # 1. Check that the handler received the correct arguments
@@ -157,6 +166,7 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
     )
     # 3. Check that the job was re-enqueued for the next state
     job_executor.storage.enqueue_job.assert_called_with(job_id)
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -186,9 +196,10 @@ async def test_process_job_handler_backward_compatibility(job_executor):
         "client_config": {},
     }
     job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
 
     # Run the job processor
-    await job_executor._process_job(job_id)
+    await job_executor._process_job(job_id, "msg-123")
 
     # --- Assertions ---
     # 1. Check that the handler was called with the correct arguments
@@ -216,6 +227,7 @@ async def test_process_job_handler_backward_compatibility(job_executor):
         },
     )
     job_executor.storage.enqueue_job.assert_called_with(job_id)
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -255,9 +267,10 @@ async def test_di_name_collision_precedence(job_executor, mocker):
         "client_config": {},
     }
     job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
 
     # Run the job processor
-    await job_executor._process_job(job_id_context)
+    await job_executor._process_job(job_id_context, "msg-123")
 
     # --- Assertions ---
     # job_id should come from JobContext, not state_history or initial_data
@@ -281,6 +294,7 @@ async def test_di_name_collision_precedence(job_executor, mocker):
             "tracing_context": ANY,
         },
     )
+    job_executor.storage.ack_job.assert_called_with("msg-123")
 
 
 @pytest.mark.asyncio
@@ -311,11 +325,12 @@ async def test_di_missing_argument_fails_job(job_executor, caplog):
         "client_config": {},
     }
     job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
 
     # Set MAX_RETRIES to a value > 0 to test the retry mechanism
     job_executor.engine.config.JOB_MAX_RETRIES = 1
 
-    await job_executor._process_job(job_id)
+    await job_executor._process_job(job_id, "msg-123")
 
     # --- Assertions ---
     # The job should have been attempted to retry
@@ -340,3 +355,4 @@ async def test_di_missing_argument_fails_job(job_executor, caplog):
     )
     assert f"Error executing handler for job {job_id}. Attempt 1/1." in caplog.text
     job_executor.storage.enqueue_job.assert_called_with(job_id)  # Job is re-enqueued for retry
+    job_executor.storage.ack_job.assert_called_with("msg-123")

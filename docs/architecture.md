@@ -292,6 +292,8 @@ Abstraction for storing all **current** states of jobs, workers, and queues.
 -   **Implementations:**
     -   **`MemoryStorage` (default):** Implementation storing all data in memory. Default implementation if no other storage is configured. Allows running the application without external dependencies, but all states are lost upon restart.
     -   **`RedisStorage` (recommended for production):** Implementation using Redis for persistent storage. Activated when `REDIS_HOST` is specified in configuration.
+        -   **State Storage:** Uses `msgpack` for efficient binary serialization of job and worker states.
+        -   **Task Queues:** Uses **Redis Streams** (Consumer Groups) to ensure reliable task delivery (At-least-once). Supports recovery of pending messages upon restart using `INSTANCE_ID`.
 -   **Interface:** `storage/base.py` defines methods that must be implemented in any storage implementation.
 
 ### 9.1. `HistoryStorage`

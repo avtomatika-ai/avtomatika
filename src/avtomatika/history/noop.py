@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any
 
 from .base import HistoryStorageBase
 
@@ -12,27 +12,27 @@ class NoOpHistoryStorage(HistoryStorageBase):
         # Do nothing
         pass
 
-    async def log_job_event(self, event_data: Dict[str, Any]):
+    async def log_job_event(self, event_data: dict[str, Any]):
         # Do nothing
         pass
 
-    async def log_worker_event(self, event_data: Dict[str, Any]):
+    async def log_worker_event(self, event_data: dict[str, Any]):
         # Do nothing
         pass
 
-    async def get_job_history(self, job_id: str) -> List[Dict[str, Any]]:
+    async def get_job_history(self, job_id: str) -> list[dict[str, Any]]:
         # Always return an empty list
         return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         return []
 
-    async def get_job_summary(self) -> Dict[str, int]:
+    async def get_job_summary(self) -> dict[str, int]:
         return {}
 
     async def get_worker_history(
         self,
         worker_id: str,
         since_days: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return []

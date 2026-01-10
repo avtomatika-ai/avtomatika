@@ -1,6 +1,5 @@
 from asyncio import Lock
 from logging import getLogger
-from typing import Dict
 
 from aiohttp import web
 
@@ -11,7 +10,7 @@ class WebSocketManager:
     """Manages active WebSocket connections from workers."""
 
     def __init__(self):
-        self._connections: Dict[str, web.WebSocketResponse] = {}
+        self._connections: dict[str, web.WebSocketResponse] = {}
         self._lock = Lock()
 
     async def register(self, worker_id: str, ws: web.WebSocketResponse):

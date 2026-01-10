@@ -1,8 +1,10 @@
 from asyncio import CancelledError, get_running_loop
 from logging import getLogger
-from typing import Any, Dict, Optional
+from os import getenv
+from socket import gethostname
+from typing import Any
 
-from orjson import dumps, loads
+from msgpack import packb, unpackb
 from redis import Redis, WatchError
 from redis.exceptions import NoScriptError, ResponseError
 
@@ -14,23 +16,41 @@ logger = getLogger(__name__)
 class RedisStorage(StorageBackend):
     """Implementation of the state store based on Redis."""
 
-    def __init__(self, redis_client: Redis, prefix: str = "orchestrator:job"):
+    def __init__(
+        self,
+        redis_client: Redis,
+        prefix: str = "orchestrator:job",
+        group_name: str = "orchestrator_group",
+        consumer_name: str | None = None,
+        min_idle_time_ms: int = 60000,
+    ):
         self._redis = redis_client
         self._prefix = prefix
+        self._stream_key = "orchestrator:job_stream"
+        self._group_name = group_name
+        self._consumer_name = consumer_name or getenv("INSTANCE_ID", gethostname())
+        self._group_created = False
+        self._min_idle_time_ms = min_idle_time_ms
 
     def _get_key(self, job_id: str) -> str:
         return f"{self._prefix}:{job_id}"
 
-    async def get_job_state(self, job_id: str) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def _pack(data: Any) -> bytes:
+        return packb(data, use_bin_type=True)
+
+    @staticmethod
+    def _unpack(data: bytes) -> Any:
+        return unpackb(data, raw=False)
+
+    async def get_job_state(self, job_id: str) -> dict[str, Any] | None:
         """Get the job state from Redis."""
         key = self._get_key(job_id)
         data = await self._redis.get(key)
-        return loads(data) if data else None
+        return self._unpack(data) if data else None
 
-    async def get_priority_queue_stats(self, task_type: str) -> Dict[str, Any]:
+    async def get_priority_queue_stats(self, task_type: str) -> dict[str, Any]:
         """Gets statistics for the priority queue (Sorted Set) for a given task type."""
-        # In our implementation, the queue is tied to the worker type, not the task type.
-        # For simplicity, we assume that the task type corresponds to the worker type.
         worker_type = task_type
         key = f"orchestrator:task_queue:{worker_type}"
 
@@ -63,15 +83,15 @@ class RedisStorage(StorageBackend):
         key = f"orchestrator:task_cancel:{task_id}"
         await self._redis.set(key, "1", ex=3600)
 
-    async def save_job_state(self, job_id: str, state: Dict[str, Any]) -> None:
+    async def save_job_state(self, job_id: str, state: dict[str, Any]) -> None:
         """Save the job state to Redis."""
         key = self._get_key(job_id)
-        await self._redis.set(key, dumps(state))
+        await self._redis.set(key, self._pack(state))
 
     async def update_job_state(
         self,
         job_id: str,
-        update_data: Dict[str, Any],
+        update_data: dict[str, Any],
     ) -> dict[Any, Any] | None | Any:
         """Atomically update the job state in Redis using a transaction."""
         key = self._get_key(job_id)
@@ -81,13 +101,13 @@ class RedisStorage(StorageBackend):
                 try:
                     await pipe.watch(key)
                     current_state_raw = await pipe.get(key)
-                    current_state = loads(current_state_raw) if current_state_raw else {}
+                    current_state = self._unpack(current_state_raw) if current_state_raw else {}
 
                     # Simple dictionary merge. For nested structures, a deep merge may be required.
                     current_state.update(update_data)
 
                     pipe.multi()
-                    pipe.set(key, dumps(current_state))
+                    pipe.set(key, self._pack(current_state))
                     await pipe.execute()
                     return current_state
                 except WatchError:
@@ -96,35 +116,29 @@ class RedisStorage(StorageBackend):
     async def register_worker(
         self,
         worker_id: str,
-        worker_info: Dict[str, Any],
+        worker_info: dict[str, Any],
         ttl: int,
     ) -> None:
-        """Registers a worker in Redis.
-
-        Note: The 'address' key in `worker_info` is no longer used,
-        as in the PULL model, workers initiate the connection with the
-        orchestrator themselves.
-        """
-        # Set default reputation for new workers
+        """Registers a worker in Redis."""
         worker_info.setdefault("reputation", 1.0)
         key = f"orchestrator:worker:info:{worker_id}"
-        await self._redis.set(key, dumps(worker_info), ex=ttl)
+        await self._redis.set(key, self._pack(worker_info), ex=ttl)
 
     async def enqueue_task_for_worker(
         self,
         worker_id: str,
-        task_payload: Dict[str, Any],
+        task_payload: dict[str, Any],
         priority: float,
     ) -> None:
         """Adds a task to the priority queue (Sorted Set) for a worker."""
         key = f"orchestrator:task_queue:{worker_id}"
-        await self._redis.zadd(key, {dumps(task_payload): priority})
+        await self._redis.zadd(key, {self._pack(task_payload): priority})
 
     async def dequeue_task_for_worker(
         self,
         worker_id: str,
         timeout: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Retrieves the highest priority task from the queue (Sorted Set),
         using the blocking BZPOPMAX operation.
         """
@@ -132,7 +146,7 @@ class RedisStorage(StorageBackend):
         try:
             # BZPOPMAX returns a tuple (key, member, score)
             result = await self._redis.bzpopmax([key], timeout=timeout)
-            return loads(result[1]) if result else None
+            return self._unpack(result[1]) if result else None
         except CancelledError:
             return None
         except ResponseError as e:
@@ -145,7 +159,7 @@ class RedisStorage(StorageBackend):
                 # Non-blocking fallback for tests
                 res = await self._redis.zpopmax(key)
                 if res:
-                    return loads(res[0][0])
+                    return self._unpack(res[0][0])
             raise e
 
     async def refresh_worker_ttl(self, worker_id: str, ttl: int) -> bool:
@@ -158,9 +172,9 @@ class RedisStorage(StorageBackend):
     async def update_worker_status(
         self,
         worker_id: str,
-        status_update: Dict[str, Any],
+        status_update: dict[str, Any],
         ttl: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         key = f"orchestrator:worker:info:{worker_id}"
         async with self._redis.pipeline(transaction=True) as pipe:
             try:
@@ -169,7 +183,7 @@ class RedisStorage(StorageBackend):
                 if not current_state_raw:
                     return None
 
-                current_state = loads(current_state_raw)
+                current_state = self._unpack(current_state_raw)
 
                 # Create a potential new state to compare against the current one
                 new_state = current_state.copy()
@@ -179,7 +193,7 @@ class RedisStorage(StorageBackend):
 
                 # Only write to Redis if the state has actually changed.
                 if new_state != current_state:
-                    pipe.set(key, dumps(new_state), ex=ttl)
+                    pipe.set(key, self._pack(new_state), ex=ttl)
                     current_state = new_state  # Update the state to be returned
                 else:
                     # If nothing changed, just refresh the TTL to keep the worker alive.
@@ -195,8 +209,8 @@ class RedisStorage(StorageBackend):
     async def update_worker_data(
         self,
         worker_id: str,
-        update_data: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        update_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
         key = f"orchestrator:worker:info:{worker_id}"
         async with self._redis.pipeline(transaction=True) as pipe:
             try:
@@ -205,12 +219,12 @@ class RedisStorage(StorageBackend):
                 if not current_state_raw:
                     return None
 
-                current_state = loads(current_state_raw)
+                current_state = self._unpack(current_state_raw)
                 current_state.update(update_data)
 
                 pipe.multi()
                 # Do not set TTL, as this is a data update, not a heartbeat
-                pipe.set(key, dumps(current_state))
+                pipe.set(key, self._pack(current_state))
                 await pipe.execute()
                 return current_state
             except WatchError:
@@ -229,7 +243,7 @@ class RedisStorage(StorageBackend):
             return []
 
         worker_data_list = await self._redis.mget(worker_keys)
-        return [loads(data) for data in worker_data_list if data]
+        return [self._unpack(data) for data in worker_data_list if data]
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
         """Adds a job to a Redis sorted set.
@@ -259,17 +273,73 @@ class RedisStorage(StorageBackend):
         return []
 
     async def enqueue_job(self, job_id: str) -> None:
-        """Adds a job to the Redis queue (list)."""
-        await self._redis.lpush("orchestrator:job_queue", job_id)  # type: ignore[misc]
+        """Adds a job to the Redis stream."""
+        await self._redis.xadd(self._stream_key, {"job_id": job_id})
 
-    async def dequeue_job(self) -> str | None:
-        """Retrieves a job from the Redis queue (list) with blocking."""
+    async def dequeue_job(self) -> tuple[str, str] | None:
+        """Retrieves a job from the Redis stream using consumer groups.
+        Implements a recovery strategy: checks for pending messages first.
+        """
+        if not self._group_created:
+            try:
+                await self._redis.xgroup_create(self._stream_key, self._group_name, id="0", mkstream=True)
+            except ResponseError as e:
+                if "BUSYGROUP" not in str(e):
+                    raise e
+            self._group_created = True
+
         try:
-            # Lock for 1 second so that the while loop in the executor is not too tight
-            result = await self._redis.brpop(["orchestrator:job_queue"], timeout=1)  # type: ignore[misc]
-            return result[1].decode("utf-8") if result else None
+            try:
+                autoclaim_result = await self._redis.xautoclaim(
+                    self._stream_key,
+                    self._group_name,
+                    self._consumer_name,
+                    min_idle_time=self._min_idle_time_ms,
+                    start_id="0-0",
+                    count=1,
+                )
+                if autoclaim_result and autoclaim_result[1]:
+                    messages = autoclaim_result[1]
+                    message_id, data = messages[0]
+                    if data:
+                        job_id = data[b"job_id"].decode("utf-8")
+                        logger.info(f"Reclaimed pending message {message_id} for consumer {self._consumer_name}")
+                        return job_id, message_id.decode("utf-8")
+            except Exception as e:
+                if "unknown command" in str(e).lower() or isinstance(e, ResponseError):
+                    pending_result = await self._redis.xreadgroup(
+                        self._group_name,
+                        self._consumer_name,
+                        {self._stream_key: "0"},
+                        count=1,
+                    )
+                    if pending_result:
+                        stream_name, messages = pending_result[0]
+                        if messages:
+                            message_id, data = messages[0]
+                            job_id = data[b"job_id"].decode("utf-8")
+                            return job_id, message_id.decode("utf-8")
+                else:
+                    raise e
+
+            result = await self._redis.xreadgroup(
+                self._group_name,
+                self._consumer_name,
+                {self._stream_key: ">"},
+                count=1,
+            )
+            if result:
+                stream_name, messages = result[0]
+                message_id, data = messages[0]
+                job_id = data[b"job_id"].decode("utf-8")
+                return job_id, message_id.decode("utf-8")
+            return None
         except CancelledError:
             return None
+
+    async def ack_job(self, message_id: str) -> None:
+        """Acknowledges a message in the Redis stream."""
+        await self._redis.xack(self._stream_key, self._group_name, message_id)
 
     async def quarantine_job(self, job_id: str) -> None:
         """Moves the job ID to the 'quarantine' list in Redis."""
@@ -290,31 +360,27 @@ class RedisStorage(StorageBackend):
         using a Lua script for atomicity.
         Returns the new value of the counter.
         """
-        # Note: This implementation is simplified for fakeredis compatibility,
-        # which does not support Lua scripting well. In a production Redis,
-        # a Lua script would be more efficient to set the EXPIRE only once.
-        # This version resets the TTL on every call, which is acceptable for tests.
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.incr(key)
             pipe.expire(key, ttl)
             results = await pipe.execute()
             return results[0]
 
-    async def save_client_config(self, token: str, config: Dict[str, Any]) -> None:
+    async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         """Saves the static client configuration as a hash."""
         key = f"orchestrator:client_config:{token}"
-        # Convert all values to strings for storage in a Redis hash
-        str_config = {k: dumps(v) for k, v in config.items()}
+        # Convert all values to binary strings for storage in a Redis hash
+        str_config = {k: self._pack(v) for k, v in config.items()}
         await self._redis.hset(key, mapping=str_config)
 
-    async def get_client_config(self, token: str) -> Optional[Dict[str, Any]]:
+    async def get_client_config(self, token: str) -> dict[str, Any] | None:
         """Gets the static client configuration."""
         key = f"orchestrator:client_config:{token}"
         config_raw = await self._redis.hgetall(key)  # type: ignore[misc]
         if not config_raw:
             return None
-        # Decode keys and values, parse JSON
-        return {k.decode("utf-8"): loads(v) for k, v in config_raw.items()}
+        # Decode keys and values, parse binary
+        return {k.decode("utf-8"): self._unpack(v) for k, v in config_raw.items()}
 
     async def initialize_client_quota(self, token: str, quota: int) -> None:
         """Sets or resets the quota counter."""
@@ -370,8 +436,8 @@ class RedisStorage(StorageBackend):
         await self._redis.flushdb()
 
     async def get_job_queue_length(self) -> int:
-        """Returns the length of the job queue list."""
-        return await self._redis.llen("orchestrator:job_queue")
+        """Returns the length of the job stream."""
+        return await self._redis.xlen(self._stream_key)
 
     async def get_active_worker_count(self) -> int:
         """Returns the number of active worker keys."""
@@ -385,22 +451,21 @@ class RedisStorage(StorageBackend):
         key = f"orchestrator:worker:token:{worker_id}"
         await self._redis.set(key, token)
 
-    async def get_worker_token(self, worker_id: str) -> Optional[str]:
+    async def get_worker_token(self, worker_id: str) -> str | None:
         """Retrieves the individual token for a specific worker."""
         key = f"orchestrator:worker:token:{worker_id}"
         token = await self._redis.get(key)
         return token.decode("utf-8") if token else None
 
-    async def get_worker_info(self, worker_id: str) -> Optional[Dict[str, Any]]:
+    async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Gets the full info for a worker by its ID."""
         key = f"orchestrator:worker:info:{worker_id}"
         data = await self._redis.get(key)
-        return loads(data) if data else None
+        return self._unpack(data) if data else None
 
     async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
         """Attempts to acquire a lock using Redis SET NX."""
         redis_key = f"orchestrator:lock:{key}"
-        # Returns True if set was successful (key didn't exist), None otherwise
         result = await self._redis.set(redis_key, holder_id, nx=True, ex=ttl)
         return bool(result)
 
@@ -419,7 +484,6 @@ class RedisStorage(StorageBackend):
             result = await self._redis.eval(LUA_RELEASE_SCRIPT, 1, redis_key, holder_id)
             return bool(result)
         except ResponseError as e:
-            # Fallback for fakeredis if needed, though fakeredis usually supports eval
             if "unknown command" in str(e):
                 current_val = await self._redis.get(redis_key)
                 if current_val and current_val.decode("utf-8") == holder_id:

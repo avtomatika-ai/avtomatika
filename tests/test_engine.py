@@ -316,108 +316,140 @@ async def test_get_blueprint_graph_file_not_found(engine):
     response = await engine._get_blueprint_graph_handler(request)
     assert response.status == 501
 
+    @pytest.mark.asyncio
+    async def test_task_result_job_not_found(engine):
+        request = MagicMock()
 
-@pytest.mark.asyncio
-async def test_task_result_job_not_found(engine):
-    request = MagicMock()
+        async def get_json(*args, **kwargs):
+            return {"job_id": "non-existent-job", "task_id": "task-1"}
 
-    async def get_json():
-        return {"job_id": "non-existent-job", "task_id": "task-1"}
+        request.json = get_json
 
-    request.json = get_json
-    response = await engine._task_result_handler(request)
-    assert response.status == 404
+        response = await engine._task_result_handler(request)
 
+        assert response.status == 404
 
-@pytest.mark.asyncio
-async def test_task_result_permanent_failure(engine):
-    job_id = "job-permanent-failure"
-    task_id = "task-1"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-    request = MagicMock()
+    @pytest.mark.asyncio
+    async def test_task_result_permanent_failure(engine):
+        job_id = "job-permanent-failure"
 
-    async def get_json():
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "test error"}},
-        }
+        task_id = "task-1"
 
-    request.json = get_json
-    request.headers = {}
-    response = await engine._task_result_handler(request)
-    assert response.status == 200
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "quarantined"
-    assert job_state["error_message"] == "Task failed with permanent error: test error"
+        await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
 
+        request = MagicMock()
 
-@pytest.mark.asyncio
-async def test_task_result_invalid_input_failure(engine):
-    job_id = "job-invalid-input-failure"
-    task_id = "task-1"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-    request = MagicMock()
+        async def get_json(*args, **kwargs):
+            return {
+                "job_id": job_id,
+                "task_id": task_id,
+                "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "test error"}},
+            }
 
-    async def get_json():
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "test error"}},
-        }
+        request.json = get_json
 
-    request.json = get_json
-    request.headers = {}
-    response = await engine._task_result_handler(request)
-    assert response.status == 200
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "failed"
-    assert job_state["error_message"] == "Task failed due to invalid input: test error"
+        request.headers = {}
 
+        response = await engine._task_result_handler(request)
 
-@pytest.mark.asyncio
-async def test_task_result_cancelled(engine):
-    job_id = "job-cancelled"
-    task_id = "task-1"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-    request = MagicMock()
+        assert response.status == 200
 
-    async def get_json():
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "result": {"status": "cancelled"},
-        }
+        job_state = await engine.storage.get_job_state(job_id)
 
-    request.json = get_json
-    request.headers = {}
-    response = await engine._task_result_handler(request)
-    assert response.status == 200
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "cancelled"
+        assert job_state["status"] == "quarantined"
 
+        assert job_state["error_message"] == "Task failed with permanent error: test error"
 
-@pytest.mark.asyncio
-async def test_task_result_unhandled_status(engine):
-    job_id = "job-unhandled-status"
-    task_id = "task-1"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-    request = MagicMock()
+    @pytest.mark.asyncio
+    async def test_task_result_invalid_input_failure(engine):
+        job_id = "job-invalid-input-failure"
 
-    async def get_json():
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "result": {"status": "unhandled"},
-        }
+        task_id = "task-1"
 
-    request.json = get_json
-    request.headers = {}
-    response = await engine._task_result_handler(request)
-    assert response.status == 200
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "failed"
-    assert job_state["error_message"] == "Worker returned unhandled status: unhandled"
+        await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
+
+        request = MagicMock()
+
+        async def get_json(*args, **kwargs):
+            return {
+                "job_id": job_id,
+                "task_id": task_id,
+                "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "test error"}},
+            }
+
+        request.json = get_json
+
+        request.headers = {}
+
+        response = await engine._task_result_handler(request)
+
+        assert response.status == 200
+
+        job_state = await engine.storage.get_job_state(job_id)
+
+        assert job_state["status"] == "failed"
+
+        assert job_state["error_message"] == "Task failed due to invalid input: test error"
+
+    @pytest.mark.asyncio
+    async def test_task_result_cancelled(engine):
+        job_id = "job-cancelled"
+
+        task_id = "task-1"
+
+        await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
+
+        request = MagicMock()
+
+        async def get_json(*args, **kwargs):
+            return {
+                "job_id": job_id,
+                "task_id": task_id,
+                "result": {"status": "cancelled"},
+            }
+
+        request.json = get_json
+
+        request.headers = {}
+
+        response = await engine._task_result_handler(request)
+
+        assert response.status == 200
+
+        job_state = await engine.storage.get_job_state(job_id)
+
+        assert job_state["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_task_result_unhandled_status(engine):
+        job_id = "job-unhandled-status"
+
+        task_id = "task-1"
+
+        await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
+
+        request = MagicMock()
+
+        async def get_json(*args, **kwargs):
+            return {
+                "job_id": job_id,
+                "task_id": task_id,
+                "result": {"status": "unhandled"},
+            }
+
+        request.json = get_json
+
+        request.headers = {}
+
+        response = await engine._task_result_handler(request)
+
+        assert response.status == 200
+
+        job_state = await engine.storage.get_job_state(job_id)
+
+        assert job_state["status"] == "failed"
+
+        assert job_state["error_message"] == "Worker returned unhandled status: unhandled"
 
 
 @pytest.mark.asyncio
@@ -444,7 +476,7 @@ async def test_human_approval_job_not_found(engine):
     request = MagicMock()
     request.match_info.get.return_value = "non-existent-job"
 
-    async def get_json():
+    async def get_json(*args, **kwargs):
         return {"decision": "approved"}
 
     request.json = get_json
@@ -468,7 +500,7 @@ async def test_human_approval_wrong_state(engine):
     request = MagicMock()
     request.match_info.get.return_value = job_id
 
-    async def get_json():
+    async def get_json(*args, **kwargs):
         return {"decision": "approved"}
 
     request.json = get_json
@@ -492,7 +524,7 @@ async def test_human_approval_invalid_decision(engine):
     request = MagicMock()
     request.match_info.get.return_value = job_id
 
-    async def get_json():
+    async def get_json(*args, **kwargs):
         return {"decision": "rejected"}
 
     request.json = get_json
@@ -557,7 +589,7 @@ async def test_worker_update_not_found(engine):
     request.match_info.get.return_value = "non-existent-worker"
     payload = {"status": "idle"}
 
-    async def get_json():
+    async def get_json(*args, **kwargs):
         return payload
 
     request.json = get_json
@@ -569,6 +601,8 @@ async def test_worker_update_not_found(engine):
 @pytest.mark.asyncio
 async def test_worker_update_handler_empty_body(engine):
     """Tests that a PATCH request with an empty body only refreshes TTL."""
+    import json
+
     request = MagicMock()
     request.match_info.get.return_value = "worker-1"
     request.can_read_body = False  # Simulate empty body
@@ -579,7 +613,8 @@ async def test_worker_update_handler_empty_body(engine):
     response = await engine._worker_update_handler(request)
 
     assert response.status == 200
-    assert response.body.decode() == '{"status": "ttl_refreshed"}'
+    # Use json.loads to compare objects, ignoring whitespace differences
+    assert json.loads(response.body.decode()) == {"status": "ttl_refreshed"}
     engine.storage.refresh_worker_ttl.assert_called_once()
     engine.storage.update_worker_status.assert_not_called()
 

@@ -314,18 +314,25 @@ The orchestrator has built-in mechanisms for handling failures based on the `err
 *   **PERMANENT_ERROR**: A permanent error (e.g., a corrupted file). The task will be immediately sent to quarantine for manual investigation.
 *   **INVALID_INPUT_ERROR**: An error in the input data. The entire pipeline (Job) will be immediately moved to the failed state.
 
+### Concurrency & Performance
+
+To prevent system overload during high traffic, the Orchestrator implements a backpressure mechanism for its internal job processing logic.
+
+*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limits the number of job handlers running simultaneously within the Orchestrator process (default: `100`). If this limit is reached, new jobs remain in the Redis queue until a slot becomes available. This ensures the event loop remains responsive even with a massive backlog of pending jobs.
+
 ### High Availability & Distributed Locking
 
 The architecture supports horizontal scaling. Multiple Orchestrator instances can run behind a load balancer.
 
 *   **Stateless API:** The API is stateless; all state is persisted in Redis.
+*   **Instance Identity:** Each instance should have a unique `INSTANCE_ID` (defaults to hostname) for correct handling of Redis Streams consumer groups.
 *   **Distributed Locking:** Background processes (`Watcher`, `ReputationCalculator`) use distributed locks (via Redis `SET NX`) to coordinate and prevent race conditions when multiple instances are active.
 
 ### Storage Backend
 
 By default, the engine uses in-memory storage. For production, you must configure persistent storage via environment variables.
 
-*   **Redis (StorageBackend)**: For storing current job states.
+*   **Redis (StorageBackend)**: For storing current job states (serialized with `msgpack`) and managing task queues (using Redis Streams with consumer groups).
     *   Install:
         ```bash
         pip install "avtomatika[redis]"

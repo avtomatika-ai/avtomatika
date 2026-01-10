@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 
 class AsyncDictStore:
@@ -6,7 +6,7 @@ class AsyncDictStore:
     Simulates the behavior of a persistent store for use in blueprints.
     """
 
-    def __init__(self, initial_data: Dict[str, Any]):
+    def __init__(self, initial_data: dict[str, Any]):
         self._data = initial_data.copy()
 
     async def get(self, key: str) -> Any:

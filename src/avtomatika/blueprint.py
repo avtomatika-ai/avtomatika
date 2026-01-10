@@ -1,6 +1,6 @@
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
-from typing import Any, Callable, Dict, NamedTuple, Optional
+from typing import Any, Callable, NamedTuple
 
 from .datastore import AsyncDictStore
 
@@ -99,8 +99,6 @@ class HandlerDecorator:
 
     def when(self, condition_str: str) -> Callable:
         def decorator(func: Callable) -> Callable:
-            # We still register the base handler to ensure the state is known,
-            # but we can make it a no-op if only conditional handlers exist for a state.
             if self._state not in self._blueprint.handlers:
                 self._blueprint.handlers[self._state] = lambda: None  # Placeholder
 
@@ -115,8 +113,8 @@ class StateMachineBlueprint:
     def __init__(
         self,
         name: str,
-        api_endpoint: Optional[str] = None,
-        api_version: Optional[str] = None,
+        api_endpoint: str | None = None,
+        api_version: str | None = None,
         data_stores: Any = None,
     ):
         """Initializes a new blueprint.
@@ -132,14 +130,14 @@ class StateMachineBlueprint:
         self.name = name
         self.api_endpoint = api_endpoint
         self.api_version = api_version
-        self.data_stores: Dict[str, AsyncDictStore] = data_stores if data_stores is not None else {}
-        self.handlers: Dict[str, Callable] = {}
-        self.aggregator_handlers: Dict[str, Callable] = {}
+        self.data_stores: dict[str, AsyncDictStore] = data_stores if data_stores is not None else {}
+        self.handlers: dict[str, Callable] = {}
+        self.aggregator_handlers: dict[str, Callable] = {}
         self.conditional_handlers: list[ConditionalHandler] = []
-        self.start_state: Optional[str] = None
+        self.start_state: str | None = None
         self.end_states: set[str] = set()
 
-    def add_data_store(self, name: str, initial_data: Dict[str, Any]):
+    def add_data_store(self, name: str, initial_data: dict[str, Any]):
         """Adds a named data store to the blueprint."""
         if name in self.data_stores:
             raise ValueError(f"Data store with name '{name}' already exists.")
@@ -174,7 +172,7 @@ class StateMachineBlueprint:
             f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context.",
         )
 
-    def render_graph(self, output_filename: Optional[str] = None, output_format: str = "png"):
+    def render_graph(self, output_filename: str | None = None, output_format: str = "png"):
         import ast
         import inspect
         import logging

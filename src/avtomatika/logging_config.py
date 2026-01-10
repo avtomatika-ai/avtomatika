@@ -6,7 +6,7 @@ from pythonjsonlogger import json
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json"):
     """Configures structured logging for the entire application."""
-    logger = getLogger("orchestrator")
+    logger = getLogger("avtomatika")
     logger.setLevel(log_level)
 
     handler = StreamHandler(stdout)

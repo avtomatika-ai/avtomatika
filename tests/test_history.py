@@ -236,10 +236,11 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
     # 4. Manually drive the executor loop until the job is done
     # We'll process a few steps to cover the whole flow.
     for _ in range(3):  # start -> step_one -> dispatch -> (we stop here)
-        queued_job_id = await job_storage.dequeue_job()
-        if queued_job_id:
+        result = await job_storage.dequeue_job()
+        if result:
+            queued_job_id, message_id = result
             assert queued_job_id == job_id
-            await executor._process_job(queued_job_id)
+            await executor._process_job(queued_job_id, message_id)
         else:
             # If nothing is in the queue, the job might be waiting for a worker
             # which is fine for this test.

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class StorageBackend(ABC):
@@ -8,7 +8,7 @@ class StorageBackend(ABC):
     """
 
     @abstractmethod
-    async def get_job_state(self, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_job_state(self, job_id: str) -> dict[str, Any] | None:
         """Get the full state of a job by its ID.
 
         :param job_id: Unique identifier for the job.
@@ -20,8 +20,8 @@ class StorageBackend(ABC):
     async def update_worker_data(
         self,
         worker_id: str,
-        update_data: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        update_data: dict[str, Any],
+    ) -> dict[str, Any] | None:
         """Partially update worker information without affecting its TTL.
         Used for background processes like the reputation calculator.
 
@@ -54,9 +54,9 @@ class StorageBackend(ABC):
     async def update_worker_status(
         self,
         worker_id: str,
-        status_update: Dict[str, Any],
+        status_update: dict[str, Any],
         ttl: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Partially update worker information and extend its TTL.
         Used for heartbeat messages.
 
@@ -68,7 +68,7 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def save_job_state(self, job_id: str, state: Dict[str, Any]) -> None:
+    async def save_job_state(self, job_id: str, state: dict[str, Any]) -> None:
         """Save the full state of a job.
 
         :param job_id: Unique identifier for the job.
@@ -80,8 +80,8 @@ class StorageBackend(ABC):
     async def update_job_state(
         self,
         job_id: str,
-        update_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        update_data: dict[str, Any],
+    ) -> dict[str, Any]:
         """Partially update the state of a job.
 
         :param job_id: Unique identifier for the job.
@@ -94,7 +94,7 @@ class StorageBackend(ABC):
     async def register_worker(
         self,
         worker_id: str,
-        worker_info: Dict[str, Any],
+        worker_info: dict[str, Any],
         ttl: int,
     ) -> None:
         """Registers a new worker or updates information about an existing one.
@@ -109,7 +109,7 @@ class StorageBackend(ABC):
     async def enqueue_task_for_worker(
         self,
         worker_id: str,
-        task_payload: Dict[str, Any],
+        task_payload: dict[str, Any],
         priority: float,
     ) -> None:
         """Adds a task to the priority queue for a specific worker.
@@ -125,7 +125,7 @@ class StorageBackend(ABC):
         self,
         worker_id: str,
         timeout: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Retrieves the highest priority task from the queue for a worker (blocking operation).
 
         :param worker_id: The ID of the worker for whom to retrieve the task.
@@ -135,7 +135,7 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_available_workers(self) -> list[Dict[str, Any]]:
+    async def get_available_workers(self) -> list[dict[str, Any]]:
         """Get a list of all active (not expired) workers.
 
         :return: A list of dictionaries, where each dictionary represents information about a worker.
@@ -165,8 +165,19 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def dequeue_job(self) -> Optional[str]:
-        """Retrieve a job ID from the execution queue (blocking operation)."""
+    async def dequeue_job(self) -> tuple[str, str] | None:
+        """Retrieve a job ID and its message ID from the execution queue.
+
+        :return: A tuple of (job_id, message_id) or None if the timeout has expired.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def ack_job(self, message_id: str) -> None:
+        """Acknowledge successful processing of a job from the queue.
+
+        :param message_id: The identifier of the message to acknowledge.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -196,12 +207,12 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def save_client_config(self, token: str, config: Dict[str, Any]) -> None:
+    async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         """Saves the static configuration of a client."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_client_config(self, token: str) -> Optional[Dict[str, Any]]:
+    async def get_client_config(self, token: str) -> dict[str, Any] | None:
         """Gets the static configuration of a client."""
         raise NotImplementedError
 
@@ -225,7 +236,7 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_priority_queue_stats(self, task_type: str) -> Dict[str, Any]:
+    async def get_priority_queue_stats(self, task_type: str) -> dict[str, Any]:
         """Get statistics on the priority queue for a given task type.
 
         :param task_type: The type of task (used as part of the queue key).
@@ -244,12 +255,12 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_worker_token(self, worker_id: str) -> Optional[str]:
+    async def get_worker_token(self, worker_id: str) -> str | None:
         """Retrieves an individual token for a specific worker."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_worker_info(self, worker_id: str) -> Optional[Dict[str, Any]]:
+    async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Get complete information about a worker by its ID."""
         raise NotImplementedError
 
