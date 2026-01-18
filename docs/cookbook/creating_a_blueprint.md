@@ -114,6 +114,13 @@ async def finished_handler(context):
 
 In your application's main file where you run `OrchestratorEngine`, register the created blueprint.
 
+When you call `register_blueprint()`, the engine automatically performs a **integrity validation check**. It ensures that:
+1.  The blueprint has exactly one start state.
+2.  All transitions lead to existing states (no "dangling" transitions).
+3.  All states are reachable from the start state (no "dead code").
+
+If any of these checks fail, a `ValueError` will be raised, preventing the application from starting with a broken configuration.
+
 ```python
 # main.py
 from avtomatika import OrchestratorEngine
@@ -123,7 +130,7 @@ from my_service.blueprints import order_pipeline  # Import our blueprint
 
 engine = OrchestratorEngine(storage, config)
 
-# Register blueprint in engine
+# Register blueprint in engine (Triggers validation!)
 engine.register_blueprint(order_pipeline)
 
 # Run engine

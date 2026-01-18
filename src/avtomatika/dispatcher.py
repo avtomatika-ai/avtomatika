@@ -128,7 +128,7 @@ class Dispatcher:
         """Selects the worker with the best price-quality (reputation) ratio."""
         return min(workers, key=self._get_best_value_score)
 
-    async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]):
+    async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]) -> None:
         job_id = job_state["id"]
         task_type = task_info.get("type")
         if not task_type:

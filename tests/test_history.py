@@ -184,7 +184,7 @@ async def redis_client():
 test_bp = StateMachineBlueprint("test_bp")
 
 
-@test_bp.handler_for("start")
+@test_bp.handler_for("start", is_start=True)
 async def start_handler(context, actions):
     actions.transition_to("step_one")
 
@@ -198,6 +198,9 @@ async def step_one_handler(context, actions):
 @test_bp.handler_for("finished")
 async def finished_handler(context, actions):
     pass  # Terminal state
+
+
+test_bp.validate()
 
 
 async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistoryStorage, redis_client: FakeRedis):

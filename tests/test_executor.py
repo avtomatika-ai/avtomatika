@@ -46,6 +46,51 @@ async def test_process_job_in_terminal_state(job_executor, caplog):
 
 
 @pytest.mark.asyncio
+async def test_process_job_calls_webhook(job_executor):
+    """
+    Tests that send_job_webhook is called when a job reaches a terminal state.
+    """
+    bp = StateMachineBlueprint(name="webhook-test-bp")
+
+    @bp.handler_for("start", is_start=True)
+    async def start_handler(actions):
+        actions.transition_to("finished")
+
+    @bp.handler_for("finished", is_end=True)
+    async def finished_handler():
+        pass
+
+    bp.validate()
+    job_executor.engine.blueprints["webhook-test-bp"] = bp
+
+    # Mock send_job_webhook on the engine
+    job_executor.engine.send_job_webhook = AsyncMock()
+
+    job_id = "test-job-webhook"
+    job_state = {
+        "id": job_id,
+        "blueprint_name": "webhook-test-bp",
+        "current_state": "start",
+        "initial_data": {},
+        "state_history": {},
+        "client_config": {},
+        "webhook_url": "http://example.com/webhook",
+    }
+    job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
+
+    # Run the job processor
+    await job_executor._process_job(job_id, "msg-123")
+
+    # Assertions
+    # Verify that send_job_webhook was called with the correct event type
+    job_executor.engine.send_job_webhook.assert_called_once()
+    call_args = job_executor.engine.send_job_webhook.call_args
+    assert call_args[0][0]["id"] == job_id  # job_state
+    assert call_args[0][1] == "job_finished"  # event_type
+
+
+@pytest.mark.asyncio
 async def test_process_job_blueprint_not_found(job_executor):
     job_executor.engine.config.JOB_MAX_RETRIES = 3
     job_state = {"id": "test-job", "blueprint_name": "test-bp", "current_state": "start", "initial_data": {}}
@@ -123,6 +168,12 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
         actions.transition_to("end")
 
     bp.handler_for("start", is_start=True)(di_handler)
+
+    @bp.handler_for("end", is_end=True)
+    async def end_handler():
+        pass
+
+    bp.validate()
     job_executor.engine.blueprints["di-test-bp"] = bp
 
     job_id = "test-job-di"
@@ -184,6 +235,11 @@ async def test_process_job_handler_backward_compatibility(job_executor):
         handler_mock(context, actions)
         actions.transition_to("end")
 
+    @bp.handler_for("end", is_end=True)
+    async def end_handler():
+        pass
+
+    bp.validate()
     job_executor.engine.blueprints["compat-test-bp"] = bp
 
     job_id = "test-job-compat"
@@ -252,6 +308,12 @@ async def test_di_name_collision_precedence(job_executor, mocker):
         actions.transition_to("end")
 
     bp.handler_for("start", is_start=True)(precedence_handler)
+
+    @bp.handler_for("end", is_end=True)
+    async def end_handler():
+        pass
+
+    bp.validate()
     job_executor.engine.blueprints["precedence-test-bp"] = bp
 
     job_id_context = "context-job-id"
@@ -313,6 +375,12 @@ async def test_di_missing_argument_fails_job(job_executor, caplog):
         actions.transition_to("end")
 
     bp.handler_for("start", is_start=True)(missing_arg_handler)
+
+    @bp.handler_for("end", is_end=True)
+    async def end_handler():
+        pass
+
+    bp.validate()
     job_executor.engine.blueprints["missing-arg-test-bp"] = bp
 
     job_id = "test-job-missing-arg"

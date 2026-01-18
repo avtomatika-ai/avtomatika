@@ -29,9 +29,7 @@ class Watcher:
                 await sleep(self.watch_interval_seconds)
 
                 # Attempt to acquire distributed lock
-                # We set TTL slightly longer than the expected execution time,
-                # but shorter than the interval if possible.
-                # Actually, a fixed TTL like 60s is fine as long as we release it.
+                # We set TTL slightly longer than the expected execution time (60s)
                 if not await self.storage.acquire_lock("global_watcher_lock", self._instance_id, 60):
                     logger.debug("Watcher lock held by another instance. Skipping check.")
                     continue

@@ -15,6 +15,7 @@ This document serves as a comprehensive guide for developers looking to build pi
   - [Parallel Execution and Aggregation (Fan-out/Fan-in)](#parallel-execution-and-aggregation-fan-outfan-in)
   - [Dependency Injection (DataStore)](#dependency-injection-datastore)
   - [Native Scheduler](#native-scheduler)
+  - [Webhook Notifications](#webhook-notifications)
 - [Production Configuration](#production-configuration)
   - [Fault Tolerance](#fault-tolerance)
   - [Storage Backend](#storage-backend)
@@ -111,7 +112,13 @@ async def end_handler(context):
 engine = OrchestratorEngine(storage, config)
 engine.register_blueprint(my_blueprint)
 
-# 4. Define the main entrypoint to run the server
+# 4. Accessing Components (Optional)
+# You can access the internal aiohttp app and core components using AppKeys
+# from avtomatika.app_keys import ENGINE_KEY, DISPATCHER_KEY
+# app = engine.app
+# dispatcher = app[DISPATCHER_KEY]
+
+# 5. Define the main entrypoint to run the server
 async def main():
     await engine.start()
     
@@ -307,6 +314,40 @@ Avtomatika includes a built-in distributed scheduler. It allows you to trigger b
 [nightly_backup]
 blueprint = "backup_flow"
 daily_at = "02:00"
+```
+
+### 6. Webhook Notifications
+
+The orchestrator can send asynchronous notifications to an external system when a job completes, fails, or is quarantined. This eliminates the need for clients to constantly poll the API for status updates.
+
+*   **Usage:** Pass a `webhook_url` in the request body when creating a job.
+*   **Events:**
+    *   `job_finished`: The job reached a final success state.
+    *   `job_failed`: The job failed (e.g., due to an error or invalid input).
+    *   `job_quarantined`: The job was moved to quarantine after repeated failures.
+
+**Example Request:**
+```json
+POST /api/v1/jobs/my_flow
+{
+    "initial_data": {
+        "video_url": "..."
+    },
+    "webhook_url": "https://my-app.com/webhooks/avtomatika"
+}
+```
+
+**Example Webhook Payload:**
+```json
+{
+    "event": "job_finished",
+    "job_id": "123e4567-e89b-12d3-a456-426614174000",
+    "status": "finished",
+    "result": {
+        "output_path": "/videos/result.mp4"
+    },
+    "error": null
+}
 ```
 
 ## Production Configuration

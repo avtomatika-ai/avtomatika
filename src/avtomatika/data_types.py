@@ -21,9 +21,10 @@ class JobContext(NamedTuple):
     state_history: dict[str, Any]
     client: ClientConfig
     actions: "ActionFactory"
-    data_stores: Any = None
-    tracing_context: dict[str, Any] = {}
+    data_stores: dict[str, Any] | None = None
+    tracing_context: dict[str, Any] | None = None
     aggregation_results: dict[str, Any] | None = None
+    webhook_url: str | None = None
 
 
 class GPUInfo(NamedTuple):

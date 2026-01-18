@@ -11,7 +11,7 @@ class ActionFactory:
         self._sub_blueprint_to_run_val: dict[str, Any] | None = None
         self._parallel_tasks_to_dispatch_val: dict[str, Any] | None = None
 
-    def _check_for_existing_action(self):
+    def _check_for_existing_action(self) -> None:
         """
         Helper to ensure only one action is set.
         Raises RuntimeError if any action value is already set.
@@ -45,7 +45,7 @@ class ActionFactory:
     def parallel_tasks_to_dispatch(self) -> dict[str, Any] | None:
         return self._parallel_tasks_to_dispatch_val
 
-    def dispatch_parallel(self, tasks: dict[str, Any] | None, aggregate_into: str) -> None:
+    def dispatch_parallel(self, tasks: list[dict[str, Any]], aggregate_into: str) -> None:
         """
         Dispatches multiple tasks for parallel execution.
         """

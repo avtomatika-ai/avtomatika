@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b6"
+version = "1.0b7"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,6 @@ classifiers = [
 ]
 dependencies = [
     "aiohttp~=3.12",
-    "aiocache~=0.12",
     "python-json-logger~=4.0",
     "graphviz~=0.21",
     "zstandard~=0.24",

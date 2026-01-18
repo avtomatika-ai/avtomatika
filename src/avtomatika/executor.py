@@ -1,5 +1,4 @@
 from asyncio import CancelledError, Task, create_task, sleep
-from inspect import signature
 from logging import getLogger
 from time import monotonic
 from types import SimpleNamespace
@@ -167,17 +166,17 @@ class JobExecutor:
                         handler = blueprint.find_handler(context.current_state, context)
 
                     # Build arguments for the handler dynamically.
-                    handler_signature = signature(handler)
-                    params_to_inject = {}
+                    param_names = blueprint.get_handler_params(handler)
+                    params_to_inject: dict[str, Any] = {}
 
-                    if "context" in handler_signature.parameters:
+                    if "context" in param_names:
                         params_to_inject["context"] = context
-                        if "actions" in handler_signature.parameters:
+                        if "actions" in param_names:
                             params_to_inject["actions"] = action_factory
                     else:
                         # New injection logic with prioritized lookup.
                         context_as_dict = context._asdict()
-                        for param_name in handler_signature.parameters:
+                        for param_name in param_names:
                             # Look in JobContext fields first.
                             if param_name in context_as_dict:
                                 params_to_inject[param_name] = context_as_dict[param_name]
@@ -232,7 +231,7 @@ class JobExecutor:
         job_state: dict[str, Any],
         next_state: str,
         duration_ms: int,
-    ):
+    ) -> None:
         job_id = job_state["id"]
         previous_state = job_state["current_state"]
         logger.info(f"Job {job_id} transitioning from {previous_state} to {next_state}")
@@ -260,13 +259,19 @@ class JobExecutor:
         else:
             logger.info(f"Job {job_id} reached terminal state {next_state}")
             await self._check_and_resume_parent(job_state)
+            # Send webhook for finished/failed jobs
+            event_type = "job_finished" if next_state == "finished" else "job_failed"
+            # Since _check_and_resume_parent is for sub-jobs, we only send webhook if it's a top-level job
+            # or if the user explicitly requested it for sub-jobs (by providing webhook_url).
+            # The current logic stores webhook_url in job_state, so we just check it.
+            await self.engine.send_job_webhook(job_state, event_type)
 
     async def _handle_dispatch(
         self,
         job_state: dict[str, Any],
         task_info: dict[str, Any],
         duration_ms: int,
-    ):
+    ) -> None:
         job_id = job_state["id"]
         current_state = job_state["current_state"]
 
@@ -302,7 +307,6 @@ class JobExecutor:
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.add_job_to_watch(job_id, timeout_at)
 
-            # Now, dispatch the task
             await self.dispatcher.dispatch(job_state, task_info)
 
     async def _handle_run_blueprint(
@@ -310,7 +314,7 @@ class JobExecutor:
         parent_job_state: dict[str, Any],
         sub_blueprint_info: dict[str, Any],
         duration_ms: int,
-    ):
+    ) -> None:
         parent_job_id = parent_job_state["id"]
         child_job_id = str(uuid4())
 
@@ -350,7 +354,7 @@ class JobExecutor:
         job_state: dict[str, Any],
         parallel_info: dict[str, Any],
         duration_ms: int,
-    ):
+    ) -> None:
         job_id = job_state["id"]
         tasks_to_dispatch = parallel_info["tasks"]
         aggregate_into = parallel_info["aggregate_into"]
@@ -398,7 +402,7 @@ class JobExecutor:
         job_state: dict[str, Any],
         error: Exception,
         duration_ms: int,
-    ):
+    ) -> None:
         """Handles failures that occur *during the execution of a handler*.
 
         This is different from a task failure reported by a worker. This logic
@@ -447,13 +451,14 @@ class JobExecutor:
             await self.storage.quarantine_job(job_id)
             # If this quarantined job was a sub-job, we must now resume its parent.
             await self._check_and_resume_parent(job_state)
+            await self.engine.send_job_webhook(job_state, "job_quarantined")
             from . import metrics
 
             metrics.jobs_failed_total.inc(
                 {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown")},
             )
 
-    async def _check_and_resume_parent(self, child_job_state: dict[str, Any]):
+    async def _check_and_resume_parent(self, child_job_state: dict[str, Any]) -> None:
         """Checks if a completed job was a sub-job. If so, it resumes the parent
         job, passing the success/failure outcome of the child.
         """
@@ -493,7 +498,7 @@ class JobExecutor:
         await self.storage.enqueue_job(parent_job_id)
 
     @staticmethod
-    def _handle_task_completion(task: Task):
+    def _handle_task_completion(task: Task) -> None:
         """Callback to handle completion of a job processing task."""
         try:
             # This will re-raise any exception caught in the task
@@ -505,7 +510,7 @@ class JobExecutor:
             # Log any other exceptions that occurred in the task.
             logger.exception("Unhandled exception in job processing task")
 
-    async def run(self):
+    async def run(self) -> None:
         import asyncio
 
         logger.info("JobExecutor started.")
@@ -536,5 +541,5 @@ class JobExecutor:
                 await sleep(1)
         logger.info("JobExecutor stopped.")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False

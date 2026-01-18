@@ -54,10 +54,17 @@ graph TD
 **Location:** `src/avtomatika/engine.py`
 
 This is the central class that brings all components together. Its main tasks:
-- Initialize and configure the `aiohttp` web application.
-- Register "Blueprints" (`StateMachineBlueprint`) and create API endpoints for them.
-- Manage the lifecycle of background processes (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`).
-- Provide access to shared resources such as `StorageBackend` and `Config`.
+- Initialize the `aiohttp` web application and delegate route setup to the API layer.
+- Register "Blueprints" (`StateMachineBlueprint`).
+- Manage the lifecycle of background processes (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
+- Provide access to shared resources such as `StorageBackend` and `Config` via `aiohttp.web.AppKey`.
+
+### 1.1. API Layer
+**Location:** `src/avtomatika/api/`
+
+The HTTP API handling logic has been decoupled from the core engine to improve maintainability.
+-   **`routes.py`**: Responsible for setting up the application routing table, including versioned API groups and mounting sub-applications (Public, Protected, Worker).
+-   **`handlers.py`**: Contains the actual request handlers for all endpoints. These handlers access the engine and other components via the application instance attached to the request.
 
 ### 2. `StateMachineBlueprint`
 **Location:** `src/avtomatika/blueprint.py`

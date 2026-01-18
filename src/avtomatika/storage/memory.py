@@ -33,7 +33,7 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             return self._jobs.get(job_id)
 
-    async def _clean_expired(self):
+    async def _clean_expired(self) -> None:
         """Helper to remove expired keys."""
         now = monotonic()
 
@@ -47,7 +47,7 @@ class MemoryStorage(StorageBackend):
             self._worker_ttls.pop(k, None)
             self._workers.pop(k, None)
 
-    async def save_job_state(self, job_id: str, state: dict[str, Any]):
+    async def save_job_state(self, job_id: str, state: dict[str, Any]) -> None:
         async with self._lock:
             self._jobs[job_id] = state
 
@@ -102,8 +102,13 @@ class MemoryStorage(StorageBackend):
             queue = self._worker_task_queues[worker_id]
 
         try:
-            _, task_payload = await wait_for(queue.get(), timeout=timeout)
-            return task_payload
+            # Type ignore because PriorityQueue.get() return type is generic
+            item = await wait_for(queue.get(), timeout=timeout)  # type: ignore
+            _, task_payload = item
+            # Explicit cast for mypy
+            if isinstance(task_payload, dict):
+                return task_payload
+            return None  # Should not happen if data integrity is kept
         except AsyncTimeoutError:
             return None
 
@@ -141,7 +146,7 @@ class MemoryStorage(StorageBackend):
     async def get_available_workers(self) -> list[dict[str, Any]]:
         async with self._lock:
             now = monotonic()
-            active_workers = []
+            active_workers: list[dict[str, Any]] = []
             active_workers.extend(
                 worker_info
                 for worker_id, worker_info in self._workers.items()
@@ -202,7 +207,7 @@ class MemoryStorage(StorageBackend):
 
             self._generic_keys[key] += 1
             self._generic_key_ttls[key] = now + ttl
-            return self._generic_keys[key]
+            return int(self._generic_keys[key])
 
     async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         async with self._lock:
@@ -223,7 +228,7 @@ class MemoryStorage(StorageBackend):
                 return True
             return False
 
-    async def flush_all(self):
+    async def flush_all(self) -> None:
         """
         Resets all in-memory storage containers to their initial empty state.
         This is a destructive operation intended for use in tests to ensure

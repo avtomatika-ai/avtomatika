@@ -21,7 +21,7 @@ class Scheduler:
         self.schedules: list[ScheduledJobConfig] = []
         self.timezone = ZoneInfo(self.config.TZ)
 
-    def load_config(self):
+    def load_config(self) -> None:
         if not self.config.SCHEDULES_CONFIG_PATH:
             logger.info("No SCHEDULES_CONFIG_PATH set. Scheduler will not run any jobs.")
             return
@@ -32,7 +32,7 @@ class Scheduler:
         except Exception as e:
             logger.error(f"Failed to load schedules config: {e}")
 
-    async def run(self):
+    async def run(self) -> None:
         self.load_config()
         if not self.schedules:
             logger.info("No schedules found. Scheduler loop will not start.")
@@ -59,22 +59,22 @@ class Scheduler:
 
         logger.info("Scheduler stopped.")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
 
-    async def _process_job(self, job: ScheduledJobConfig, now_tz: datetime):
+    async def _process_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
         if job.interval_seconds:
             await self._process_interval_job(job, now_tz)
         else:
             await self._process_calendar_job(job, now_tz)
 
-    async def _process_interval_job(self, job: ScheduledJobConfig, now_tz: datetime):
+    async def _process_interval_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
         last_run_key = f"scheduler:last_run:{job.name}"
         last_run_ts = await self.storage.get_str(last_run_key)
 
         now_ts = now_tz.timestamp()
 
-        if last_run_ts and now_ts - float(last_run_ts) < job.interval_seconds:
+        if last_run_ts and job.interval_seconds is not None and now_ts - float(last_run_ts) < job.interval_seconds:
             return
 
         lock_key = f"scheduler:lock:interval:{job.name}"
@@ -85,7 +85,7 @@ class Scheduler:
             except Exception as e:
                 logger.error(f"Failed to trigger interval job {job.name}: {e}")
 
-    async def _process_calendar_job(self, job: ScheduledJobConfig, now_tz: datetime):
+    async def _process_calendar_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
         target_time_str = job.daily_at or job.time
         if not target_time_str:
             return
@@ -110,7 +110,7 @@ class Scheduler:
             logger.info(f"Triggering scheduled job {job.name}")
             await self._trigger_job(job)
 
-    async def _trigger_job(self, job: ScheduledJobConfig):
+    async def _trigger_job(self, job: ScheduledJobConfig) -> None:
         try:
             await self.engine.create_background_job(
                 blueprint_name=job.blueprint, initial_data=job.input_data, source=f"scheduler:{job.name}"

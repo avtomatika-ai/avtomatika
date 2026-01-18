@@ -55,7 +55,15 @@ These endpoints are designed for external systems that initiate and monitor work
 -   **Endpoint:** `POST /api/{api_version}/{blueprint_api_endpoint}`
 -   **Example:** `POST /api/v1/jobs/simple_flow`
 -   **Description:** Creates and starts a new instance (Job) of the specified blueprint.
--   **Request Body:** JSON object with initial data for the job.
+-   **Request Body:**
+    ```json
+    {
+      "initial_data": { ... },
+      "webhook_url": "https://callback.url/webhook"
+    }
+    ```
+    *   `initial_data` (object, optional): Initial data for the job.
+    *   `webhook_url` (string, optional): URL to receive asynchronous notifications about job completion, failure, or quarantine.
 -   **Response (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
 
 ### Get Job Status

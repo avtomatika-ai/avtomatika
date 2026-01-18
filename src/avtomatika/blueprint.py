@@ -52,7 +52,7 @@ def _parse_condition(condition_str: str) -> Condition:
 
 
 class ConditionalHandler:
-    def __init__(self, blueprint, state: str, func: Callable, condition_str: str):
+    def __init__(self, blueprint: "StateMachineBlueprint", state: str, func: Callable, condition_str: str):
         self.blueprint = blueprint
         self.state = state
         self.func = func
@@ -115,7 +115,7 @@ class StateMachineBlueprint:
         name: str,
         api_endpoint: str | None = None,
         api_version: str | None = None,
-        data_stores: Any = None,
+        data_stores: dict[str, Any] | None = None,
     ):
         """Initializes a new blueprint.
 
@@ -136,8 +136,9 @@ class StateMachineBlueprint:
         self.conditional_handlers: list[ConditionalHandler] = []
         self.start_state: str | None = None
         self.end_states: set[str] = set()
+        self._handler_params: dict[Callable, tuple[str, ...]] = {}
 
-    def add_data_store(self, name: str, initial_data: dict[str, Any]):
+    def add_data_store(self, name: str, initial_data: dict[str, Any]) -> None:
         """Adds a named data store to the blueprint."""
         if name in self.data_stores:
             raise ValueError(f"Data store with name '{name}' already exists.")
@@ -157,10 +158,116 @@ class StateMachineBlueprint:
 
         return decorator
 
-    def validate(self):
+    def validate(self) -> None:
         """Validates that the blueprint is configured correctly."""
         if self.start_state is None:
             raise ValueError(f"Blueprint '{self.name}' must have exactly one start state.")
+        self._analyze_handlers()
+        self.validate_integrity()
+
+    def validate_integrity(self) -> None:
+        """Checks for dangling transitions and unreachable states."""
+        transitions = self._get_all_transitions()
+        defined_states = (
+            set(self.handlers.keys())
+            | set(self.aggregator_handlers.keys())
+            | {ch.state for ch in self.conditional_handlers}
+        )
+
+        # 1. Check for dangling transitions
+        for source_state, targets in transitions.items():
+            for target_state in targets:
+                if target_state not in defined_states:
+                    raise ValueError(
+                        f"Blueprint '{self.name}' has a dangling transition: "
+                        f"state '{source_state}' leads to non-existent state '{target_state}'."
+                    )
+
+        # 2. Check for unreachable states
+        if self.start_state:
+            reachable = {self.start_state}
+            stack = [self.start_state]
+            while stack:
+                current = stack.pop()
+                for target in transitions.get(current, set()):
+                    if target not in reachable:
+                        reachable.add(target)
+                        stack.append(target)
+
+            unreachable = defined_states - reachable
+            if unreachable:
+                raise ValueError(
+                    f"Blueprint '{self.name}' has unreachable states: {', '.join(unreachable)}. "
+                    "All states must be reachable from the start state."
+                )
+
+    def _get_all_transitions(self) -> dict[str, set[str]]:
+        """Parses handler source code to find all possible transitions."""
+        import ast
+        import inspect
+        import logging
+        import textwrap
+
+        logger = logging.getLogger(__name__)
+        transitions: dict[str, set[str]] = {}
+
+        all_handlers = (
+            list(self.handlers.items())
+            + list(self.aggregator_handlers.items())
+            + [(ch.state, ch.func) for ch in self.conditional_handlers]
+        )
+
+        for state, func in all_handlers:
+            if state not in transitions:
+                transitions[state] = set()
+            try:
+                source = textwrap.dedent(inspect.getsource(func))
+                tree = ast.parse(source)
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                        continue
+
+                    # Handle actions.transition_to("state")
+                    if node.func.attr == "transition_to" and node.args and isinstance(node.args[0], ast.Constant):
+                        transitions[state].add(str(node.args[0].value))
+
+                    # Handle actions.dispatch_task(..., transitions={"status": "state"})
+                    # Also handles await_human_approval, run_blueprint which use the same 'transitions' kwarg
+                    elif node.func.attr in ("dispatch_task", "await_human_approval", "run_blueprint"):
+                        for keyword in node.keywords:
+                            if keyword.arg == "transitions" and isinstance(keyword.value, ast.Dict):
+                                for value_node in keyword.value.values:
+                                    if isinstance(value_node, ast.Constant):
+                                        transitions[state].add(str(value_node.value))
+
+                    # Handle actions.dispatch_parallel(..., aggregate_into="state")
+                    elif node.func.attr == "dispatch_parallel":
+                        for keyword in node.keywords:
+                            if keyword.arg == "aggregate_into" and isinstance(keyword.value, ast.Constant):
+                                transitions[state].add(str(keyword.value.value))
+
+            except (TypeError, OSError, SyntaxError) as e:
+                logger.warning(f"Could not parse handler for state '{state}': {e}")
+
+        return transitions
+
+    def _analyze_handlers(self) -> None:
+        """Analyzes and caches parameters for all registered handlers."""
+        import inspect
+
+        all_funcs = (
+            list(self.handlers.values())
+            + list(self.aggregator_handlers.values())
+            + [ch.func for ch in self.conditional_handlers]
+        )
+
+        for func in all_funcs:
+            sig = inspect.signature(func)
+            self._handler_params[func] = tuple(sig.parameters.keys())
+
+    def get_handler_params(self, func: Callable) -> tuple[str, ...]:
+        """Returns the cached parameters for a handler function."""
+        return self._handler_params.get(func, ())
 
     def find_handler(self, state: str, context: Any) -> Callable:
         for handler in self.conditional_handlers:
@@ -173,60 +280,24 @@ class StateMachineBlueprint:
         )
 
     def render_graph(self, output_filename: str | None = None, output_format: str = "png"):
-        import ast
-        import inspect
-        import logging
-        import textwrap
-
         from graphviz import Digraph  # type: ignore[import]
-
-        logger = logging.getLogger(__name__)
 
         dot = Digraph(comment=f"State Machine for {self.name}")
         dot.attr("node", shape="box", style="rounded")
-        all_handlers = list(self.handlers.items()) + [(ch.state, ch.func) for ch in self.conditional_handlers]
-        states = set(self.handlers.keys())
-        for handler_state, handler_func in all_handlers:
-            try:
-                source = textwrap.dedent(inspect.getsource(handler_func))
-                tree = ast.parse(source)
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.Call) and isinstance(
-                        node.func,
-                        ast.Attribute,
-                    ):
-                        if node.func.attr == "transition_to" and node.args and isinstance(node.args[0], ast.Constant):
-                            target_state = str(node.args[0].value)
-                            states.add(target_state)
-                            dot.edge(handler_state, target_state, label="transition")
-                        elif node.func.attr == "dispatch_task":
-                            for keyword in node.keywords:
-                                if keyword.arg == "transitions" and isinstance(
-                                    keyword.value,
-                                    ast.Dict,
-                                ):
-                                    for key_node, value_node in zip(
-                                        keyword.value.keys,
-                                        keyword.value.values,
-                                        strict=False,
-                                    ):
-                                        if isinstance(
-                                            key_node,
-                                            ast.Constant,
-                                        ) and isinstance(value_node, ast.Constant):
-                                            key = str(key_node.value)
-                                            value = str(value_node.value)
-                                            states.add(value)
-                                            dot.edge(
-                                                handler_state,
-                                                value,
-                                                label=f"on {key}",
-                                            )
-            except (TypeError, OSError) as e:
-                logger.warning(
-                    f"Could not parse handler '{handler_func.__name__}' for state '{handler_state}'. "
-                    f"Graph may be incomplete. Error: {e}"
-                )
+
+        transitions = self._get_all_transitions()
+        defined_states = (
+            set(self.handlers.keys())
+            | set(self.aggregator_handlers.keys())
+            | {ch.state for ch in self.conditional_handlers}
+        )
+        states = defined_states.copy()
+
+        for source, targets in transitions.items():
+            for target in targets:
+                states.add(target)
+                dot.edge(source, target)
+
         for state in states:
             dot.node(state, state)
 
