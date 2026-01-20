@@ -143,6 +143,37 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_active_worker_ids(self) -> list[str]:
+        """Returns a list of IDs for all currently active workers.
+
+        :return: A list of worker ID strings.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def cleanup_expired_workers(self) -> None:
+        """Maintenance task to clean up internal indexes from expired worker entries."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_workers(self, worker_ids: list[str]) -> list[dict[str, Any]]:
+        """Bulk retrieves worker info for a list of IDs.
+
+        :param worker_ids: List of worker identifiers.
+        :return: List of worker info dictionaries.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def find_workers_for_task(self, task_type: str) -> list[str]:
+        """Finds idle workers that support the given task.
+
+        :param task_type: The type of task to find workers for.
+        :return: A list of worker IDs that are idle and support the task.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
         """Add a job to the list for timeout tracking.
 
@@ -152,9 +183,10 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_timed_out_jobs(self) -> list[str]:
+    async def get_timed_out_jobs(self, limit: int = 100) -> list[str]:
         """Get a list of job IDs that are overdue and remove them from the tracking list.
 
+        :param limit: Maximum number of jobs to retrieve.
         :return: A list of overdue job IDs.
         """
         raise NotImplementedError
@@ -165,9 +197,10 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def dequeue_job(self) -> tuple[str, str] | None:
+    async def dequeue_job(self, block: int | None = None) -> tuple[str, str] | None:
         """Retrieve a job ID and its message ID from the execution queue.
 
+        :param block: Milliseconds to block if no message is available. None for non-blocking.
         :return: A tuple of (job_id, message_id) or None if the timeout has expired.
         """
         raise NotImplementedError
@@ -250,7 +283,7 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def set_worker_token(self, worker_id: str, token: str):
+    async def set_worker_token(self, worker_id: str, token: str) -> None:
         """Saves an individual token for a specific worker."""
         raise NotImplementedError
 
@@ -265,7 +298,7 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def flush_all(self):
+    async def flush_all(self) -> None:
         """Completely clears the storage. Used mainly for tests."""
         raise NotImplementedError
 
@@ -310,5 +343,13 @@ class StorageBackend(ABC):
         :param key: The unique key of the lock.
         :param holder_id: The identifier of the caller who presumably holds the lock.
         :return: True if the lock was successfully released, False otherwise.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Checks connection to the storage backend.
+
+        :return: True if storage is accessible, False otherwise.
         """
         raise NotImplementedError

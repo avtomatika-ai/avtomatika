@@ -512,7 +512,64 @@ After task execution, you can request status and see `progress_updates` in `stat
 }
 ```
 
-### **Recipe 12: Working with Large Files via S3**
+### **Recipe 12a: Working with S3 Files in Orchestrator (TaskFiles)**
+
+**Task:** Read a configuration file from S3 inside an Orchestrator handler to decide routing, or write a small result file back to S3.
+
+**Concept:**
+When S3 support is enabled in the Orchestrator, you can request the `task_files` argument in your handlers. This object provides helper methods to interact with the job's S3 folder (`jobs/{job_id}/`) without managing connections manually.
+
+**Prerequisite:**
+- Orchestrator configured with `S3_ENDPOINT_URL`, etc.
+- Dependencies installed: `pip install avtomatika[s3]`
+
+```python
+from orchestrator.blueprint import StateMachineBlueprint
+
+s3_ops_bp = StateMachineBlueprint(
+    name="s3_ops_flow",
+    api_version="v1",
+    api_endpoint="jobs/s3_ops"
+)
+
+@s3_ops_bp.handler_for("check_config", is_start=True)
+async def check_config_handler(context, task_files, actions):
+    """
+    Downloads 'config.json' from S3 (jobs/{job_id}/config.json),
+    reads it, and decides next step.
+    """
+    if not task_files:
+        # S3 might be disabled in config
+        actions.transition_to("failed")
+        return
+
+    try:
+        # read_json automatically downloads file if not present locally
+        config = await task_files.read_json("config.json")
+    except Exception:
+        actions.transition_to("config_missing")
+        return
+
+    if config.get("mode") == "fast":
+        actions.transition_to("fast_processing")
+    else:
+        actions.transition_to("deep_processing")
+
+@s3_ops_bp.handler_for("fast_processing")
+async def fast_process(context, task_files, actions):
+    # ... logic ...
+    
+    # Write result back to S3
+    await task_files.write_text("result.txt", "Done fast.")
+    
+    # Or upload an entire directory recursively
+    # await task_files.download("dataset/") # Downloads s3://.../dataset/ to local
+    # await task_files.upload("output_folder") # Uploads local folder to s3://.../output_folder/
+
+    actions.transition_to("finished")
+```
+
+### **Recipe 12b: Working with Large Files via S3 (Worker Side)**
 
 **Task:** Process a large video file. Passing it directly in JSON is impractical, so we'll use S3 for data exchange.
 

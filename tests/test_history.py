@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,6 +21,7 @@ async def sqlite_storage():
     """Fixture to create an in-memory SQLite history storage for testing."""
     storage = SQLiteHistoryStorage(":memory:")
     await storage.initialize()
+    await storage.start()
     yield storage
     await storage.close()
 
@@ -36,6 +38,7 @@ async def test_sqlite_log_and_get_job_event(sqlite_storage: SQLiteHistoryStorage
 
     # Log an event
     await sqlite_storage.log_job_event(event_data)
+    await asyncio.sleep(0.1)
 
     # Retrieve history
     history = await sqlite_storage.get_job_history(job_id)
@@ -62,9 +65,7 @@ async def test_sqlite_log_and_get_worker_event(sqlite_storage: SQLiteHistoryStor
 
     # This should execute without raising an exception
     await sqlite_storage.log_worker_event(event_data)
-
-    # We could extend this by using a direct cursor to check the DB,
-    # but for now, we're just testing the public interface.
+    await asyncio.sleep(0.1)
 
 
 async def test_get_job_history_empty(sqlite_storage: SQLiteHistoryStorage):
@@ -90,9 +91,10 @@ async def test_log_job_event_fails(sqlite_storage: SQLiteHistoryStorage, mocker,
     async def mock_execute(*args, **kwargs):
         raise aiosqlite.Error("Mock DB Error")
 
-    mocker.patch.object(sqlite_storage._conn, "execute", side_effect=mock_execute)
+    mocker.patch.object(sqlite_storage, "_persist_job_event", side_effect=mock_execute)
     await sqlite_storage.log_job_event({"job_id": "test-job"})
-    assert "Failed to log job event" in caplog.text
+    await asyncio.sleep(0.1)
+    assert "Error persisting history event" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -101,8 +103,9 @@ async def test_log_worker_event_fails(sqlite_storage: SQLiteHistoryStorage, mock
     async def mock_execute(*args, **kwargs):
         raise aiosqlite.Error("Mock DB Error")
 
-    mocker.patch.object(sqlite_storage._conn, "execute", side_effect=mock_execute)
+    mocker.patch.object(sqlite_storage, "_persist_worker_event", side_effect=mock_execute)
     await sqlite_storage.log_worker_event({"worker_id": "test-worker"})
+    await asyncio.sleep(0.1)
 
 
 @pytest.mark.asyncio
@@ -248,6 +251,8 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
             # If nothing is in the queue, the job might be waiting for a worker
             # which is fine for this test.
             break
+
+    await asyncio.sleep(0.1)  # Wait for async logs
 
     # 5. Assert the history
     history = await sqlite_storage.get_job_history(job_id)

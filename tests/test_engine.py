@@ -113,6 +113,12 @@ async def test_on_startup(engine, monkeypatch):
         nonlocal load_workers_called
         load_workers_called = True
 
+    # Define a side effect to close coroutines passed to create_task
+    # preventing "coroutine never awaited" warnings
+    def create_task_side_effect(coro, *args, **kwargs):
+        coro.close()
+        return MagicMock()
+
     with (
         patch("avtomatika.engine.ClientSession"),
         patch("avtomatika.engine.Dispatcher"),
@@ -124,7 +130,7 @@ async def test_on_startup(engine, monkeypatch):
         patch("avtomatika.engine.load_client_configs_to_redis", mock_load_clients),
         patch("avtomatika.engine.load_worker_configs_to_redis", mock_load_workers),
         patch("os.path.exists", return_value=True),  # Mock that the config file exists
-        patch.object(loop, "create_task") as mock_create_task,
+        patch.object(loop, "create_task", side_effect=create_task_side_effect) as mock_create_task,
     ):
         await engine.on_startup(app)
         assert load_clients_called
@@ -136,7 +142,7 @@ async def test_on_startup(engine, monkeypatch):
         assert REPUTATION_CALCULATOR_KEY in app
         assert HEALTH_CHECKER_KEY in app
         assert SCHEDULER_KEY in app
-        assert mock_create_task.call_count == 5
+        assert mock_create_task.call_count == 6
 
 
 @pytest.mark.asyncio
@@ -159,8 +165,8 @@ async def test_on_shutdown(engine):
     app[SCHEDULER_TASK_KEY] = loop.create_future()
 
     engine.history_storage = MagicMock(close=AsyncMock())
-
     engine.ws_manager = MagicMock(close_all=AsyncMock())
+    engine.webhook_sender = MagicMock(stop=AsyncMock())
 
     async def mock_gather(*args, **kwargs):
         return []
@@ -254,6 +260,34 @@ async def test_on_startup_import_error(engine, caplog):
     app = web.Application()
     app[ENGINE_KEY] = engine
     engine.app = app
-    with patch("opentelemetry.instrumentation.aiohttp_client.AioHttpClientInstrumentor", side_effect=ImportError):
+
+    # Mock dependencies that on_startup calls
+    engine.storage.ping = AsyncMock(return_value=True)
+    engine.history_storage.start = AsyncMock()
+
+    with (
+        patch("opentelemetry.instrumentation.aiohttp_client.AioHttpClientInstrumentor", side_effect=ImportError),
+        patch("avtomatika.engine.WebhookSender") as MockSender,
+        patch("avtomatika.engine.ClientSession"),
+        patch("avtomatika.engine.Dispatcher"),
+        patch("avtomatika.engine.JobExecutor") as MockExecutor,
+        patch("avtomatika.engine.Watcher") as MockWatcher,
+        patch("avtomatika.engine.ReputationCalculator") as MockReputation,
+        patch("avtomatika.engine.HealthChecker") as MockHealth,
+        patch("avtomatika.engine.Scheduler") as MockScheduler,
+        patch("avtomatika.engine.S3Service"),
+    ):
+        mock_sender_instance = MockSender.return_value
+
+        # Ensure run() methods return coroutines for create_task
+        MockExecutor.return_value.run = AsyncMock()
+        MockWatcher.return_value.run = AsyncMock()
+        MockReputation.return_value.run = AsyncMock()
+        MockHealth.return_value.run = AsyncMock()
+        MockScheduler.return_value.run = AsyncMock()
+
         await engine.on_startup(app)
         assert "opentelemetry-instrumentation-aiohttp-client not found" in caplog.text
+
+        # Verify sender was started
+        mock_sender_instance.start.assert_called_once()

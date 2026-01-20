@@ -48,6 +48,7 @@ def config():
     """Provides a default Config instance."""
     c = Config()
     c.INSTANCE_ID = "test-consumer-1"
+    c.REDIS_STREAM_BLOCK_MS = 0  # Disable blocking for tests
     return c
 
 

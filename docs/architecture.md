@@ -224,23 +224,23 @@ The system supports a dependency injection mechanism that allows providing handl
 
 This mechanism allows decoupling business process logic from specific data access client implementations, simplifying testing and component reuse.
 
-### 4. `Dispatcher`
+### 4. Dispatcher
 **Location:** `src/avtomatika/dispatcher.py`
 
-Responsible for queuing a task (`task`) for the most suitable worker.
-- **Worker Selection:** Applies multi-level filtering:
-    1.  **By Status:** Finds all workers with `idle` status (or no status for backward compatibility).
-    2.  **By Task Type:** From free workers, finds those whose `supported_tasks` contain the required `task_type`.
-    3.  **By Resource Requirements:** If `resource_requirements` are specified in the task, filters out workers that do not meet these requirements (e.g., GPU model, VRAM size, or presence of ML models).
-- **Strategies:** Applies one of the selection strategies to the remaining pool of workers:
-    - `default`: Prefers "warm" workers (who already have necessary models in memory), and then selects the cheapest among them.
-    - `round_robin`: Distributes load sequentially among all available workers.
-    - `least_connections`: Selects the worker with the fewest active tasks.
-    - `cheapest`: Selects the worker with the lowest cost per second of work (based on `cost_per_second` field).
-    - `best_value`: Selects the worker with the best "price/quality" ratio using their **reputation**. This strategy divides worker cost by their reputation, preferring more reliable and cheaper executors.
-- **Queuing:** After selecting a worker, `Dispatcher` places the task in that worker's personal priority queue in `Storage` (e.g., Redis), using the `priority` value, from where the worker can pick it up.
+Responsible for assigning tasks to the most suitable worker.
+- **O(1) Worker Lookup:** Uses **Redis Sets** intersections (`SINTER`) to instantly find idle workers capable of performing a specific task type. This replaces O(N) scanning and ensures constant-time performance even with thousands of workers.
+- **Filtering:** 
+    1. **Status & Task Type:** Handled instantly via Redis indexing.
+    2. **Resource Requirements:** Filters the resulting candidates by hardware specs (GPU model, VRAM, installed ML models).
+- **Strategies:** Applies one of the following selection algorithms to the final candidate pool:
+    - `default`: Prefers "warm" workers (with required models in memory), then selects the cheapest.
+    - `round_robin`: Distributes load sequentially.
+    - `least_connections`: Selects worker with the lowest active task count.
+    - `cheapest`: Selects worker with the lowest `cost_per_second`.
+    - `best_value`: Selects worker with the best price/quality ratio using its **reputation**.
+- **Enqueuing:** Places the task in the worker's priority queue in Storage.
 
-### 4.1. Interaction with Workers (Pull Model)
+### 4.1. Worker Interaction (Pull Model)
 
 The system uses a **Pull Model**, where workers initiate connection to the orchestrator to receive tasks. This allows workers to be behind NAT or firewalls.
 
@@ -285,13 +285,20 @@ A background process that watches for "stuck" or timed-out tasks.
 ### 6. `ReputationCalculator`
 **Location:** `src/avtomatika/reputation.py`
 
-This is a background process responsible for analyzing worker performance and calculating their reputation.
-- **History Analysis:** Periodically requests task history executed by each worker from `HistoryStorage`.
-- **Reputation Calculation:** Based on the ratio of successfully and unsuccessfully completed tasks, as well as other factors (e.g., timeouts), it calculates a "reputation score" for each worker (a number from 0 to 1).
-- **State Update:** Saves the calculated reputation to the worker state record in `StorageBackend`.
-- **Usage:** This reputation score is used by the `best_value` dispatch strategy to make more informed decisions about selecting the most reliable and efficient executor.
+This background process is responsible for analyzing worker performance and calculating their reputation score.
+- **History Analysis:** Periodically queries `HistoryStorage` for tasks completed by each worker.
+- **Calculation:** Calculates a score (0 to 1) based on success/failure ratio.
+- **State Update:** Saves the new reputation to `StorageBackend`.
+- **Throttling:** Uses a randomized delay and limits database queries to prevent load spikes.
 
-### 7. `Scheduler`
+### 7. `HealthChecker`
+**Location:** `src/avtomatika/health_checker.py`
+
+Active maintenance process.
+- **Index Cleanup:** Periodically scans Redis indexes for "dead" worker IDs (whose main info key has expired) and removes them. This prevents index bloat and ensures the O(1) Dispatcher remains efficient over long periods of operation.
+- **Distributed Locking:** Ensures only one instance performs cleanup in a cluster.
+
+### 8. `Scheduler`
 **Location:** `src/avtomatika/scheduler.py`
 
 A background process that triggers jobs based on a schedule defined in `schedules.toml`.
@@ -312,41 +319,21 @@ Abstraction for storing all **current** states of jobs, workers, and queues.
         -   **Task Queues:** Uses **Redis Streams** (Consumer Groups) to ensure reliable task delivery (At-least-once). Supports recovery of pending messages upon restart using `INSTANCE_ID`.
 -   **Interface:** `storage/base.py` defines methods that must be implemented in any storage implementation.
 
-### 9.1. `HistoryStorage`
-
+### 9.1. HistoryStorage
 **Location:** `src/avtomatika/history/`
 
+Optional component for archiving every event in a job's lifecycle for analysis and debugging.
 
-
-This is an optional component responsible for recording task execution **history** for subsequent analysis and debugging. Unlike `StorageBackend`, which stores only the last actual state, `HistoryStorage` records every event in a job's life.
-
-
-
--   **Activation:** The component is activated via the `HISTORY_DATABASE_URI` environment variable. If the variable is not set, the "empty" `NoOpHistoryStorage` implementation is used, which performs no actions.
-
--   **Supported DBs:**
-
-    - **SQLite:** if URI starts with `sqlite:` (e.g., `sqlite:history.db`).
-
-        - **Timestamp Storage:** Uses Unix timestamp (REAL) in UTC for correct sorting.
-
-        - **Timezone Handling:** Automatically converts timestamps to the globally configured `TZ` upon retrieval.
-
-    - **PostgreSQL:** if URI starts with `postgresql:` (e.g., `postgresql://user:pass@host/db`).
-
-        - **Timestamp Storage:** Uses native `TIMESTAMPTZ`.
-
-        - **JSON Handling:** Explicitly serializes/deserializes JSONB fields for compatibility.
-
--   **Logged Events:**
-
-    -   **Jobs:** `state_started`, `state_finished`, `state_failed`, `task_dispatched`. Full "snapshot" of job state, duration, and other meta-information is saved for each event.
-
-    -   **Workers:** `registered`, `status_update`.
-
--   **Fault Tolerance:** Errors during writing to `HistoryStorage` do not interrupt the main job execution process. The error is logged, but the job continues to execute, ensuring main system reliability.
-
--   **Data Access:** History is available via new API endpoint `GET /api/jobs/{job_id}/history`.
+- **Asynchronous Buffering:** Uses an internal `asyncio.Queue` and a background worker. This ensures the main execution loop is never blocked by database latency.
+- **Backends:**
+    - **SQLite**: (URI: `sqlite:path/to/db`).
+        - Stores timestamps as Unix time (REAL) in UTC for sorting.
+        - Automatically converts time to global `TZ` on retrieval.
+    - **PostgreSQL**: (URI: `postgresql://...`).
+        - Uses native `TIMESTAMPTZ`.
+        - Handles `JSONB` fields for context snapshots.
+- **Logged Events:** `state_started`, `state_finished`, `state_failed`, `task_dispatched`.
+- **Fail-Safety:** Errors during logging are recorded but do not interrupt the job execution.
 
 
 
@@ -455,17 +442,20 @@ To ensure reliable and performant system operation in production, following prac
 
 ## 13. Payload Offloading
 
-To process tasks requiring transfer of large data volumes (e.g., video files, large datasets), system supports "Payload Offloading" mechanism. This avoids transferring "heavy" data through Redis, which is not designed for it.
+For tasks requiring large data transfer (video files, datasets), the system supports "Payload Offloading" to keep Redis lean.
 
-- **Technology:** Uses S3-compatible object storage (e.g., AWS S3, MinIO).
-- **Mechanism:**
-    1.  **Client:** When creating a `Job`, client passes URI in `s3://bucket-name/path/to/file.dat` format instead of actual data.
-    2.  **Orchestrator:** Orchestrator transparently passes these URIs to worker in task parameters.
-    3.  **Worker SDK:** Worker SDK automatically detects parameters whose values are `s3://` URIs.
-        -   **Download:** Before calling user handler, SDK downloads files from S3 to a temporary directory on worker's local disk. In `params` passed to handler, URIs are replaced with local file paths.
-        -   **Upload:** After handler completes, SDK checks if it returned local file paths in result. If so, SDK automatically uploads these files back to S3 and replaces local paths with new `s3://` URIs in final result sent to Orchestrator.
-- **Security:** To prevent access to arbitrary files on worker disk, SDK will upload to S3 only files located in directory specified in `WORKER_PAYLOAD_DIR` environment variable.
-- **Configuration:** Worker and Orchestrator (if it needs S3 access) are configured via standard environment variables (`S3_ENDPOINT_URL`, `S3_ACCESS_KEY`, etc.).
+- **Technology**: Built on top of **`obstore`** (Python bindings for Rust's `object_store`), providing high-performance, asynchronous S3 access.
+- **Memory Safety (Streaming)**:
+    - File downloads and uploads are fully streamed.
+    - Data is piped directly between the network socket and the disk, ensuring that RAM usage remains low and constant (O(1)) regardless of file size.
+    - This prevents Out-Of-Memory (OOM) errors even when processing multi-gigabyte files.
+- **Global Concurrency Control**:
+    - To protect the system from file descriptor exhaustion under high load, S3 operations are guarded by a global semaphore (`S3_MAX_CONCURRENCY`).
+- **Mechanism**:
+    1.  **Isolation**: Files are stored in S3 under `jobs/{job_id}/`.
+    2.  **Lifecycle**:
+        - `TaskFiles` helper provides methods (`download`, `upload`, `read_json`) that automatically handle paths.
+        - Automatic cleanup: When a job reaches a terminal state (`finished`, `failed`), the Orchestrator deletes the S3 prefix and local temporary files.
 
 ## 14. Observability
 

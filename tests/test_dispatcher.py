@@ -30,7 +30,8 @@ CPU_WORKER = {
 @pytest.fixture
 def mock_storage():
     storage = MagicMock()
-    storage.get_available_workers = AsyncMock(return_value=[])
+    storage.find_workers_for_task = AsyncMock(return_value=[])
+    storage.get_workers = AsyncMock(return_value=[])
     storage.enqueue_task_for_worker = AsyncMock()
     storage.save_job_state = AsyncMock()
     return storage
@@ -65,15 +66,17 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
         "worker_id": "worker-123",
         "supported_tasks": ["test_task"],
     }
-    mock_storage.get_available_workers = AsyncMock(return_value=[mock_worker])
-    mock_storage.push_task_to_worker = AsyncMock()
+    mock_storage.find_workers_for_task.return_value = ["worker-123"]
+    mock_storage.get_workers.return_value = [mock_worker]
+    mock_storage.enqueue_task_for_worker = AsyncMock()
 
     job_state = {"id": "job-abc", "tracing_context": {}}
     task_info = {"type": "test_task", "params": {"x": 1}}
     await dispatcher.dispatch(job_state, task_info)
 
     # Assertions
-    mock_storage.get_available_workers.assert_called_once()
+    mock_storage.find_workers_for_task.assert_called_once_with("test_task")
+    mock_storage.get_workers.assert_called_once_with(["worker-123"])
     mock_storage.enqueue_task_for_worker.assert_called_once()
 
     # Check the data passed to enqueue_task_for_worker
@@ -87,32 +90,18 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
 
 @pytest.mark.asyncio
 async def test_dispatch_logs_warning_for_busy_mo_worker(dispatcher, mock_storage, caplog):
-    """Tests that the dispatcher logs a warning if all workers are busy,
-    but some are in multi-orchestrator mode."""
-    busy_mo_worker = {
-        "worker_id": "mo-worker-busy",
-        "supported_tasks": ["test_task"],
-        "status": "busy",
-        "multi_orchestrator_info": {"mode": "FAILOVER"},
-    }
-    busy_regular_worker = {
-        "worker_id": "regular-worker-busy",
-        "supported_tasks": ["test_task"],
-        "status": "busy",
-    }
-    mock_storage.get_available_workers = AsyncMock(
-        return_value=[busy_mo_worker, busy_regular_worker],
-    )
+    """Tests that the dispatcher logs a warning if no workers found.
+    Updated for O(1) dispatcher: checks for 'No idle workers found' warning.
+    """
+    mock_storage.find_workers_for_task.return_value = []
 
     job_state = {"id": "job-abc", "tracing_context": {}}
     task_info = {"type": "test_task"}
 
-    with pytest.raises(RuntimeError, match="No idle workers"):
+    with pytest.raises(RuntimeError, match="No suitable workers"):
         await dispatcher.dispatch(job_state, task_info)
 
-    # Check that the correct warning was logged
-    assert "No idle workers." in caplog.text
-    assert "Found 1 busy workers in multi-orchestrator mode" in caplog.text
+    assert "No idle workers found for task 'test_task'" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -122,7 +111,8 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
         "worker_id": "worker-123",
         "supported_tasks": ["test_task"],
     }
-    mock_storage.get_available_workers = AsyncMock(return_value=[mock_worker])
+    mock_storage.find_workers_for_task.return_value = ["worker-123"]
+    mock_storage.get_workers.return_value = [mock_worker]
     mock_storage.enqueue_task_for_worker = AsyncMock()
 
     job_state = {"id": "job-abc", "tracing_context": {}}
@@ -155,10 +145,10 @@ class TestDispatcherFiltering:
     ):
         from src.avtomatika.context import ActionFactory
 
-        mock_storage.get_available_workers = AsyncMock(
-            return_value=[GPU_WORKER, CPU_WORKER],
-        )
-        mock_storage.push_task_to_worker = AsyncMock()
+        workers = [GPU_WORKER, CPU_WORKER]
+        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.get_workers.return_value = workers
+        mock_storage.enqueue_task_for_worker = AsyncMock()
 
         # 1. Simulate a blueprint handler creating an action
         actions = ActionFactory("job-1")
@@ -185,10 +175,9 @@ class TestDispatcherFiltering:
         dispatcher,
         mock_storage,
     ):
-        mock_storage.get_available_workers = AsyncMock(
-            return_value=[GPU_WORKER, CPU_WORKER],
-        )
-        # This mock is crucial for the test to not raise a TypeError
+        workers = [GPU_WORKER, CPU_WORKER]
+        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
         task_info = {
@@ -218,9 +207,9 @@ class TestDispatcherFiltering:
             "supported_tasks": ["test_task"],
             "cost_per_second": 0.05,
         }
-        mock_storage.get_available_workers = AsyncMock(
-            return_value=[expensive_worker, cheapest_worker],
-        )
+        workers = [expensive_worker, cheapest_worker]
+        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
         job_state = {"id": "job-max-cost-test", "tracing_context": {}}
@@ -253,10 +242,9 @@ class TestDispatcherStrategies:
             "supported_tasks": ["test_task"],
             "cost_per_second": 0.05,
         }
-        # The order in the list is intentionally reversed to test the min() logic
-        mock_storage.get_available_workers = AsyncMock(
-            return_value=[expensive_worker, cheapest_worker],
-        )
+        workers = [expensive_worker, cheapest_worker]
+        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
         job_state = {"id": "job-cost-test", "tracing_context": {}}
@@ -289,10 +277,9 @@ class TestDispatcherStrategies:
             "cost_per_second": 0.03,
             "reputation": 1.0,
         }
-        # Worker B should be selected because it has a lower score.
-        mock_storage.get_available_workers = AsyncMock(
-            return_value=[worker_A, worker_B],
-        )
+        workers = [worker_A, worker_B]
+        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
         job_state = {"id": "job-best-value-test", "tracing_context": {}}

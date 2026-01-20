@@ -18,8 +18,7 @@ async def test_reputation_calculation_logic(mock_engine):
     calculator = ReputationCalculator(mock_engine)
 
     # 1. Configure mocks
-    mock_workers = [{"worker_id": "worker-1"}]
-    mock_engine.storage.get_available_workers.return_value = mock_workers
+    mock_engine.storage.get_active_worker_ids = AsyncMock(return_value=["worker-1"])
 
     # History: 3 successful tasks, 1 failed
     mock_history = [
@@ -44,6 +43,7 @@ async def test_reputation_calculation_logic(mock_engine):
     mock_engine.history_storage.get_worker_history.return_value = mock_history
 
     # 2. Perform calculation
+    calculator._running = True
     await calculator.calculate_all_reputations()
 
     # 3. Check the result

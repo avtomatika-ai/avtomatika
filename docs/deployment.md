@@ -33,6 +33,8 @@ uvicorn app:app --host 0.0.0.0 --port 8080
 - `CLIENT_TOKEN` (used to verify `X-Avtomatika-Token` header from clients)
 - `GLOBAL_WORKER_TOKEN` (used to verify `X-Worker-Token` header from workers, if individual token is not set)
 
+For S3-enabled deployments, ensure that `S3_ACCESS_KEY` and `S3_SECRET_KEY` are stored securely (e.g., using Docker Secrets or Vault).
+
 For enhanced security, use individual tokens for each worker using the `workers.toml` file.
 
 ## Local Development and Testing

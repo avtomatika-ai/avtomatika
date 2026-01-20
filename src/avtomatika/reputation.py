@@ -52,48 +52,54 @@ class ReputationCalculator:
     async def calculate_all_reputations(self):
         """Calculates and updates the reputation for all active workers."""
         logger.info("Starting reputation calculation for all workers...")
-        workers = await self.storage.get_available_workers()
-        if not workers:
+
+        # Get only IDs of active workers to avoid O(N) scan of all data
+        worker_ids = await self.storage.get_active_worker_ids()
+
+        if not worker_ids:
             logger.info("No active workers found for reputation calculation.")
             return
 
-        for worker in workers:
-            worker_id = worker.get("worker_id")
-            if not worker_id:
-                continue
+        logger.info(f"Recalculating reputation for {len(worker_ids)} workers.")
 
-            history = await self.history_storage.get_worker_history(
-                worker_id,
-                since_days=REPUTATION_HISTORY_DAYS,
-            )
+        for worker_id in worker_ids:
+            if not self._running:
+                break
 
-            # Count only task completion events
-            task_finished_events = [event for event in history if event.get("event_type") == "task_finished"]
+            try:
+                history = await self.history_storage.get_worker_history(
+                    worker_id,
+                    since_days=REPUTATION_HISTORY_DAYS,
+                )
 
-            if not task_finished_events:
-                # If there is no history, the reputation does not change (remains 1.0 by default)
-                continue
+                # Count only task completion events
+                task_finished_events = [event for event in history if event.get("event_type") == "task_finished"]
 
-            successful_tasks = 0
-            for event in task_finished_events:
-                # Extract the result from the snapshot
-                snapshot = event.get("context_snapshot", {})
-                result = snapshot.get("result", {})
-                if result.get("status") == "success":
-                    successful_tasks += 1
+                if not task_finished_events:
+                    # If there is no history, skip to next worker
+                    continue
 
-            total_tasks = len(task_finished_events)
-            new_reputation = successful_tasks / total_tasks if total_tasks > 0 else 1.0
+                successful_tasks = 0
+                for event in task_finished_events:
+                    # Extract the result from the snapshot
+                    snapshot = event.get("context_snapshot", {})
+                    result = snapshot.get("result", {})
+                    if result.get("status") == "success":
+                        successful_tasks += 1
 
-            # Round for cleanliness
-            new_reputation = round(new_reputation, 4)
+                total_tasks = len(task_finished_events)
+                new_reputation = successful_tasks / total_tasks if total_tasks > 0 else 1.0
+                new_reputation = round(new_reputation, 4)
 
-            logger.info(
-                f"Updating reputation for worker {worker_id}: {worker.get('reputation')} -> {new_reputation}",
-            )
-            await self.storage.update_worker_data(
-                worker_id,
-                {"reputation": new_reputation},
-            )
+                await self.storage.update_worker_data(
+                    worker_id,
+                    {"reputation": new_reputation},
+                )
+
+                # Throttling: Small sleep to prevent DB spikes
+                await sleep(0.1)
+
+            except Exception as e:
+                logger.error(f"Failed to calculate reputation for worker {worker_id}: {e}")
 
         logger.info("Reputation calculation finished.")

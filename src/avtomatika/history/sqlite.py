@@ -49,11 +49,12 @@ class SQLiteHistoryStorage(HistoryStorageBase):
     """
 
     def __init__(self, db_path: str, tz_name: str = "UTC"):
+        super().__init__()
         self._db_path = db_path
         self._conn: Connection | None = None
         self.tz = ZoneInfo(tz_name)
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initializes the database connection and creates tables if they don't exist."""
         try:
             self._conn = await connect(self._db_path)
@@ -68,8 +69,9 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             logger.error(f"Failed to initialize SQLite history storage: {e}")
             raise
 
-    async def close(self):
-        """Closes the database connection."""
+    async def close(self) -> None:
+        """Closes the database connection and background worker."""
+        await super().close()
         if self._conn:
             await self._conn.close()
             logger.info("SQLite history storage connection closed.")
@@ -91,7 +93,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
 
         return item
 
-    async def log_job_event(self, event_data: dict[str, Any]):
+    async def _persist_job_event(self, event_data: dict[str, Any]) -> None:
         """Logs a job lifecycle event to the job_history table."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
@@ -128,7 +130,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         except Error as e:
             logger.error(f"Failed to log job event: {e}")
 
-    async def log_worker_event(self, event_data: dict[str, Any]):
+    async def _persist_worker_event(self, event_data: dict[str, Any]) -> None:
         """Logs a worker lifecycle event to the worker_history table."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")

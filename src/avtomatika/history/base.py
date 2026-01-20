@@ -1,25 +1,79 @@
+import asyncio
+import contextlib
 from abc import ABC, abstractmethod
+from logging import getLogger
 from typing import Any
+
+logger = getLogger(__name__)
 
 
 class HistoryStorageBase(ABC):
     """Abstract base class for a history store.
-    Defines the interface for logging job and worker events.
+    Implements buffered asynchronous logging to avoid blocking the main loop.
     """
 
+    def __init__(self):
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=5000)
+        self._worker_task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Starts the background worker for writing logs."""
+        if not self._worker_task:
+            self._worker_task = asyncio.create_task(self._worker())
+            logger.info("HistoryStorage background worker started.")
+
+    async def close(self) -> None:
+        """Stops the background worker and closes resources."""
+        if self._worker_task:
+            self._worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker_task
+            self._worker_task = None
+            logger.info("HistoryStorage background worker stopped.")
+
     @abstractmethod
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Performs initialization, e.g., creating tables in the DB."""
         raise NotImplementedError
 
+    async def log_job_event(self, event_data: dict[str, Any]) -> None:
+        """Queues a job event for logging."""
+        try:
+            self._queue.put_nowait(("job", event_data))
+        except asyncio.QueueFull:
+            logger.warning("History queue full! Dropping job event.")
+
+    async def log_worker_event(self, event_data: dict[str, Any]) -> None:
+        """Queues a worker event for logging."""
+        try:
+            self._queue.put_nowait(("worker", event_data))
+        except asyncio.QueueFull:
+            logger.warning("History queue full! Dropping worker event.")
+
+    async def _worker(self) -> None:
+        while True:
+            try:
+                kind, data = await self._queue.get()
+                try:
+                    if kind == "job":
+                        await self._persist_job_event(data)
+                    elif kind == "worker":
+                        await self._persist_worker_event(data)
+                except Exception as e:
+                    logger.error(f"Error persisting history event: {e}")
+                finally:
+                    self._queue.task_done()
+            except asyncio.CancelledError:
+                break
+
     @abstractmethod
-    async def log_job_event(self, event_data: dict[str, Any]):
-        """Logs an event related to the job lifecycle."""
+    async def _persist_job_event(self, event_data: dict[str, Any]) -> None:
+        """Actual implementation of writing a job event to storage."""
         raise NotImplementedError
 
     @abstractmethod
-    async def log_worker_event(self, event_data: dict[str, Any]):
-        """Logs an event related to the worker lifecycle."""
+    async def _persist_worker_event(self, event_data: dict[str, Any]) -> None:
+        """Actual implementation of writing a worker event to storage."""
         raise NotImplementedError
 
     @abstractmethod

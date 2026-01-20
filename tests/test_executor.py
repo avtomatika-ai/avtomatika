@@ -79,6 +79,9 @@ async def test_process_job_calls_webhook(job_executor):
     job_executor.storage.get_job_state.return_value = job_state
     job_executor.storage.ack_job = AsyncMock()
 
+    # Disable S3 service for this test to avoid cleanup error
+    job_executor.engine.app.get.return_value = None
+
     # Run the job processor
     await job_executor._process_job(job_id, "msg-123")
 

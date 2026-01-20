@@ -12,7 +12,7 @@ task_queue_length: Gauge
 active_workers: Gauge
 
 
-def init_metrics():
+def init_metrics() -> None:
     """
     Initializes Prometheus metrics.
     Uses a registry check for idempotency, which is important for tests.

@@ -137,32 +137,17 @@ class Dispatcher:
         dispatch_strategy = task_info.get("dispatch_strategy", "default")
         resource_requirements = task_info.get("resource_requirements")
 
-        all_workers = await self.storage.get_available_workers()
-        logger.info(f"Found {len(all_workers)} available workers")
-        if not all_workers:
-            raise RuntimeError("No available workers")
-
-        # A worker is considered available if its status is 'idle' or not specified (for backward compatibility)
-        logger.debug(f"All available workers: {[w['worker_id'] for w in all_workers]}")
-        idle_workers = [w for w in all_workers if w.get("status", "idle") == "idle"]
-        logger.debug(f"Idle workers: {[w['worker_id'] for w in idle_workers]}")
-        if not idle_workers:
-            if busy_mo_workers := [
-                w for w in all_workers if w.get("status") == "busy" and "multi_orchestrator_info" in w
-            ]:
-                logger.warning(
-                    f"No idle workers. Found {len(busy_mo_workers)} busy workers "
-                    f"in multi-orchestrator mode. They are likely performing tasks for other Orchestrators.",
-                )
-            raise RuntimeError("No idle workers (all are 'busy')")
-
-        # Filter by task type
-        capable_workers = [w for w in idle_workers if task_type in w.get("supported_tasks", [])]
-        logger.debug(f"Capable workers for task '{task_type}': {[w['worker_id'] for w in capable_workers]}")
-        if not capable_workers:
+        candidate_ids = await self.storage.find_workers_for_task(task_type)
+        if not candidate_ids:
+            logger.warning(f"No idle workers found for task '{task_type}'")
             raise RuntimeError(f"No suitable workers for task type '{task_type}'")
 
-        # Filter by resource requirements
+        capable_workers = await self.storage.get_workers(candidate_ids)
+        logger.debug(f"Found {len(capable_workers)} capable workers for task '{task_type}'")
+
+        if not capable_workers:
+            raise RuntimeError(f"No suitable workers for task type '{task_type}' (data missing)")
+
         if resource_requirements:
             compliant_workers = [w for w in capable_workers if self._is_worker_compliant(w, resource_requirements)]
             logger.debug(
@@ -175,7 +160,6 @@ class Dispatcher:
                 )
             capable_workers = compliant_workers
 
-        # Filter by maximum cost
         max_cost = task_info.get("max_cost")
         if max_cost is not None:
             cost_compliant_workers = [w for w in capable_workers if w.get("cost_per_second", float("inf")) <= max_cost]
@@ -188,7 +172,6 @@ class Dispatcher:
                 )
             capable_workers = cost_compliant_workers
 
-        # Select worker according to strategy
         if dispatch_strategy == "round_robin":
             selected_worker = self._select_round_robin(capable_workers, task_type)
         elif dispatch_strategy == "least_connections":
@@ -205,7 +188,6 @@ class Dispatcher:
             f"Dispatching task '{task_type}' to worker {worker_id} (strategy: {dispatch_strategy})",
         )
 
-        # --- Task creation and enqueuing ---
         task_id = task_info.get("task_id") or str(uuid4())
         payload = {
             "job_id": job_id,

@@ -19,6 +19,7 @@ from .app_keys import (
     HTTP_SESSION_KEY,
     REPUTATION_CALCULATOR_KEY,
     REPUTATION_CALCULATOR_TASK_KEY,
+    S3_SERVICE_KEY,
     SCHEDULER_KEY,
     SCHEDULER_TASK_KEY,
     WATCHER_KEY,
@@ -37,6 +38,7 @@ from .history.base import HistoryStorageBase
 from .history.noop import NoOpHistoryStorage
 from .logging_config import setup_logging
 from .reputation import ReputationCalculator
+from .s3 import S3Service
 from .scheduler import Scheduler
 from .storage.base import StorageBackend
 from .telemetry import setup_telemetry
@@ -141,6 +143,11 @@ class OrchestratorEngine:
                 self.history_storage = NoOpHistoryStorage()
 
     async def on_startup(self, app: web.Application) -> None:
+        # 1. Fail Fast: Check Storage Connection
+        if not await self.storage.ping():
+            logger.critical("Failed to connect to Storage Backend (Redis). Exiting.")
+            raise RuntimeError("Storage Backend is unavailable.")
+
         try:
             from opentelemetry.instrumentation.aiohttp_client import (
                 AioHttpClientInstrumentor,
@@ -152,6 +159,8 @@ class OrchestratorEngine:
                 "opentelemetry-instrumentation-aiohttp-client not found. AIOHTTP client instrumentation is disabled."
             )
         await self._setup_history_storage()
+        # Start history background worker
+        await self.history_storage.start()
 
         # Load client configs if the path is provided
         if self.config.CLIENTS_CONFIG_PATH:
@@ -188,6 +197,7 @@ class OrchestratorEngine:
 
         app[HTTP_SESSION_KEY] = ClientSession()
         self.webhook_sender = WebhookSender(app[HTTP_SESSION_KEY])
+        self.webhook_sender.start()
         self.dispatcher = Dispatcher(self.storage, self.config)
         app[DISPATCHER_KEY] = self.dispatcher
         app[EXECUTOR_KEY] = JobExecutor(self, self.history_storage)
@@ -196,6 +206,7 @@ class OrchestratorEngine:
         app[HEALTH_CHECKER_KEY] = HealthChecker(self)
         app[SCHEDULER_KEY] = Scheduler(self)
         app[WS_MANAGER_KEY] = self.ws_manager
+        app[S3_SERVICE_KEY] = S3Service(self.config, self.history_storage)
 
         app[EXECUTOR_TASK_KEY] = create_task(app[EXECUTOR_KEY].run())
         app[WATCHER_TASK_KEY] = create_task(app[WATCHER_KEY].run())
@@ -219,6 +230,13 @@ class OrchestratorEngine:
 
         logger.info("Closing WebSocket connections...")
         await self.ws_manager.close_all()
+
+        logger.info("Stopping WebhookSender...")
+        await self.webhook_sender.stop()
+
+        if S3_SERVICE_KEY in app:
+            logger.info("Closing S3 Service...")
+            await app[S3_SERVICE_KEY].close()
 
         logger.info("Cancelling background tasks...")
         app[HEALTH_CHECKER_TASK_KEY].cancel()
@@ -352,7 +370,7 @@ class OrchestratorEngine:
         )
 
         # Run in background to not block the main flow
-        create_task(self.webhook_sender.send(webhook_url, payload))
+        await self.webhook_sender.send(webhook_url, payload)
 
     def run(self) -> None:
         self.setup()

@@ -15,6 +15,7 @@ This document serves as a comprehensive guide for developers looking to build pi
   - [Parallel Execution and Aggregation (Fan-out/Fan-in)](#parallel-execution-and-aggregation-fan-outfan-in)
   - [Dependency Injection (DataStore)](#dependency-injection-datastore)
   - [Native Scheduler](#native-scheduler)
+  - [S3 Payload Offloading](#s3-payload-offloading)
   - [Webhook Notifications](#webhook-notifications)
 - [Production Configuration](#production-configuration)
   - [Fault Tolerance](#fault-tolerance)
@@ -60,6 +61,11 @@ Avtomatika is part of a larger ecosystem:
 *   **Install with telemetry support (Prometheus, OpenTelemetry):**
     ```bash
     pip install "avtomatika[telemetry]"
+    ```
+
+*   **Install with S3 support (Payload Offloading):**
+    ```bash
+    pip install "avtomatika[s3]"
     ```
 
 *   **Install all dependencies, including for testing:**
@@ -205,6 +211,19 @@ async def publish_handler_old_style(context):
     print(f"Job {context.job_id}: Publishing video at {output_path} ({duration}s).")
     context.actions.transition_to("complete")
 ```
+## Key Concepts: JobContext and Actions
+
+### High Performance Architecture
+
+Avtomatika is engineered for high-load environments with thousands of concurrent workers.
+
+*   **O(1) Dispatcher**: Uses advanced Redis Set intersections to find suitable workers instantly, regardless of the cluster size. No O(N) scanning.
+*   **Non-Blocking I/O**:
+    *   **Webhooks**: Sent via a bounded background queue to prevent backpressure.
+    *   **History Logging**: Writes to SQL databases are buffered and asynchronous, ensuring the main execution loop never blocks.
+    *   **Redis Streams**: Uses blocking reads to eliminate busy-waiting and reduce CPU usage.
+*   **Memory Safety**: S3 file transfers use streaming to handle multi-gigabyte files with constant, low RAM usage.
+
 ## Blueprint Cookbook: Key Features
 
 ### 1. Conditional Transitions (`.when()`)
@@ -320,7 +339,30 @@ daily_at = "02:00"
 
 The orchestrator can send asynchronous notifications to an external system when a job completes, fails, or is quarantined. This eliminates the need for clients to constantly poll the API for status updates.
 
-*   **Usage:** Pass a `webhook_url` in the request body when creating a job.
+### 7. S3 Payload Offloading
+
+Orchestrator provides first-class support for handling large files via S3-compatible storage, powered by the high-performance `obstore` library (Rust bindings).
+
+*   **Memory Safe (Streaming)**: Uses streaming for uploads and downloads, allowing processing of files larger than available RAM without OOM errors.
+*   **Managed Mode**: The Orchestrator manages file lifecycle (automatic cleanup of S3 objects and local temporary files on job completion).
+*   **Dependency Injection**: Use the `task_files` argument in your handlers to easily read/write data.
+*   **Directory Support**: Supports recursive download and upload of entire directories.
+
+```python
+@bp.handler_for("process_data")
+async def process_data(task_files, actions):
+    # Streaming download of a large file
+    local_path = await task_files.download("large_dataset.csv")
+    
+    # ... process data ...
+    
+    # Upload results
+    await task_files.write_json("results.json", {"status": "done"})
+    
+    actions.transition_to("finished")
+```
+
+## Production Configuration
 *   **Events:**
     *   `job_finished`: The job reached a final success state.
     *   `job_failed`: The job failed (e.g., due to an error or invalid input).

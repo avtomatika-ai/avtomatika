@@ -39,6 +39,7 @@ class Config:
 
         # Worker settings
         self.WORKER_TIMEOUT_SECONDS: int = int(getenv("WORKER_TIMEOUT_SECONDS", 300))
+        self.TASK_FILES_DIR: str = getenv("TASK_FILES_DIR", "/tmp/avtomatika-payloads")
         self.WORKER_POLL_TIMEOUT_SECONDS: int = int(
             getenv("WORKER_POLL_TIMEOUT_SECONDS", 30),
         )
@@ -52,9 +53,18 @@ class Config:
         self.EXECUTOR_MAX_CONCURRENT_JOBS: int = int(
             getenv("EXECUTOR_MAX_CONCURRENT_JOBS", 100),
         )
+        self.REDIS_STREAM_BLOCK_MS: int = int(getenv("REDIS_STREAM_BLOCK_MS", 5000))
 
         # History storage settings
         self.HISTORY_DATABASE_URI: str = getenv("HISTORY_DATABASE_URI", "")
+
+        # S3 settings
+        self.S3_ENDPOINT_URL: str = getenv("S3_ENDPOINT_URL", "")
+        self.S3_ACCESS_KEY: str = getenv("S3_ACCESS_KEY", "")
+        self.S3_SECRET_KEY: str = getenv("S3_SECRET_KEY", "")
+        self.S3_REGION: str = getenv("S3_REGION", "us-east-1")
+        self.S3_DEFAULT_BUCKET: str = getenv("S3_DEFAULT_BUCKET", "avtomatika-payloads")
+        self.S3_MAX_CONCURRENCY: int = int(getenv("S3_MAX_CONCURRENCY", 100))
 
         # Rate limiting settings
         self.RATE_LIMITING_ENABLED: bool = getenv("RATE_LIMITING_ENABLED", "true").lower() == "true"

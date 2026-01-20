@@ -161,3 +161,17 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
+
+### S3 Storage (Optional)
+
+Configure these variables to enable S3 Payload Offloading.
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `S3_ENDPOINT_URL` | URL of the S3-compatible storage. **Required** to enable S3. | `""` |
+| `S3_ACCESS_KEY` | Access Key ID. **Required**. | `""` |
+| `S3_SECRET_KEY` | Secret Access Key. **Required**. | `""` |
+| `S3_DEFAULT_BUCKET` | Default bucket name for job payloads. | `avtomatika-payloads` |
+| `S3_REGION` | S3 Region. | `us-east-1` |
+| `S3_MAX_CONCURRENCY` | Maximum number of concurrent connections to S3 across all jobs. Prevents file descriptor exhaustion. | `100` |
+| `TASK_FILES_DIR` | Local directory for temporary file storage during job execution. | `/tmp/avtomatika-payloads` |

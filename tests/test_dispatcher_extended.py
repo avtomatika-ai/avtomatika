@@ -24,7 +24,9 @@ async def test_dispatcher_cheapest_strategy(dispatcher, mock_storage):
         {"worker_id": "cheap", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.1},
         {"worker_id": "medium", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.3},
     ]
-    mock_storage.get_available_workers.return_value = workers
+    # Update for O(1) dispatcher
+    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}
     task_info = {"type": "task", "dispatch_strategy": "cheapest"}
@@ -66,7 +68,8 @@ async def test_dispatcher_best_value_strategy(dispatcher, mock_storage):
             "reputation": 0.8,
         },
     ]
-    mock_storage.get_available_workers.return_value = workers
+    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}
     task_info = {"type": "task", "dispatch_strategy": "best_value"}
@@ -84,7 +87,8 @@ async def test_dispatcher_max_cost_filtering(dispatcher, mock_storage):
         {"worker_id": "too_expensive", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 1.0},
         {"worker_id": "just_right", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.05},
     ]
-    mock_storage.get_available_workers.return_value = workers
+    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}
     task_info = {"type": "task", "max_cost": 0.1}

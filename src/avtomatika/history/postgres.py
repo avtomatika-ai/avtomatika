@@ -46,19 +46,20 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
     """Implementation of the history store based on asyncpg for PostgreSQL."""
 
     def __init__(self, dsn: str, tz_name: str = "UTC"):
+        super().__init__()
         self._dsn = dsn
         self._pool: Pool | None = None
         self.tz_name = tz_name
         self.tz = ZoneInfo(tz_name)
 
-    async def _setup_connection(self, conn: Connection):
+    async def _setup_connection(self, conn: Connection) -> None:
         """Configures the connection session with the correct timezone."""
         try:
             await conn.execute(f"SET TIME ZONE '{self.tz_name}'")
         except PostgresError as e:
             logger.error(f"Failed to set timezone '{self.tz_name}' for PG connection: {e}")
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initializes the connection pool to PostgreSQL and creates tables."""
         try:
             # We use init parameter to configure each new connection in the pool
@@ -75,13 +76,14 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             logger.error(f"Failed to initialize PostgreSQL history storage: {e}")
             raise
 
-    async def close(self):
-        """Closes the connection pool."""
+    async def close(self) -> None:
+        """Closes the connection pool and background worker."""
+        await super().close()
         if self._pool:
             await self._pool.close()
             logger.info("PostgreSQL history storage connection pool closed.")
 
-    async def log_job_event(self, event_data: dict[str, Any]):
+    async def _persist_job_event(self, event_data: dict[str, Any]) -> None:
         """Logs a job lifecycle event to PostgreSQL."""
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
@@ -117,7 +119,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         except PostgresError as e:
             logger.error(f"Failed to log job event to PostgreSQL: {e}")
 
-    async def log_worker_event(self, event_data: dict[str, Any]):
+    async def _persist_worker_event(self, event_data: dict[str, Any]) -> None:
         """Logs a worker lifecycle event to PostgreSQL."""
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")

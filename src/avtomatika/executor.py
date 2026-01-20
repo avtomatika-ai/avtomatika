@@ -47,6 +47,7 @@ except ImportError:
     inject = NoOpPropagate().inject
     TraceContextTextMapPropagator = NoOpTraceContextTextMapPropagator()  # Instantiate the class
 
+from .app_keys import S3_SERVICE_KEY
 from .context import ActionFactory
 from .data_types import ClientConfig, JobContext
 from .history.base import HistoryStorageBase
@@ -74,7 +75,7 @@ class JobExecutor:
         self._running = False
         self._processing_messages: set[str] = set()
 
-    async def _process_job(self, job_id: str, message_id: str):
+    async def _process_job(self, job_id: str, message_id: str) -> None:
         """The core logic for processing a single job dequeued from storage."""
         if message_id in self._processing_messages:
             return
@@ -143,6 +144,11 @@ class JobExecutor:
                     plan=client_config_dict.get("plan", "unknown"),
                     params=client_config_dict.get("params", {}),
                 )
+
+                # Get TaskFiles if S3 service is available
+                s3_service = self.engine.app.get(S3_SERVICE_KEY)
+                task_files = s3_service.get_task_files(job_id) if s3_service else None
+
                 context = JobContext(
                     job_id=job_id,
                     current_state=job_state["current_state"],
@@ -153,6 +159,7 @@ class JobExecutor:
                     data_stores=SimpleNamespace(**blueprint.data_stores),
                     tracing_context=tracing_context,
                     aggregation_results=job_state.get("aggregation_results"),
+                    task_files=task_files,
                 )
 
                 try:
@@ -173,12 +180,17 @@ class JobExecutor:
                         params_to_inject["context"] = context
                         if "actions" in param_names:
                             params_to_inject["actions"] = action_factory
+                        if "task_files" in param_names:
+                            params_to_inject["task_files"] = task_files
                     else:
                         # New injection logic with prioritized lookup.
                         context_as_dict = context._asdict()
                         for param_name in param_names:
+                            # Direct injection of task_files
+                            if param_name == "task_files":
+                                params_to_inject[param_name] = task_files
                             # Look in JobContext fields first.
-                            if param_name in context_as_dict:
+                            elif param_name in context_as_dict:
                                 params_to_inject[param_name] = context_as_dict[param_name]
                             # Then look in state_history (data from previous steps/workers).
                             elif param_name in context.state_history:
@@ -258,6 +270,15 @@ class JobExecutor:
             await self.storage.enqueue_job(job_id)
         else:
             logger.info(f"Job {job_id} reached terminal state {next_state}")
+
+            # Clean up S3 files if service is available
+            s3_service = self.engine.app.get(S3_SERVICE_KEY)
+            if s3_service:
+                task_files = s3_service.get_task_files(job_id)
+                if task_files:
+                    # Run cleanup in background to not block response
+                    create_task(task_files.cleanup())
+
             await self._check_and_resume_parent(job_state)
             # Send webhook for finished/failed jobs
             event_type = "job_finished" if next_state == "finished" else "job_failed"
@@ -522,7 +543,10 @@ class JobExecutor:
                 # Wait for an available slot before fetching a new job
                 await semaphore.acquire()
 
-                result = await self.storage.dequeue_job()
+                # Block for a configured time waiting for a job
+                block_time = self.engine.config.REDIS_STREAM_BLOCK_MS
+                result = await self.storage.dequeue_job(block=block_time if block_time > 0 else None)
+
                 if result:
                     job_id, message_id = result
                     task = create_task(self._process_job(job_id, message_id))
@@ -530,14 +554,18 @@ class JobExecutor:
                     # Release the semaphore slot when the task is done
                     task.add_done_callback(lambda _: semaphore.release())
                 else:
-                    # No job found, release the slot and wait a bit
+                    # Timeout reached, release slot and loop again
                     semaphore.release()
-                    # Prevent busy loop if storage returns None immediately
-                    await sleep(0.1)
+                    # Prevent busy loop if blocking is disabled (e.g. in tests) or failed
+                    if block_time <= 0:
+                        await sleep(0.1)
+
             except CancelledError:
                 break
             except Exception:
                 logger.exception("Error in JobExecutor main loop.")
+                # If an error occurred (e.g. Redis connection lost), sleep briefly to avoid log spam
+                semaphore.release()
                 await sleep(1)
         logger.info("JobExecutor stopped.")
 

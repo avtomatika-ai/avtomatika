@@ -154,6 +154,33 @@ class MemoryStorage(StorageBackend):
             )
             return active_workers
 
+    async def get_active_worker_ids(self) -> list[str]:
+        async with self._lock:
+            now = monotonic()
+            return [worker_id for worker_id, ttl in self._worker_ttls.items() if ttl > now]
+
+    async def cleanup_expired_workers(self) -> None:
+        async with self._lock:
+            await self._clean_expired()
+
+    async def get_workers(self, worker_ids: list[str]) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [self._workers[wid] for wid in worker_ids if wid in self._workers]
+
+    async def find_workers_for_task(self, task_type: str) -> list[str]:
+        """Finds idle workers supporting the task (O(N) for memory storage)."""
+        async with self._lock:
+            now = monotonic()
+            candidates = []
+            for worker_id, info in self._workers.items():
+                if self._worker_ttls.get(worker_id, 0) <= now:
+                    continue
+                if info.get("status", "idle") != "idle":
+                    continue
+                if task_type in info.get("supported_tasks", []):
+                    candidates.append(worker_id)
+            return candidates
+
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
         async with self._lock:
             self._watched_jobs[job_id] = timeout_at
@@ -173,13 +200,21 @@ class MemoryStorage(StorageBackend):
     async def enqueue_job(self, job_id: str) -> None:
         await self._job_queue.put(job_id)
 
-    async def dequeue_job(self) -> tuple[str, str] | None:
-        """Waits indefinitely for a job ID from the queue and returns it.
-        Returns a tuple of (job_id, message_id). In MemoryStorage, message_id is dummy.
+    async def dequeue_job(self, block: int | None = None) -> tuple[str, str] | None:
+        """Waits for a job ID from the queue.
+        If block is None, waits indefinitely.
+        If block is int, waits for that many milliseconds.
         """
-        job_id = await self._job_queue.get()
-        self._job_queue.task_done()
-        return job_id, "memory-msg-id"
+        try:
+            if block is None:
+                job_id = await self._job_queue.get()
+            else:
+                job_id = await wait_for(self._job_queue.get(), timeout=block / 1000.0)
+
+            self._job_queue.task_done()
+            return job_id, "memory-msg-id"
+        except AsyncTimeoutError:
+            return None
 
     async def ack_job(self, message_id: str) -> None:
         """No-op for MemoryStorage as it doesn't support persistent streams."""
@@ -334,3 +369,6 @@ class MemoryStorage(StorageBackend):
                     del self._locks[key]
                     return True
             return False
+
+    async def ping(self) -> bool:
+        return True

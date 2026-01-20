@@ -40,6 +40,14 @@ def engine(storage, config):
     engine.ws_manager.unregister = AsyncMock()
     engine.ws_manager.handle_message = AsyncMock()
     engine.ws_manager.send_command = AsyncMock()
+
+    # Mock WebhookSender
+    engine.webhook_sender = AsyncMock()
+    engine.webhook_sender.send = AsyncMock()
+    engine.webhook_sender.start = MagicMock()  # start is synchronous in some contexts or async? Check class.
+    # In class it is def start(self) -> None (sync), but creates task.
+    # Let's check engine.py usage. engine.py calls it as sync: self.webhook_sender.start()
+
     return engine
 
 
