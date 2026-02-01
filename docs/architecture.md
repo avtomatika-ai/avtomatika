@@ -1,4 +1,4 @@
-> **Note:** This document describes the **Python implementation** of the RCA standard. For the high-level architectural specification, please refer to the `rca` package.
+> **Note:** This document describes the **Python implementation** of the HLN standard. For the high-level architectural specification, please refer to the `hln` package.
 
 # Orchestrator Architecture
 
@@ -50,21 +50,38 @@ graph TD
 
 ## Key Orchestrator Components
 
+### 0. Protocol Layer (`rxon`)
+**Location:** `src/avtomatika/protocol/`
+
+This layer defines the strict contract for system interaction, ensuring that business logic is decoupled from transport details.
+-   **Models:** Data structures (`WorkerRegistration`, `TaskResult`) defined as `NamedTuple` (future-proof for Pydantic/Protobuf).
+-   **Security**: Transport-agnostic security primitives (SSLContext factories, Identity Extraction).
+-   **Constants**: Shared status codes and error types.
+
+### 0.1 Service Layer
+**Location:** `src/avtomatika/services/`
+
+Encapsulates core business logic, separating it from the HTTP API.
+-   **`WorkerService`**: Manages worker lifecycle, registration, task dispatching, result processing, and STS token issuance.
+-   **API Handlers**: Now act as thin wrappers that parse HTTP requests and delegate to Services.
+
 ### 1. `OrchestratorEngine`
 **Location:** `src/avtomatika/engine.py`
 
 This is the central class that brings all components together. Its main tasks:
 - Initialize the `aiohttp` web application and delegate route setup to the API layer.
+- **Initialize Services:** Bootstraps `WorkerService`, `S3Service`, etc.
 - Register "Blueprints" (`StateMachineBlueprint`).
 - Manage the lifecycle of background processes (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
-- Provide access to shared resources such as `StorageBackend` and `Config` via `aiohttp.web.AppKey`.
+- Provide access to shared resources via `aiohttp.web.AppKey`.
 
 ### 1.1. API Layer
 **Location:** `src/avtomatika/api/`
 
 The HTTP API handling logic has been decoupled from the core engine to improve maintainability.
--   **`routes.py`**: Responsible for setting up the application routing table, including versioned API groups and mounting sub-applications (Public, Protected, Worker).
--   **`handlers.py`**: Contains the actual request handlers for all endpoints. These handlers access the engine and other components via the application instance attached to the request.
+-   **`routes.py`**: Responsible for setting up the application routing table for Client and Public APIs.
+-   **`handlers.py`**: Contains the actual request handlers for Client and Public endpoints.
+-   **Worker API**: Now handled by `HttpListener` from the `rxon` library, which is integrated directly into `OrchestratorEngine`. This listener manages the lower-level HTTP details of the RXON protocol.
 
 ### 2. `StateMachineBlueprint`
 **Location:** `src/avtomatika/blueprint.py`
@@ -374,19 +391,18 @@ All requests to protected endpoints pass through a chain of `middlewares`.
 #### **Client Authentication (`client_auth_middleware`)**
 - **Task:** Verify that the client is authorized to access the system.
 - **Mechanism:**
-    1.  Extracts token from `X-Orchestrator-Token` header.
+    1.  Extracts token from `X-Client-Token` header.
     2.  Searches for configuration by this token in Redis.
     3.  If configuration is found, it is attached to the `request` object (in `request["client_config"]`) for use by subsequent middlewares in the chain.
     4.  If token is invalid, request is rejected with status `401 Unauthorized`.
 
-#### **Worker Authentication (`worker_auth_middleware`)**
+#### **Worker Authentication**
 - **Task:** Verify that the request comes from an authenticated worker.
-- **Mechanism (Hybrid Model):**
-    1.  Extracts `worker_id` from request path (or body for registration endpoint).
-    2.  Extracts token from `X-Orchestrator-Worker-Token` header.
-    3.  **Individual Token Check (Priority):** Middleware searches Redis for a token linked to the specific `worker_id`. If such token is found, it is compared with the provided one. In case of mismatch, request is immediately rejected (without falling back to global token check).
-    4.  **Global Token Check (Fallback):** If individual token for `worker_id` is not found, middleware checks provided token against the general `WORKER_TOKEN` from Orchestrator configuration. This provides backward compatibility.
-    5.  If both checks fail, request is rejected with status `401 Unauthorized`.
+- **Mechanism:** Handled via the `handle_rxon_message` dispatcher calling `verify_worker_auth`. It supports a hybrid model:
+    1.  **Identity Extraction**: Automatically extracts identity from mTLS certificates (Common Name) or short-lived STS tokens.
+    2.  **Individual Token Check (Priority):** Searches Redis for a token linked to the specific `worker_id`.
+    3.  **Global Token Check (Fallback):** Falls back to the general `WORKER_TOKEN` if individual token is not found.
+    4.  If all checks fail, the request is rejected with status `401 Unauthorized`.
 - **Configuration:** Individual tokens are defined in `workers.toml` file and loaded into Redis at Orchestrator startup.
 
 #### **Quota Check (`quota_middleware`)**

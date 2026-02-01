@@ -10,6 +10,62 @@ from .storage.base import StorageBackend
 Handler = Callable[[web.Request], Awaitable[web.Response]]
 
 
+async def verify_worker_auth(
+    storage: StorageBackend,
+    config: Config,
+    token: str | None,
+    cert_identity: str | None,
+    worker_id_hint: str | None,
+) -> str:
+    """
+    Verifies worker authentication using token or mTLS.
+    Returns authenticated worker_id.
+    Raises ValueError (400), PermissionError (401/403) on failure.
+    """
+    # mTLS Check
+    if cert_identity:
+        if worker_id_hint and cert_identity != worker_id_hint:
+            raise PermissionError(
+                f"Unauthorized: Certificate CN '{cert_identity}' does not match worker_id '{worker_id_hint}'"
+            )
+        return cert_identity
+
+    # Token Check
+    if not token:
+        raise PermissionError(f"Missing {AUTH_HEADER_WORKER} header or client certificate")
+
+    hashed_provided_token = sha256(token.encode()).hexdigest()
+
+    # STS Access Token
+    token_worker_id = await storage.verify_worker_access_token(hashed_provided_token)
+    if token_worker_id:
+        if worker_id_hint and token_worker_id != worker_id_hint:
+            raise PermissionError(
+                f"Unauthorized: Access Token belongs to '{token_worker_id}', but request is for '{worker_id_hint}'"
+            )
+        return token_worker_id
+
+    # Individual/Global Token
+    if not worker_id_hint:
+        if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
+            return "unknown_authenticated_by_global_token"
+
+        raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
+
+    # Individual Token for specific worker
+    expected_token_hash = await storage.get_worker_token(worker_id_hint)
+    if expected_token_hash:
+        if hashed_provided_token == expected_token_hash:
+            return worker_id_hint
+        raise PermissionError("Unauthorized: Invalid individual worker token")
+
+    # Global Token Fallback
+    if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
+        return worker_id_hint
+
+    raise PermissionError("Unauthorized: No valid token found")
+
+
 def client_auth_middleware_factory(
     storage: StorageBackend,
 ) -> Any:
@@ -36,79 +92,5 @@ def client_auth_middleware_factory(
         # Attach client config to the request for handlers to use
         request["client_config"] = client_config
         return await handler(request)
-
-    return middleware
-
-
-def worker_auth_middleware_factory(
-    storage: StorageBackend,
-    config: Config,
-) -> Any:
-    """
-    Middleware factory for worker authentication.
-    It supports both individual tokens and a global fallback token for backward compatibility.
-    It also attaches the authenticated worker_id to the request.
-    """
-
-    @web.middleware
-    async def middleware(request: web.Request, handler: Handler) -> web.Response:
-        provided_token = request.headers.get(AUTH_HEADER_WORKER)
-        if not provided_token:
-            return web.json_response(
-                {"error": f"Missing {AUTH_HEADER_WORKER} header"},
-                status=401,
-            )
-
-        worker_id = request.match_info.get("worker_id")
-        data = None
-
-        # For specific endpoints, worker_id is in the body.
-        # We need to read the body here, which can be tricky as it's a stream.
-        # We clone the request to allow the handler to read the body again.
-        if not worker_id and (request.path.endswith("/register") or request.path.endswith("/tasks/result")):
-            try:
-                cloned_request = request.clone()
-                data = await cloned_request.json()
-                worker_id = data.get("worker_id")
-                # Attach the parsed data to the request so the handler doesn't need to re-parse
-                if request.path.endswith("/register"):
-                    request["worker_registration_data"] = data
-            except Exception:
-                return web.json_response({"error": "Invalid JSON body"}, status=400)
-
-        # If no worker_id could be determined from path or body, we can only validate against the global token.
-        if not worker_id:
-            if provided_token == config.GLOBAL_WORKER_TOKEN:
-                # We don't know the worker_id, so we can't attach it.
-                return await handler(request)
-            else:
-                return web.json_response(
-                    {"error": "Unauthorized: Invalid token or missing worker_id"},
-                    status=401,
-                )
-
-        # --- Individual Token Check ---
-        expected_token_hash = await storage.get_worker_token(worker_id)
-        if expected_token_hash:
-            hashed_provided_token = sha256(provided_token.encode()).hexdigest()
-            if hashed_provided_token == expected_token_hash:
-                request["worker_id"] = worker_id  # Attach authenticated worker_id
-                return await handler(request)
-            else:
-                # If an individual token exists, we do not fall back to the global token.
-                return web.json_response(
-                    {"error": "Unauthorized: Invalid individual worker token"},
-                    status=401,
-                )
-
-        # --- Global Token Fallback ---
-        if config.GLOBAL_WORKER_TOKEN and provided_token == config.GLOBAL_WORKER_TOKEN:
-            request["worker_id"] = worker_id  # Attach authenticated worker_id
-            return await handler(request)
-
-        return web.json_response(
-            {"error": "Unauthorized: No valid token found"},
-            status=401,
-        )
 
     return middleware

@@ -3,7 +3,7 @@ from logging import getLogger
 from typing import Any, Callable
 from uuid import uuid4
 
-from aiohttp import WSMsgType, web
+from aiohttp import web
 from aioprometheus import render
 from orjson import OPT_INDENT_2, dumps, loads
 
@@ -14,20 +14,11 @@ from ..app_keys import (
 from ..blueprint import StateMachineBlueprint
 from ..client_config_loader import load_client_configs_to_redis
 from ..constants import (
-    ERROR_CODE_INVALID_INPUT,
-    ERROR_CODE_PERMANENT,
-    ERROR_CODE_TRANSIENT,
-    JOB_STATUS_CANCELLED,
-    JOB_STATUS_FAILED,
+    COMMAND_CANCEL_TASK,
     JOB_STATUS_PENDING,
-    JOB_STATUS_QUARANTINED,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_HUMAN,
-    JOB_STATUS_WAITING_FOR_PARALLEL,
     JOB_STATUS_WAITING_FOR_WORKER,
-    TASK_STATUS_CANCELLED,
-    TASK_STATUS_FAILURE,
-    TASK_STATUS_SUCCESS,
 )
 from ..worker_config_loader import load_worker_configs_to_redis
 
@@ -138,7 +129,7 @@ async def cancel_job_handler(request: web.Request) -> web.Response:
 
     # Attempt WebSocket-based cancellation if supported
     if worker_info and worker_info.get("capabilities", {}).get("websockets"):
-        command = {"command": "cancel_task", "task_id": task_id, "job_id": job_id}
+        command = {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
         sent = await engine.ws_manager.send_command(worker_id, command)
         if sent:
             return json_response({"status": "cancellation_request_sent"})
@@ -206,143 +197,6 @@ async def get_dashboard_handler(request: web.Request) -> web.Response:
         "jobs": {"queued": queue_length, **job_summary},
     }
     return json_response(dashboard_data)
-
-
-async def task_result_handler(request: web.Request) -> web.Response:
-    engine = request.app[ENGINE_KEY]
-    try:
-        data = await request.json(loads=loads)
-        job_id = data.get("job_id")
-        task_id = data.get("task_id")
-        result = data.get("result", {})
-        result_status = result.get("status", TASK_STATUS_SUCCESS)
-        error_message = result.get("error")
-        payload_worker_id = data.get("worker_id")
-    except Exception:
-        return json_response({"error": "Invalid JSON body"}, status=400)
-
-    # Security check: Ensure the worker_id from the payload matches the authenticated worker
-    authenticated_worker_id = request.get("worker_id")
-    if not authenticated_worker_id:
-        return json_response({"error": "Could not identify authenticated worker."}, status=500)
-
-    if payload_worker_id and payload_worker_id != authenticated_worker_id:
-        return json_response(
-            {
-                "error": f"Forbidden: Authenticated worker '{authenticated_worker_id}' "
-                f"cannot submit results for another worker '{payload_worker_id}'.",
-            },
-            status=403,
-        )
-
-    if not job_id or not task_id:
-        return json_response({"error": "job_id and task_id are required"}, status=400)
-
-    job_state = await engine.storage.get_job_state(job_id)
-    if not job_state:
-        return json_response({"error": "Job not found"}, status=404)
-
-    # Handle parallel task completion
-    if job_state.get("status") == JOB_STATUS_WAITING_FOR_PARALLEL:
-        await engine.storage.remove_job_from_watch(f"{job_id}:{task_id}")
-        job_state.setdefault("aggregation_results", {})[task_id] = result
-        job_state.setdefault("active_branches", []).remove(task_id)
-
-        if not job_state["active_branches"]:
-            logger.info(f"All parallel branches for job {job_id} have completed.")
-            job_state["status"] = JOB_STATUS_RUNNING
-            job_state["current_state"] = job_state["aggregation_target"]
-            await engine.storage.save_job_state(job_id, job_state)
-            await engine.storage.enqueue_job(job_id)
-        else:
-            logger.info(
-                f"Branch {task_id} for job {job_id} completed. Waiting for {len(job_state['active_branches'])} more.",
-            )
-            await engine.storage.save_job_state(job_id, job_state)
-
-        return json_response({"status": "parallel_branch_result_accepted"}, status=200)
-
-    await engine.storage.remove_job_from_watch(job_id)
-
-    import time
-
-    now = time.monotonic()
-    dispatched_at = job_state.get("task_dispatched_at", now)
-    duration_ms = int((now - dispatched_at) * 1000)
-
-    await engine.history_storage.log_job_event(
-        {
-            "job_id": job_id,
-            "state": job_state.get("current_state"),
-            "event_type": "task_finished",
-            "duration_ms": duration_ms,
-            "worker_id": authenticated_worker_id,
-            "context_snapshot": {**job_state, "result": result},
-        },
-    )
-
-    job_state["tracing_context"] = {str(k): v for k, v in request.headers.items()}
-
-    if result_status == TASK_STATUS_FAILURE:
-        error_details = result.get("error", {})
-        error_type = ERROR_CODE_TRANSIENT
-        error_message = "No error details provided."
-
-        if isinstance(error_details, dict):
-            error_type = error_details.get("code", ERROR_CODE_TRANSIENT)
-            error_message = error_details.get("message", "No error message provided.")
-        elif isinstance(error_details, str):
-            error_message = error_details
-
-        logger.warning(f"Task {task_id} for job {job_id} failed with error type '{error_type}'.")
-
-        if error_type == ERROR_CODE_PERMANENT:
-            job_state["status"] = JOB_STATUS_QUARANTINED
-            job_state["error_message"] = f"Task failed with permanent error: {error_message}"
-            await engine.storage.save_job_state(job_id, job_state)
-            await engine.storage.quarantine_job(job_id)
-        elif error_type == ERROR_CODE_INVALID_INPUT:
-            job_state["status"] = JOB_STATUS_FAILED
-            job_state["error_message"] = f"Task failed due to invalid input: {error_message}"
-            await engine.storage.save_job_state(job_id, job_state)
-        else:  # TRANSIENT_ERROR
-            await engine.handle_task_failure(job_state, task_id, error_message)
-
-        return json_response({"status": "result_accepted_failure"}, status=200)
-
-    if result_status == TASK_STATUS_CANCELLED:
-        logger.info(f"Task {task_id} for job {job_id} was cancelled by worker.")
-        job_state["status"] = JOB_STATUS_CANCELLED
-        await engine.storage.save_job_state(job_id, job_state)
-        transitions = job_state.get("current_task_transitions", {})
-        if next_state := transitions.get("cancelled"):
-            job_state["current_state"] = next_state
-            job_state["status"] = JOB_STATUS_RUNNING
-            await engine.storage.save_job_state(job_id, job_state)
-            await engine.storage.enqueue_job(job_id)
-        return json_response({"status": "result_accepted_cancelled"}, status=200)
-
-    transitions = job_state.get("current_task_transitions", {})
-    if next_state := transitions.get(result_status):
-        logger.info(f"Job {job_id} transitioning based on worker status '{result_status}' to state '{next_state}'")
-
-        worker_data = result.get("data")
-        if worker_data and isinstance(worker_data, dict):
-            if "state_history" not in job_state:
-                job_state["state_history"] = {}
-            job_state["state_history"].update(worker_data)
-
-        job_state["current_state"] = next_state
-        job_state["status"] = JOB_STATUS_RUNNING
-        await engine.storage.save_job_state(job_id, job_state)
-        await engine.storage.enqueue_job(job_id)
-    else:
-        logger.error(f"Job {job_id} failed. Worker returned unhandled status '{result_status}'.")
-        job_state["status"] = JOB_STATUS_FAILED
-        job_state["error_message"] = f"Worker returned unhandled status: {result_status}"
-        await engine.storage.save_job_state(job_id, job_state)
-
-    return json_response({"status": "result_accepted_success"}, status=200)
 
 
 async def human_approval_webhook_handler(request: web.Request) -> web.Response:
@@ -441,109 +295,3 @@ async def docs_handler(request: web.Request) -> web.Response:
         content = content.replace(marker, f"{marker}\n{endpoints_json.strip('[]')},")
 
     return web.Response(text=content, content_type="text/html")
-
-
-async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
-    engine = request.app[ENGINE_KEY]
-    worker_id = request.match_info.get("worker_id")
-    if not worker_id:
-        raise web.HTTPBadRequest(text="worker_id is required")
-
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-
-    await engine.ws_manager.register(worker_id, ws)
-    try:
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                try:
-                    data = msg.json()
-                    await engine.ws_manager.handle_message(worker_id, data)
-                except Exception as e:
-                    logger.error(f"Error processing WebSocket message from {worker_id}: {e}")
-            elif msg.type == WSMsgType.ERROR:
-                logger.error(f"WebSocket connection for {worker_id} closed with exception {ws.exception()}")
-                break
-    finally:
-        await engine.ws_manager.unregister(worker_id)
-    return ws
-
-
-async def handle_get_next_task(request: web.Request) -> web.Response:
-    engine = request.app[ENGINE_KEY]
-    worker_id = request.match_info.get("worker_id")
-    if not worker_id:
-        return json_response({"error": "worker_id is required in path"}, status=400)
-
-    logger.debug(f"Worker {worker_id} is requesting a new task.")
-    task = await engine.storage.dequeue_task_for_worker(worker_id, engine.config.WORKER_POLL_TIMEOUT_SECONDS)
-
-    if task:
-        logger.info(f"Sending task {task.get('task_id')} to worker {worker_id}")
-        return json_response(task, status=200)
-    logger.debug(f"No tasks for worker {worker_id}, responding 204.")
-    return web.Response(status=204)
-
-
-async def worker_update_handler(request: web.Request) -> web.Response:
-    engine = request.app[ENGINE_KEY]
-    worker_id = request.match_info.get("worker_id")
-    if not worker_id:
-        return json_response({"error": "worker_id is required in path"}, status=400)
-
-    ttl = engine.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
-    update_data = None
-
-    if request.can_read_body:
-        try:
-            update_data = await request.json(loads=loads)
-        except Exception:
-            logger.warning(
-                f"Received PATCH from worker {worker_id} with non-JSON body. Treating as TTL-only heartbeat."
-            )
-
-    if update_data:
-        updated_worker = await engine.storage.update_worker_status(worker_id, update_data, ttl)
-        if not updated_worker:
-            return json_response({"error": "Worker not found"}, status=404)
-
-        await engine.history_storage.log_worker_event(
-            {
-                "worker_id": worker_id,
-                "event_type": "status_update",
-                "worker_info_snapshot": updated_worker,
-            },
-        )
-        return json_response(updated_worker, status=200)
-    else:
-        refreshed = await engine.storage.refresh_worker_ttl(worker_id, ttl)
-        if not refreshed:
-            return json_response({"error": "Worker not found"}, status=404)
-        return json_response({"status": "ttl_refreshed"})
-
-
-async def register_worker_handler(request: web.Request) -> web.Response:
-    engine = request.app[ENGINE_KEY]
-    worker_data = request.get("worker_registration_data")
-    if not worker_data:
-        return json_response({"error": "Worker data not found in request"}, status=500)
-
-    worker_id = worker_data.get("worker_id")
-    if not worker_id:
-        return json_response({"error": "Missing required field: worker_id"}, status=400)
-
-    ttl = engine.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
-    await engine.storage.register_worker(worker_id, worker_data, ttl)
-
-    logger.info(
-        f"Worker '{worker_id}' registered with info: {worker_data}",
-    )
-
-    await engine.history_storage.log_worker_event(
-        {
-            "worker_id": worker_id,
-            "event_type": "registered",
-            "worker_info_snapshot": worker_data,
-        },
-    )
-    return json_response({"status": "registered"}, status=200)

@@ -24,6 +24,7 @@ from .app_keys import (
     SCHEDULER_TASK_KEY,
     WATCHER_KEY,
     WATCHER_TASK_KEY,
+    WORKER_SERVICE_KEY,
     WS_MANAGER_KEY,
 )
 from .blueprint import StateMachineBlueprint
@@ -40,6 +41,7 @@ from .logging_config import setup_logging
 from .reputation import ReputationCalculator
 from .s3 import S3Service
 from .scheduler import Scheduler
+from .services.worker_service import WorkerService
 from .storage.base import StorageBackend
 from .telemetry import setup_telemetry
 from .utils.webhook_sender import WebhookPayload, WebhookSender
@@ -56,7 +58,7 @@ def json_dumps(obj: Any) -> str:
     return dumps(obj).decode("utf-8")
 
 
-def json_response(data: Any, **kwargs: Any) -> web.Response:
+def json_response(data, **kwargs: Any) -> web.Response:
     return web.json_response(data, dumps=json_dumps, **kwargs)
 
 
@@ -71,7 +73,12 @@ class OrchestratorEngine:
         self.ws_manager = WebSocketManager()
         self.app = web.Application(middlewares=[compression_middleware])
         self.app[ENGINE_KEY] = self
+        self.worker_service = None
         self._setup_done = False
+
+        from rxon import HttpListener
+
+        self.rxon_listener = HttpListener(self.app)
 
     def register_blueprint(self, blueprint: StateMachineBlueprint) -> None:
         if self._setup_done:
@@ -142,8 +149,71 @@ class OrchestratorEngine:
                 )
                 self.history_storage = NoOpHistoryStorage()
 
+    async def handle_rxon_message(self, message_type: str, payload: Any, context: dict) -> Any:
+        """Core handler for RXON protocol messages via any listener."""
+        from rxon.security import extract_cert_identity
+
+        from .security import verify_worker_auth
+
+        request = context.get("raw_request")
+        token = context.get("token")
+        cert_identity = extract_cert_identity(request) if request else None
+
+        worker_id_hint = context.get("worker_id_hint")
+
+        if not worker_id_hint:
+            if message_type == "poll" and isinstance(payload, str):
+                worker_id_hint = payload
+            elif isinstance(payload, dict) and "worker_id" in payload:
+                worker_id_hint = payload["worker_id"]
+            elif hasattr(payload, "worker_id"):
+                worker_id_hint = payload.worker_id
+
+        try:
+            auth_worker_id = await verify_worker_auth(self.storage, self.config, token, cert_identity, worker_id_hint)
+        except PermissionError as e:
+            raise web.HTTPUnauthorized(text=str(e)) from e
+        except ValueError as e:
+            raise web.HTTPBadRequest(text=str(e)) from e
+
+        if message_type == "register":
+            return await self.worker_service.register_worker(payload)
+
+        elif message_type == "poll":
+            return await self.worker_service.get_next_task(auth_worker_id)
+
+        elif message_type == "result":
+            return await self.worker_service.process_task_result(payload, auth_worker_id)
+
+        elif message_type == "heartbeat":
+            return await self.worker_service.update_worker_heartbeat(auth_worker_id, payload)
+
+        elif message_type == "sts_token":
+            if cert_identity is None:
+                raise web.HTTPForbidden(text="Unauthorized: mTLS certificate required to issue access token.")
+            return await self.worker_service.issue_access_token(auth_worker_id)
+
+        elif message_type == "websocket":
+            ws = payload
+            await self.ws_manager.register(auth_worker_id, ws)
+            try:
+                from aiohttp import WSMsgType
+
+                async for msg in ws:
+                    if msg.type == WSMsgType.TEXT:
+                        try:
+                            data = msg.json()
+                            await self.ws_manager.handle_message(auth_worker_id, data)
+                        except Exception as e:
+                            logger.error(f"Error processing WebSocket message from {auth_worker_id}: {e}")
+                    elif msg.type == WSMsgType.ERROR:
+                        break
+            finally:
+                await self.ws_manager.unregister(auth_worker_id)
+            return None
+
     async def on_startup(self, app: web.Application) -> None:
-        # 1. Fail Fast: Check Storage Connection
+        # Fail Fast: Check Storage Connection
         if not await self.storage.ping():
             logger.critical("Failed to connect to Storage Backend (Redis). Exiting.")
             raise RuntimeError("Storage Backend is unavailable.")
@@ -208,14 +278,21 @@ class OrchestratorEngine:
         app[WS_MANAGER_KEY] = self.ws_manager
         app[S3_SERVICE_KEY] = S3Service(self.config, self.history_storage)
 
+        self.worker_service = WorkerService(self.storage, self.history_storage, self.config, self)
+        app[WORKER_SERVICE_KEY] = self.worker_service
+
         app[EXECUTOR_TASK_KEY] = create_task(app[EXECUTOR_KEY].run())
         app[WATCHER_TASK_KEY] = create_task(app[WATCHER_KEY].run())
         app[REPUTATION_CALCULATOR_TASK_KEY] = create_task(app[REPUTATION_CALCULATOR_KEY].run())
         app[HEALTH_CHECKER_TASK_KEY] = create_task(app[HEALTH_CHECKER_KEY].run())
         app[SCHEDULER_TASK_KEY] = create_task(app[SCHEDULER_KEY].run())
 
+        await self.rxon_listener.start(self.handle_rxon_message)
+
     async def on_shutdown(self, app: web.Application) -> None:
         logger.info("Shutdown sequence started.")
+        await self.rxon_listener.stop()
+
         app[EXECUTOR_KEY].stop()
         app[WATCHER_KEY].stop()
         app[REPUTATION_CALCULATOR_KEY].stop()
@@ -274,6 +351,7 @@ class OrchestratorEngine:
         blueprint_name: str,
         initial_data: dict[str, Any],
         source: str = "internal",
+        tracing_context: dict[str, str] | None = None,
     ) -> str:
         """Creates a job directly, bypassing the HTTP API layer.
         Useful for internal schedulers and triggers.
@@ -297,7 +375,7 @@ class OrchestratorEngine:
             "initial_data": initial_data,
             "state_history": {},
             "status": JOB_STATUS_PENDING,
-            "tracing_context": {},
+            "tracing_context": tracing_context or {},
             "client_config": client_config,
         }
         await self.storage.save_job_state(job_id, job_state)
@@ -374,19 +452,44 @@ class OrchestratorEngine:
 
     def run(self) -> None:
         self.setup()
+        ssl_context = None
+        if self.config.TLS_ENABLED:
+            from rxon.security import create_server_ssl_context
+
+            ssl_context = create_server_ssl_context(
+                cert_path=self.config.TLS_CERT_PATH,
+                key_path=self.config.TLS_KEY_PATH,
+                ca_path=self.config.TLS_CA_PATH,
+                require_client_cert=self.config.TLS_REQUIRE_CLIENT_CERT,
+            )
+            print(f"TLS enabled. mTLS required: {self.config.TLS_REQUIRE_CLIENT_CERT}")
+
         print(
             f"Starting OrchestratorEngine API server on {self.config.API_HOST}:{self.config.API_PORT} in blocking mode."
         )
-        web.run_app(self.app, host=self.config.API_HOST, port=self.config.API_PORT)
+        web.run_app(self.app, host=self.config.API_HOST, port=self.config.API_PORT, ssl_context=ssl_context)
 
     async def start(self):
         """Starts the orchestrator engine non-blockingly."""
         self.setup()
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        self.site = web.TCPSite(self.runner, self.config.API_HOST, self.config.API_PORT)
+
+        ssl_context = None
+        if self.config.TLS_ENABLED:
+            from rxon.security import create_server_ssl_context
+
+            ssl_context = create_server_ssl_context(
+                cert_path=self.config.TLS_CERT_PATH,
+                key_path=self.config.TLS_KEY_PATH,
+                ca_path=self.config.TLS_CA_PATH,
+                require_client_cert=self.config.TLS_REQUIRE_CLIENT_CERT,
+            )
+
+        self.site = web.TCPSite(self.runner, self.config.API_HOST, self.config.API_PORT, ssl_context=ssl_context)
         await self.site.start()
-        print(f"OrchestratorEngine API server running on http://{self.config.API_HOST}:{self.config.API_PORT}")
+        protocol = "https" if self.config.TLS_ENABLED else "http"
+        print(f"OrchestratorEngine API server running on {protocol}://{self.config.API_HOST}:{self.config.API_PORT}")
 
     async def stop(self):
         """Stops the orchestrator engine."""

@@ -5,8 +5,7 @@ from aiohttp import web
 from ..app_keys import ENGINE_KEY
 from ..history.noop import NoOpHistoryStorage
 from ..quota import quota_middleware_factory
-from ..ratelimit import rate_limit_middleware_factory
-from ..security import client_auth_middleware_factory, worker_auth_middleware_factory
+from ..security import client_auth_middleware_factory
 from .handlers import (
     cancel_job_handler,
     create_job_handler_factory,
@@ -19,15 +18,10 @@ from .handlers import (
     get_jobs_handler,
     get_quarantined_jobs_handler,
     get_workers_handler,
-    handle_get_next_task,
     human_approval_webhook_handler,
     metrics_handler,
-    register_worker_handler,
     reload_worker_configs_handler,
     status_handler,
-    task_result_handler,
-    websocket_handler,
-    worker_update_handler,
 )
 
 if TYPE_CHECKING:
@@ -35,7 +29,7 @@ if TYPE_CHECKING:
 
 
 def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
-    """Sets up all application routes and sub-applications."""
+    """Sets up application routes for Public and Client APIs."""
 
     # --- Public API (Unprotected) ---
     public_app = web.Application()
@@ -49,61 +43,46 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     app.add_subapp("/_public/", public_app)
 
     # --- Protected API (Client Access) ---
-    auth_middleware = client_auth_middleware_factory(engine.storage)
-    quota_middleware = quota_middleware_factory(engine.storage)
-    api_middlewares = [auth_middleware, quota_middleware]
+    if engine.config.ENABLE_CLIENT_API:
+        auth_middleware = client_auth_middleware_factory(engine.storage)
+        quota_middleware = quota_middleware_factory(engine.storage)
+        api_middlewares = [auth_middleware, quota_middleware]
 
-    protected_app = web.Application(middlewares=api_middlewares)
-    protected_app[ENGINE_KEY] = engine
-    versioned_apps: dict[str, web.Application] = {}
-    has_unversioned_routes = False
+        protected_app = web.Application(middlewares=api_middlewares)
+        protected_app[ENGINE_KEY] = engine
+        versioned_apps: dict[str, web.Application] = {}
+        has_unversioned_routes = False
 
-    # Register Blueprint routes
-    for bp in engine.blueprints.values():
-        if not bp.api_endpoint:
-            continue
-        endpoint = bp.api_endpoint if bp.api_endpoint.startswith("/") else f"/{bp.api_endpoint}"
+        # Register Blueprint routes
+        for bp in engine.blueprints.values():
+            if not bp.api_endpoint:
+                continue
+            endpoint = bp.api_endpoint if bp.api_endpoint.startswith("/") else f"/{bp.api_endpoint}"
 
-        handler = create_job_handler_factory(bp)
+            handler = create_job_handler_factory(bp)
 
-        if bp.api_version:
-            if bp.api_version not in versioned_apps:
-                versioned_apps[bp.api_version] = web.Application(middlewares=api_middlewares)
-                versioned_apps[bp.api_version][ENGINE_KEY] = engine
-            versioned_apps[bp.api_version].router.add_post(endpoint, handler)
-        else:
-            protected_app.router.add_post(endpoint, handler)
-            has_unversioned_routes = True
+            if bp.api_version:
+                if bp.api_version not in versioned_apps:
+                    versioned_apps[bp.api_version] = web.Application(middlewares=api_middlewares)
+                    versioned_apps[bp.api_version][ENGINE_KEY] = engine
+                versioned_apps[bp.api_version].router.add_post(endpoint, handler)
+            else:
+                protected_app.router.add_post(endpoint, handler)
+                has_unversioned_routes = True
 
-    # Common routes for all protected apps
-    all_protected_apps = list(versioned_apps.values())
-    if has_unversioned_routes:
-        all_protected_apps.append(protected_app)
+        # Common routes for all protected apps
+        all_protected_apps = list(versioned_apps.values())
+        if has_unversioned_routes:
+            all_protected_apps.append(protected_app)
 
-    for sub_app in all_protected_apps:
-        _register_common_routes(sub_app, engine)
+        for sub_app in all_protected_apps:
+            _register_common_routes(sub_app, engine)
 
-    # Mount protected apps
-    if has_unversioned_routes:
-        app.add_subapp("/api/", protected_app)
-    for version, sub_app in versioned_apps.items():
-        app.add_subapp(f"/api/{version}", sub_app)
-
-    # --- Worker API (Worker Access) ---
-    worker_auth_middleware = worker_auth_middleware_factory(engine.storage, engine.config)
-    worker_middlewares = [worker_auth_middleware]
-    if engine.config.RATE_LIMITING_ENABLED:
-        worker_rate_limiter = rate_limit_middleware_factory(storage=engine.storage, limit=5, period=60)
-        worker_middlewares.append(worker_rate_limiter)
-
-    worker_app = web.Application(middlewares=worker_middlewares)
-    worker_app[ENGINE_KEY] = engine
-    worker_app.router.add_post("/workers/register", register_worker_handler)
-    worker_app.router.add_get("/workers/{worker_id}/tasks/next", handle_get_next_task)
-    worker_app.router.add_patch("/workers/{worker_id}", worker_update_handler)
-    worker_app.router.add_post("/tasks/result", task_result_handler)
-    worker_app.router.add_get("/ws/{worker_id}", websocket_handler)
-    app.add_subapp("/_worker/", worker_app)
+        # Mount protected apps
+        if has_unversioned_routes:
+            app.add_subapp("/api/", protected_app)
+        for version, sub_app in versioned_apps.items():
+            app.add_subapp(f"/api/{version}", sub_app)
 
 
 def _register_common_routes(app: web.Application, engine: "OrchestratorEngine") -> None:

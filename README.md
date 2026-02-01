@@ -1,5 +1,10 @@
 # Avtomatika Orchestrator
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
+[![Tests](https://github.com/avtomatika-ai/avtomatika/actions/workflows/ci.yml/badge.svg)](https://github.com/avtomatika-ai/avtomatika/actions/workflows/ci.yml)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+
 Avtomatika is a powerful, state-driven engine for managing complex asynchronous workflows in Python. It provides a robust framework for building scalable and resilient applications by separating process logic from execution logic.
 
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
@@ -37,8 +42,9 @@ The project is based on a simple yet powerful architectural pattern that separat
 
 Avtomatika is part of a larger ecosystem:
 
+*   **[Avtomatika Protocol](https://github.com/avtomatika-ai/rxon)**: Shared package containing protocol definitions, data models, and utilities ensuring consistency across all components.
 *   **[Avtomatika Worker SDK](https://github.com/avtomatika-ai/avtomatika-worker)**: The official Python SDK for building workers that connect to this engine.
-*   **[RCA Protocol](https://github.com/avtomatika-ai/rca)**: The architectural specification and manifesto behind the system.
+*   **[HLN Protocol](https://github.com/avtomatika-ai/hln)**: The architectural specification and manifesto behind the system (Hierarchical Logic Network).
 *   **[Full Example](https://github.com/avtomatika-ai/avtomatika-full-example)**: A complete reference project demonstrating the engine and workers in action.
 
 ## Installation
@@ -89,7 +95,7 @@ storage = MemoryStorage()
 config = Config() # Loads configuration from environment variables
 
 # Explicitly set tokens for this example
-# Client token must be sent in the 'X-Avtomatika-Token' header.
+# Client token must be sent in the 'X-Client-Token' header.
 config.CLIENT_TOKEN = "my-secret-client-token"
 # Worker token must be sent in the 'X-Worker-Token' header.
 config.GLOBAL_WORKER_TOKEN = "my-secret-worker-token"
@@ -217,12 +223,18 @@ async def publish_handler_old_style(context):
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **O(1) Dispatcher**: Uses advanced Redis Set intersections to find suitable workers instantly, regardless of the cluster size. No O(N) scanning.
+*   **O(1) Dispatcher**: Uses advanced Redis Set intersections to find suitable workers instantly.
+*   **Zero Trust Security**:
+    *   **mTLS (Mutual TLS)**: Mutual authentication between Orchestrator and Workers using certificates.
+    *   **STS (Security Token Service)**: Token rotation mechanism with short-lived access tokens.
+    *   **Identity Extraction**: Automatically maps Certificate Common Name (CN) to Worker ID.
+*   **Data Integrity**:
+    *   **End-to-End Validation**: Automatic verification of file size and ETag (hash) during S3 transfers.
+    *   **Audit Trail**: File metadata is logged in history for full traceability.
+*   **Protocol Layer**: Built on top of `rxon`, a strict contract defining interactions, ensuring forward compatibility and allowing transport evolution (e.g., to gRPC).
 *   **Non-Blocking I/O**:
-    *   **Webhooks**: Sent via a bounded background queue to prevent backpressure.
-    *   **History Logging**: Writes to SQL databases are buffered and asynchronous, ensuring the main execution loop never blocks.
-    *   **Redis Streams**: Uses blocking reads to eliminate busy-waiting and reduce CPU usage.
-*   **Memory Safety**: S3 file transfers use streaming to handle multi-gigabyte files with constant, low RAM usage.
+    *   **Webhooks**: Sent via a bounded background queue.
+    *   **S3 Streaming**: Constant memory usage regardless of file size.
 
 ## Blueprint Cookbook: Key Features
 
@@ -474,12 +486,17 @@ By default, the engine uses in-memory storage. For production, you must configur
 
 The orchestrator uses tokens to authenticate API requests.
 
-*   **Client Authentication**: All API clients must provide a token in the `X-Avtomatika-Token` header. The orchestrator validates this token against client configurations.
+*   **Client Authentication**: All API clients must provide a token in the `X-Client-Token` header. The orchestrator validates this token against client configurations.
 *   **Worker Authentication**: Workers must provide a token in the `X-Worker-Token` header.
     *   `GLOBAL_WORKER_TOKEN`: You can set a global token for all workers using this environment variable. For development and testing, it defaults to `"secure-worker-token"`.
     *   **Individual Tokens**: For production, it is recommended to define individual tokens for each worker in a separate configuration file and provide its path via the `WORKERS_CONFIG_PATH` environment variable. Tokens from this file are stored in a hashed format for security.
 
 > **Note on Dynamic Reloading:** The worker configuration file can be reloaded without restarting the orchestrator by sending an authenticated `POST` request to the `/api/v1/admin/reload-workers` endpoint. This allows for dynamic updates of worker tokens.
+
+### Pure Holon Mode
+For high-security environments or when operating as a Compound Holon within an HLN, you can disable the public client API.
+*   **Enable/Disable**: Set `ENABLE_CLIENT_API="false"` (default: `true`).
+*   **Effect**: The Orchestrator will stop listening on `/api/v1/jobs/...`. It will only accept tasks via the Worker Protocol (RXON) from its parent.
 
 ### Observability
 
@@ -492,7 +509,11 @@ When installed with the telemetry dependency, the system automatically provides:
 ### Setup Environment
 
 *   Clone the repository.
-*   Install the package in editable mode with all dependencies:
+*   **For local development**, install the protocol package first:
+    ```bash
+    pip install -e ../rxon
+    ```
+*   Then install the engine in editable mode with all dependencies:
     ```bash
     pip install -e ".[all,test]"
     ```
@@ -510,7 +531,7 @@ When installed with the telemetry dependency, the system automatically provides:
 
 To run the `avtomatika` test suite:
 ```bash
-pytest avtomatika/tests/
+pytest tests/
 ```
 
 ### Interactive API Documentation

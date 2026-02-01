@@ -4,6 +4,8 @@ import uuid
 
 from aiohttp import web
 
+from avtomatika.constants import AUTH_HEADER_WORKER
+
 routes = web.RouteTableDef()
 
 WORKER_ID = f"test-worker-{uuid.uuid4()}"
@@ -20,7 +22,7 @@ async def register_with_avtomatika(app):
         "supported_tasks": ["error_task"],
         "status": "idle",
     }
-    headers = {"X-Worker-Token": WORKER_TOKEN}
+    headers = {AUTH_HEADER_WORKER: WORKER_TOKEN}
 
     while True:
         try:
@@ -41,7 +43,7 @@ async def register_with_avtomatika(app):
 
 async def poll_for_tasks(app):
     """Polls the orchestrator for new tasks."""
-    headers = {"X-Worker-Token": WORKER_TOKEN}
+    headers = {AUTH_HEADER_WORKER: WORKER_TOKEN}
     while True:
         try:
             async with app["client_session"].get(
@@ -64,11 +66,35 @@ async def poll_for_tasks(app):
 
 async def handle_task(app, task):
     """Simulates task execution and reports the result back."""
+    task_type = task.get("type")
     error_type = task["params"].get("error_type", "SUCCESS")
-    print(f"Handling task {task['task_id']} with requested error type: {error_type}")
+    print(f"Handling task {task['task_id']} ({task_type}) with requested error type: {error_type}")
 
     result = {}
-    if error_type == "SUCCESS":
+    if task_type == "file_processing_task":
+        input_meta = task["params"].get("input_file_meta", {})
+        if input_meta:
+            print(f"Worker: Validating input file metadata: {input_meta}")
+            if input_meta.get("size") == -1:
+                result = {
+                    "status": "failure",
+                    "error": {"code": "INVALID_INPUT_ERROR", "message": "File size mismatch"},
+                }
+
+        if not result:
+            result = {
+                "status": "success",
+                "data": {
+                    "message": "File processed",
+                    "output_file_meta": {
+                        "size": 1024,
+                        "etag": "simulated_etag_hash",
+                        "s3_uri": "s3://bucket/results/output.bin",
+                    },
+                },
+            }
+
+    elif error_type == "SUCCESS":
         result = {"status": "success", "data": {"message": "Task completed successfully"}}
     else:
         result = {
@@ -82,7 +108,7 @@ async def handle_task(app, task):
         "worker_id": WORKER_ID,
         "result": result,
     }
-    headers = {"X-Worker-Token": WORKER_TOKEN}
+    headers = {AUTH_HEADER_WORKER: WORKER_TOKEN}
 
     try:
         async with app["client_session"].post(

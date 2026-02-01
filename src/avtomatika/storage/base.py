@@ -293,6 +293,16 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
+        """Saves a temporary access token for a worker (STS)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def verify_worker_access_token(self, token: str) -> str | None:
+        """Verifies a temporary access token and returns the associated worker_id if valid."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Get complete information about a worker by its ID."""
         raise NotImplementedError

@@ -291,10 +291,33 @@ class RedisStorage(StorageBackend):
 
     async def get_timed_out_jobs(self, limit: int = 100) -> list[str]:
         now = get_running_loop().time()
-        ids = await self._redis.zrangebyscore("orchestrator:watched_jobs", 0, now, start=0, num=limit)
+        # Lua script to atomically fetch and remove timed out jobs
+        LUA_POP_TIMEOUTS = """
+        local now = ARGV[1]
+        local limit = ARGV[2]
+        local ids = redis.call('ZRANGEBYSCORE', KEYS[1], 0, now, 'LIMIT', 0, limit)
+        if #ids > 0 then
+            redis.call('ZREM', KEYS[1], unpack(ids))
+        end
+        return ids
+        """
+        try:
+            sha = await self._redis.script_load(LUA_POP_TIMEOUTS)
+            ids = await self._redis.evalsha(sha, 1, "orchestrator:watched_jobs", now, limit)
+        except NoScriptError:
+            ids = await self._redis.eval(LUA_POP_TIMEOUTS, 1, "orchestrator:watched_jobs", now, limit)
+        except ResponseError as e:
+            # Fallback for Redis versions that don't support script_load/evalsha or other errors
+            if "unknown command" in str(e).lower():
+                logger.warning("Redis does not support LUA scripts. Falling back to non-atomic get_timed_out_jobs.")
+                ids = await self._redis.zrangebyscore("orchestrator:watched_jobs", 0, now, start=0, num=limit)
+                if ids:
+                    await self._redis.zrem("orchestrator:watched_jobs", *ids)  # type: ignore
+            else:
+                raise e
+
         if ids:
-            await self._redis.zrem("orchestrator:watched_jobs", *ids)  # type: ignore
-            return [i.decode("utf-8") for i in ids]
+            return [i.decode("utf-8") if isinstance(i, bytes) else i for i in ids]
         return []
 
     async def enqueue_job(self, job_id: str) -> None:
@@ -410,6 +433,13 @@ class RedisStorage(StorageBackend):
     async def get_worker_token(self, worker_id: str) -> str | None:
         token = await self._redis.get(f"orchestrator:worker:token:{worker_id}")
         return token.decode("utf-8") if token else None
+
+    async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
+        await self._redis.set(f"orchestrator:sts:token:{token}", worker_id, ex=ttl)
+
+    async def verify_worker_access_token(self, token: str) -> str | None:
+        worker_id = await self._redis.get(f"orchestrator:sts:token:{token}")
+        return worker_id.decode("utf-8") if worker_id else None
 
     async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
         return bool(await self._redis.set(f"orchestrator:lock:{key}", holder_id, nx=True, ex=ttl))

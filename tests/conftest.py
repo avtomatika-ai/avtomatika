@@ -1,6 +1,9 @@
 import os
 import sys
 
+# Ensure src is in python path for correct import resolution
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+
 import pytest
 import pytest_asyncio
 from aiohttp.web import AppKey
@@ -11,12 +14,13 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
-from src.avtomatika.client_config_loader import load_client_configs_to_redis
-from src.avtomatika.config import Config
-from src.avtomatika.engine import ENGINE_KEY, OrchestratorEngine
-from src.avtomatika.storage.base import StorageBackend
-from src.avtomatika.storage.memory import MemoryStorage
-from src.avtomatika.storage.redis import RedisStorage
+
+from avtomatika.client_config_loader import load_client_configs_to_redis
+from avtomatika.config import Config
+from avtomatika.engine import ENGINE_KEY, OrchestratorEngine
+from avtomatika.storage.base import StorageBackend
+from avtomatika.storage.memory import MemoryStorage
+from avtomatika.storage.redis import RedisStorage
 
 # Define AppKeys globally for tests
 STORAGE_KEY = AppKey("storage", StorageBackend)

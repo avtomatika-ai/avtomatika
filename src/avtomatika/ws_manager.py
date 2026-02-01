@@ -4,6 +4,8 @@ from typing import Any
 
 from aiohttp import web
 
+from .constants import MSG_TYPE_PROGRESS
+
 logger = getLogger(__name__)
 
 
@@ -50,9 +52,7 @@ class WebSocketManager:
     async def handle_message(worker_id: str, message: dict[str, Any]) -> None:
         """Handles an incoming message from a worker."""
         event_type = message.get("event")
-        if event_type == "progress_update":
-            # In a real application, you'd likely forward this to a history store
-            # or a pub/sub system for real-time UI updates.
+        if event_type == MSG_TYPE_PROGRESS:
             logger.info(
                 f"Received progress update from worker {worker_id} for job {message.get('job_id')}: "
                 f"{message.get('progress', 0) * 100:.0f}% - {message.get('message', '')}"

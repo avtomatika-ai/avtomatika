@@ -1,14 +1,23 @@
+from logging import getLogger
 from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
-from src.avtomatika.ws_manager import WebSocketManager
+from rxon.constants import MSG_TYPE_PROGRESS
+
+from avtomatika.ws_manager import WebSocketManager
+
+logger = getLogger(__name__)
+
+
+@pytest.fixture
+def manager():
+    return WebSocketManager()
 
 
 @pytest.mark.asyncio
-async def test_ws_manager_register_and_unregister():
+async def test_ws_manager_register_and_unregister(manager):
     """Tests that the WebSocketManager can register and unregister connections."""
-    manager = WebSocketManager()
     ws = AsyncMock(spec=web.WebSocketResponse)
 
     await manager.register("worker-1", ws)
@@ -19,9 +28,8 @@ async def test_ws_manager_register_and_unregister():
 
 
 @pytest.mark.asyncio
-async def test_ws_manager_send_command():
+async def test_ws_manager_send_command(manager):
     """Tests that the WebSocketManager can send commands to workers."""
-    manager = WebSocketManager()
     ws = AsyncMock(spec=web.WebSocketResponse)
     ws.closed = False
 
@@ -35,9 +43,8 @@ async def test_ws_manager_send_command():
 
 
 @pytest.mark.asyncio
-async def test_ws_manager_send_command_fails():
+async def test_ws_manager_send_command_fails(manager):
     """Tests that send_command returns False when the connection is closed."""
-    manager = WebSocketManager()
     ws = AsyncMock(spec=web.WebSocketResponse)
     ws.closed = True
 
@@ -51,20 +58,16 @@ async def test_ws_manager_send_command_fails():
 
 
 @pytest.mark.asyncio
-async def test_ws_manager_handle_message():
-    """Tests that the WebSocketManager can handle incoming messages."""
-    manager = WebSocketManager()
+async def test_handle_message_progress(manager, caplog):
+    worker_id = "worker-1"
+    message = {"event": MSG_TYPE_PROGRESS, "job_id": "job-1", "progress": 0.5}
 
-    message = {"event": "progress_update", "job_id": "job-1", "progress": 0.5}
-    await manager.handle_message("worker-1", message)
-
-    # Just check that it doesn't raise an exception
+    await manager.handle_message(worker_id, message)
 
 
 @pytest.mark.asyncio
-async def test_ws_manager_close_all():
+async def test_ws_manager_close_all(manager):
     """Tests that the WebSocketManager can close all connections."""
-    manager = WebSocketManager()
     ws1 = AsyncMock(spec=web.WebSocketResponse)
     ws2 = AsyncMock(spec=web.WebSocketResponse)
 

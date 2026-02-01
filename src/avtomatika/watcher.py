@@ -3,6 +3,8 @@ from logging import getLogger
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from .constants import JOB_STATUS_FAILED, JOB_STATUS_WAITING_FOR_WORKER
+
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
 
@@ -38,8 +40,8 @@ class Watcher:
                             try:
                                 # Get the latest version to avoid overwriting
                                 job_state = await self.storage.get_job_state(job_id)
-                                if job_state and job_state["status"] == "waiting_for_worker":
-                                    job_state["status"] = "failed"
+                                if job_state and job_state["status"] == JOB_STATUS_WAITING_FOR_WORKER:
+                                    job_state["status"] = JOB_STATUS_FAILED
                                     job_state["error_message"] = "Worker task timed out."
                                     await self.storage.save_job_state(job_id, job_state)
 

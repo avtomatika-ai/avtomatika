@@ -1,8 +1,8 @@
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
+from rxon.constants import COMMAND_CANCEL_TASK
 
 from avtomatika.api.handlers import (
     cancel_job_handler,
@@ -10,10 +10,6 @@ from avtomatika.api.handlers import (
     get_blueprint_graph_handler,
     get_jobs_handler,
     human_approval_webhook_handler,
-    register_worker_handler,
-    task_result_handler,
-    websocket_handler,
-    worker_update_handler,
 )
 from avtomatika.app_keys import ENGINE_KEY
 from avtomatika.config import Config
@@ -44,18 +40,28 @@ def engine(storage, config):
     # Mock WebhookSender
     engine.webhook_sender = AsyncMock()
     engine.webhook_sender.send = AsyncMock()
-    engine.webhook_sender.start = MagicMock()  # start is synchronous in some contexts or async? Check class.
-    # In class it is def start(self) -> None (sync), but creates task.
-    # Let's check engine.py usage. engine.py calls it as sync: self.webhook_sender.start()
+    engine.webhook_sender.start = MagicMock()
 
     return engine
 
 
 @pytest.fixture
 def request_mock(engine):
-    req = MagicMock()
-    req.app = {ENGINE_KEY: engine}
+    req = MagicMock(spec=web.Request)
+
+    # app needs to be accessible via []
+    app_mock = MagicMock()
+    app_dict = {
+        ENGINE_KEY: engine,
+    }
+    app_mock.__getitem__.side_effect = app_dict.__getitem__
+    app_mock.get.side_effect = app_dict.get
+    req.app = app_mock
+
     req.headers = {}
+    req.match_info = MagicMock()
+    req.query = {}
+    req.can_read_body = True
     return req
 
 
@@ -114,7 +120,7 @@ async def test_cancel_job_ws_fails(engine, request_mock, caplog):
     assert response.status == 200
     assert "Failed to send WebSocket cancellation" in caplog.text
     engine.ws_manager.send_command.assert_called_once_with(
-        worker_id, {"command": "cancel_task", "task_id": task_id, "job_id": job_id}
+        worker_id, {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
     )
 
 
@@ -134,156 +140,6 @@ async def test_get_blueprint_graph_file_not_found(engine, request_mock):
     request_mock.match_info.get.return_value = "test_bp"
     response = await get_blueprint_graph_handler(request_mock)
     assert response.status == 501
-
-
-@pytest.mark.asyncio
-async def test_task_result_job_not_found(engine, request_mock):
-    async def get_json(*args, **kwargs):
-        return {"job_id": "non-existent-job", "task_id": "task-1"}
-
-    request_mock.json = get_json
-
-    # Mocking get method on MagicMock object to simulate dictionary access or method call
-    def mock_get(key, default=None):
-        if key == "worker_id":
-            return "worker-1"
-        return default
-
-    request_mock.get.side_effect = mock_get
-
-    response = await task_result_handler(request_mock)
-    assert response.status == 404
-
-
-@pytest.mark.asyncio
-async def test_task_result_permanent_failure(engine, request_mock):
-    job_id = "job-permanent-failure"
-    task_id = "task-1"
-    worker_id = "worker-1"
-
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-
-    async def get_json(*args, **kwargs):
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "worker_id": worker_id,
-            "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "test error"}},
-        }
-
-    request_mock.json = get_json
-
-    def mock_get(key, default=None):
-        if key == "worker_id":
-            return worker_id
-        return default
-
-    request_mock.get.side_effect = mock_get
-
-    response = await task_result_handler(request_mock)
-    assert response.status == 200
-
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "quarantined"
-    assert job_state["error_message"] == "Task failed with permanent error: test error"
-
-
-@pytest.mark.asyncio
-async def test_task_result_invalid_input_failure(engine, request_mock):
-    job_id = "job-invalid-input-failure"
-    task_id = "task-1"
-    worker_id = "worker-1"
-
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-
-    async def get_json(*args, **kwargs):
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "worker_id": worker_id,
-            "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "test error"}},
-        }
-
-    request_mock.json = get_json
-
-    def mock_get(key, default=None):
-        if key == "worker_id":
-            return worker_id
-        return default
-
-    request_mock.get.side_effect = mock_get
-
-    response = await task_result_handler(request_mock)
-    assert response.status == 200
-
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "failed"
-    assert job_state["error_message"] == "Task failed due to invalid input: test error"
-
-
-@pytest.mark.asyncio
-async def test_task_result_cancelled(engine, request_mock):
-    job_id = "job-cancelled"
-    task_id = "task-1"
-    worker_id = "worker-1"
-
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-
-    async def get_json(*args, **kwargs):
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "worker_id": worker_id,
-            "result": {"status": "cancelled"},
-        }
-
-    request_mock.json = get_json
-
-    def mock_get(key, default=None):
-        if key == "worker_id":
-            return worker_id
-        return default
-
-    request_mock.get.side_effect = mock_get
-
-    response = await task_result_handler(request_mock)
-    assert response.status == 200
-
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "cancelled"
-
-
-@pytest.mark.asyncio
-async def test_task_result_unhandled_status(engine, request_mock):
-    job_id = "job-unhandled-status"
-    task_id = "task-1"
-    worker_id = "worker-1"
-
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-
-    async def get_json(*args, **kwargs):
-        return {
-            "job_id": job_id,
-            "task_id": task_id,
-            "worker_id": worker_id,
-            "result": {"status": "unhandled"},
-        }
-
-    request_mock.json = get_json
-
-    def mock_get(key, default=None):
-        if key == "worker_id":
-            return worker_id
-        return default
-
-    request_mock.get.side_effect = mock_get
-
-    response = await task_result_handler(request_mock)
-    assert response.status == 200
-
-    job_state = await engine.storage.get_job_state(job_id)
-    assert job_state["status"] == "failed"
-    assert job_state["error_message"] == "Worker returned unhandled status: unhandled"
 
 
 @pytest.mark.asyncio
@@ -345,85 +201,6 @@ async def test_human_approval_invalid_decision(engine, request_mock):
 
     response = await human_approval_webhook_handler(request_mock)
     assert response.status == 400
-
-
-@pytest.mark.asyncio
-async def test_websocket_handler_no_worker_id(engine, request_mock):
-    request_mock.match_info.get.return_value = None
-    with pytest.raises(web.HTTPBadRequest):
-        await websocket_handler(request_mock)
-
-
-@pytest.mark.asyncio
-async def test_websocket_handler_invalid_json(engine, request_mock, caplog):
-    worker_id = "worker-1"
-    request_mock.match_info.get.return_value = worker_id
-
-    ws = web.WebSocketResponse()
-    mock_prepare = AsyncMock()
-    mock_receive = AsyncMock(
-        side_effect=[
-            MagicMock(type=web.WSMsgType.TEXT, json=MagicMock(side_effect=ValueError("Invalid JSON"))),
-            StopAsyncIteration,
-        ]
-    )
-
-    with (
-        patch("aiohttp.web.WebSocketResponse", return_value=ws),
-        patch.object(ws, "prepare", mock_prepare),
-        patch.object(ws, "receive", mock_receive),
-    ):
-        await websocket_handler(request_mock)
-        assert f"Error processing WebSocket message from {worker_id}" in caplog.text
-        mock_prepare.assert_called_once()
-        mock_receive.assert_called()
-
-
-@pytest.mark.asyncio
-async def test_register_worker_no_data(engine, request_mock):
-    request_mock.get.return_value = None
-    response = await register_worker_handler(request_mock)
-    assert response.status == 500
-
-
-@pytest.mark.asyncio
-async def test_register_worker_no_worker_id(engine, request_mock):
-    request_mock.get.return_value = {"worker_type": "test"}
-    response = await register_worker_handler(request_mock)
-    assert response.status == 400
-
-
-@pytest.mark.asyncio
-async def test_worker_update_not_found(engine, request_mock):
-    request_mock.match_info.get.return_value = "non-existent-worker"
-    payload = {"status": "idle"}
-
-    async def get_json(*args, **kwargs):
-        return payload
-
-    request_mock.json = get_json
-    request_mock.can_read_body = True
-    engine.storage.update_worker_status = AsyncMock(return_value=None)
-
-    response = await worker_update_handler(request_mock)
-    assert response.status == 404
-
-
-@pytest.mark.asyncio
-async def test_worker_update_handler_empty_body(engine, request_mock):
-    """Tests that a PATCH request with an empty body only refreshes TTL."""
-    request_mock.match_info.get.return_value = "worker-1"
-    request_mock.can_read_body = False  # Simulate empty body
-
-    engine.storage.refresh_worker_ttl = AsyncMock(return_value=True)
-    engine.storage.update_worker_status = AsyncMock()
-
-    response = await worker_update_handler(request_mock)
-
-    assert response.status == 200
-    assert json.loads(response.body.decode()) == {"status": "ttl_refreshed"}
-    engine.storage.refresh_worker_ttl.assert_called_once()
-    engine.storage.update_worker_status.assert_not_called()
 
 
 @pytest.mark.asyncio

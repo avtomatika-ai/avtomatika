@@ -88,7 +88,12 @@ async def test_task_files_sync_operations(config):
         assert mock_file.write.call_count >= 1
 
         # Test upload
-        with patch("pathlib.Path.exists", return_value=True):
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.stat") as mock_stat,
+        ):
+            mock_stat.return_value.st_size = 13
+            mock_stat.return_value.st_mode = 0o100644  # Regular file
             await tf.upload("local.dat")
             mock_put.assert_called_once()
 
@@ -151,8 +156,11 @@ async def test_task_files_helper_methods(config):
     with (
         patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
         patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat") as mock_stat,
         patch("avtomatika.s3.aiopen", MagicMock()) as mock_aio_open,
     ):
+        mock_stat.return_value.st_size = 5
+        mock_stat.return_value.st_mode = 0o100644  # Regular file
         mock_file = AsyncMock()
         mock_file.read.return_value = b"hello"
         mock_aio_open.return_value.__aenter__.return_value = mock_file
@@ -205,9 +213,12 @@ async def test_recursive_upload(config):
         patch("avtomatika.s3.walk", return_value=walk_data),
         patch("pathlib.Path.is_dir", return_value=True),
         patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat") as mock_stat,
         patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
         patch("avtomatika.s3.aiopen", MagicMock()),
     ):
+        mock_stat.return_value.st_size = 10
+        mock_stat.return_value.st_mode = 0o100644  # Regular file
         await tf.upload("data")
         assert mock_put.call_count == 2
 

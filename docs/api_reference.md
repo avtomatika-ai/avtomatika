@@ -4,7 +4,7 @@ This document describes all HTTP endpoints provided by the Orchestrator server. 
 
 ## Authentication
 
--   **Client -> Orchestrator:** All requests to `/api/*` endpoints must contain the `X-Avtomatika-Token` header with the client token.
+-   **Client -> Orchestrator:** All requests to `/api/*` endpoints must contain the `X-Client-Token` header with the client token.
 -   **Worker -> Orchestrator:** All requests to `/_worker/*` endpoints must contain the `X-Worker-Token` header with a valid worker token (individual or global).
 
 ---
@@ -48,7 +48,7 @@ These endpoints do not require authentication.
 
 ## 2. Client Endpoints (`/api`)
 
-These endpoints are designed for external systems that initiate and monitor workflows. Requires `X-Avtomatika-Token` header.
+These endpoints are designed for external systems that initiate and monitor workflows. Requires `X-Client-Token` header.
 
 ### Create New Job
 

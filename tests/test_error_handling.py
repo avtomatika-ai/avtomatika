@@ -1,11 +1,9 @@
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import fakeredis.aioredis as redis
 import pytest
 import pytest_asyncio
 
-from avtomatika.api.handlers import task_result_handler
-from avtomatika.app_keys import ENGINE_KEY
 from avtomatika.config import Config
 from avtomatika.dispatcher import Dispatcher
 from avtomatika.engine import OrchestratorEngine
@@ -56,18 +54,21 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
     await storage.save_job_state(job_id, initial_job_state)
 
     # 2. Simulate worker failure responses for each retry attempt + the final one
+    from avtomatika.services.worker_service import WorkerService
+
+    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    engine.worker_service = worker_service
+
     for i in range(config.JOB_MAX_RETRIES + 1):
         payload_data = {
             "job_id": job_id,
             "task_id": "some_task",
             "result": {"status": "failure", "error": {"code": "TRANSIENT_ERROR", "message": "worker failed"}},
+            "worker_id": "test-worker",
         }
-        req = MagicMock()
-        req.app = {ENGINE_KEY: engine}
-        req.json = AsyncMock(return_value=payload_data)
-        req.get.return_value = "test-worker"  # Simulate auth middleware (req.get('worker_id'))
 
-        await task_result_handler(req)
+        # Call service directly
+        await worker_service.process_task_result(payload_data, authenticated_worker_id="test-worker")
 
         # Check that dispatch was called for retries
         if i < config.JOB_MAX_RETRIES:
@@ -121,12 +122,19 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
         "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "fatal error"}},
     }
 
-    req = MagicMock()
-    req.app = {ENGINE_KEY: engine}
-    req.json = AsyncMock(return_value=payload_data)
-    req.get.return_value = "test-worker"
+    from avtomatika.services.worker_service import WorkerService
 
-    await task_result_handler(req)
+    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    engine.worker_service = worker_service
+
+    payload_data = {
+        "job_id": job_id,
+        "task_id": "some_task",
+        "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "fatal error"}},
+        "worker_id": "test-worker",
+    }
+
+    await worker_service.process_task_result(payload_data, authenticated_worker_id="test-worker")
 
     # 3. Check for immediate quarantine status
     final_state = await storage.get_job_state(job_id)
@@ -167,12 +175,20 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
         "task_id": "some_task",
         "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "bad params"}},
     }
-    req = MagicMock()
-    req.app = {ENGINE_KEY: engine}
-    req.json = AsyncMock(return_value=payload_data)
-    req.get.return_value = "test-worker"
 
-    await task_result_handler(req)
+    from avtomatika.services.worker_service import WorkerService
+
+    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    engine.worker_service = worker_service
+
+    payload_data = {
+        "job_id": job_id,
+        "task_id": "some_task",
+        "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "bad params"}},
+        "worker_id": "test-worker",
+    }
+
+    await worker_service.process_task_result(payload_data, authenticated_worker_id="test-worker")
 
     # 3. Check for immediate failed status
     final_state = await storage.get_job_state(job_id)

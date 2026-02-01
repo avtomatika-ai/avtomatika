@@ -195,6 +195,7 @@ class Dispatcher:
             "type": task_type,
             "params": task_info.get("params", {}),
             "tracing_context": {},
+            "params_metadata": job_state.get("data_metadata"),
         }
         # Inject tracing context into the payload, not headers
         inject(payload["tracing_context"], context=job_state.get("tracing_context"))

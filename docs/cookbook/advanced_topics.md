@@ -94,10 +94,10 @@ Use `curl` to request state and execution history of a task. Helps understand pr
 TOKEN="your-secret-orchestrator-token"
 
 # Get current task state
-curl -H "X-Avtomatika-Token: $TOKEN" http://localhost:8080/api/v1/jobs/{job_id}
+curl -H "X-Client-Token: $TOKEN" http://localhost:8080/api/v1/jobs/{job_id}
 
 # Get full task event history (very useful for debugging)
-curl -H "X-Avtomatika-Token: $TOKEN" http://localhost:8080/api/v1/jobs/{job_id}/history
+curl -H "X-Client-Token: $TOKEN" http://localhost:8080/api/v1/jobs/{job_id}/history
 ```
 
 ### Visualizing Blueprint Logic
@@ -106,7 +106,7 @@ To understand complex pipeline logic, you can get its graph in DOT format and vi
 
 **1. Get DOT graph representation:**
 ```bash
-curl -H "X-Avtomatika-Token: $TOKEN" http://localhost:8080/api/v1/blueprints/{blueprint_name}/graph
+curl -H "X-Client-Token: $TOKEN" http://localhost:8080/api/v1/blueprints/{blueprint_name}/graph
 ```
 
 **2. Visualize result:**

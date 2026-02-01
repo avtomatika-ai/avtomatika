@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock
 import pytest
 import zstandard
 from aiohttp import web
-from src.avtomatika.blueprint import StateMachineBlueprint
-from src.avtomatika.client_config_loader import load_client_configs_to_redis
-from src.avtomatika.engine import ENGINE_KEY, OrchestratorEngine
-from src.avtomatika.storage.redis import RedisStorage
 
+from avtomatika.blueprint import StateMachineBlueprint
+from avtomatika.client_config_loader import load_client_configs_to_redis
+from avtomatika.constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
+from avtomatika.engine import ENGINE_KEY, OrchestratorEngine
+from avtomatika.storage.redis import RedisStorage
 from tests.conftest import STORAGE_KEY
 
 # --- Test Blueprints ---
@@ -118,7 +119,7 @@ async def test_sub_blueprint_flow(aiohttp_client, app):
     client = await aiohttp_client(app)
     storage = app[STORAGE_KEY]
 
-    headers = {"X-Avtomatika-Token": "user_token_vip"}
+    headers = {AUTH_HEADER_CLIENT: "user_token_vip"}
     await storage.initialize_client_quota("user_token_vip", 5)
     resp = await client.post("/api/v1/jobs/parent_flow", json={}, headers=headers)
     assert resp.status == 202
@@ -151,7 +152,7 @@ async def test_data_store_flow(aiohttp_client, app):
     client = await aiohttp_client(app)
     storage = app[STORAGE_KEY]
 
-    headers = {"X-Avtomatika-Token": "user_token_vip"}
+    headers = {AUTH_HEADER_CLIENT: "user_token_vip"}
     await storage.initialize_client_quota("user_token_vip", 5)
     resp = await client.post("/api/v1/jobs/data_store_test", json={}, headers=headers)
     assert resp.status == 202
@@ -232,7 +233,7 @@ async def test_quota_middleware(aiohttp_client, app):
     storage = app[STORAGE_KEY]
 
     token = "user_token_regular"
-    headers = {"X-Avtomatika-Token": token}
+    headers = {AUTH_HEADER_CLIENT: token}
     await storage.initialize_client_quota(token, 2)
 
     resp = await client.post("/api/v1/jobs/parent_flow", json={}, headers=headers)
@@ -272,7 +273,7 @@ async def test_client_config_in_context(aiohttp_client, app):
     client = await aiohttp_client(app)
 
     token = "user_token_vip"
-    headers = {"X-Avtomatika-Token": token}
+    headers = {AUTH_HEADER_CLIENT: token}
     await storage.initialize_client_quota(token, 5)
 
     resp = await client.post("/api/v1/jobs/context_test", json={}, headers=headers)
@@ -321,7 +322,7 @@ async def test_worker_registration_with_full_data(aiohttp_client, app):
         },
     }
 
-    headers = {"X-Worker-Token": app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
+    headers = {AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     resp = await client.post(
         "/_worker/workers/register",
         json=worker_payload,
@@ -354,7 +355,7 @@ async def test_empty_heartbeat_refreshes_ttl(aiohttp_client, app):
         "worker_type": "test",
         "supported_tasks": ["test"],
     }
-    headers = {"X-Worker-Token": app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
+    headers = {AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     resp = await client.post(
         "/_worker/workers/register",
         json=worker_payload,
@@ -381,7 +382,7 @@ async def test_unversioned_route(aiohttp_client, app):
     client = await aiohttp_client(app)
     storage = app[STORAGE_KEY]
 
-    headers = {"X-Avtomatika-Token": "user_token_vip"}
+    headers = {AUTH_HEADER_CLIENT: "user_token_vip"}
     await storage.initialize_client_quota("user_token_vip", 5)
 
     resp = await client.post("/api/jobs/unversioned_flow", json={}, headers=headers)
@@ -472,7 +473,7 @@ async def test_task_cancellation_via_websocket_mocked(aiohttp_client, app):
         ttl=60,
     )
 
-    headers = {"X-Avtomatika-Token": "user_token_vip"}
+    headers = {AUTH_HEADER_CLIENT: "user_token_vip"}
     await storage.initialize_client_quota("user_token_vip", 5)
 
     cancel_resp = await client.post(f"/api/v1/jobs/{job_id}/cancel", headers=headers)
@@ -511,7 +512,7 @@ async def test_worker_individual_token_auth(aiohttp_client, app):
     hashed_individual_token = hashlib.sha256(individual_token.encode()).hexdigest()
     await storage.set_worker_token(worker_id, hashed_individual_token)
 
-    headers = {"X-Worker-Token": individual_token}
+    headers = {AUTH_HEADER_WORKER: individual_token}
     payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
@@ -531,7 +532,7 @@ async def test_worker_individual_token_auth_failure(aiohttp_client, app):
     wrong_token = "this-is-not-the-right-token"
     await storage.set_worker_token(worker_id, correct_token)
 
-    headers = {"X-Worker-Token": wrong_token}
+    headers = {AUTH_HEADER_WORKER: wrong_token}
     payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
@@ -552,7 +553,7 @@ async def test_worker_global_token_fallback(aiohttp_client, app):
 
     worker_id = "worker-using-global-token"
 
-    headers = {"X-Worker-Token": global_token}
+    headers = {AUTH_HEADER_WORKER: global_token}
     payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
@@ -574,7 +575,7 @@ async def test_worker_no_token_failure(aiohttp_client, app):
 
     assert resp.status == 401
     error = await resp.json()
-    assert "Missing X-Worker-Token header" in error["error"]
+    assert f"Missing {AUTH_HEADER_WORKER} header" in error["error"]
 
 
 @pytest.mark.asyncio
@@ -587,7 +588,7 @@ async def test_progress_update_handling(aiohttp_client, app):
 
     worker_id = "progress-worker"
     async with client.ws_connect(
-        f"/_worker/ws/{worker_id}", headers={"X-Worker-Token": app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
+        f"/_worker/ws/{worker_id}", headers={AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     ) as ws:
         progress_payload = {
             "type": "event",

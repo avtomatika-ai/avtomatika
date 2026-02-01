@@ -4,17 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b8"
+version = "1.0b9"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    {name = "Dmitrii Gagarin", email = "madgagarin@gmail.com"},
+]
+keywords = ["orchestrator", "state-machine", "workflow", "distributed", "ai", "llm", "rxon", "hln"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Typing :: Typed",
 ]
 dependencies = [
+    "rxon",
     "aiohttp~=3.12",
     "python-json-logger~=4.0",
     "graphviz~=0.21",
@@ -26,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis~=7.1"]
-s3 = ["obstore>=0.2", "aiofiles~=23.2"]
+s3 = ["obstore>=0.2", "aiofiles~=25.1"]
 history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
 telemetry = [
     "opentelemetry-api~=1.39",
@@ -44,7 +51,7 @@ test = [
     "backports.zstd~=1.2",
     "opentelemetry-instrumentation-aiohttp-client",
     "obstore>=0.2",
-    "aiofiles~=23.2",
+    "aiofiles~=25.1",
 ]
 all = [
     "avtomatika[redis]",
@@ -58,7 +65,7 @@ all = [
 "Bug Tracker" = "https://github.com/avtomatika-ai/avtomatika/issues"
 
 [tool.setuptools.package-data]
-"avtomatika" = ["api.html"]
+"avtomatika" = ["api.html", "py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

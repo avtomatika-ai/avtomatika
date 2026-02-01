@@ -189,10 +189,11 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             self._watched_jobs.pop(job_id, None)
 
-    async def get_timed_out_jobs(self) -> list[str]:
+    async def get_timed_out_jobs(self, limit: int = 100) -> list[str]:
         async with self._lock:
             now = monotonic()
             timed_out_ids = [job_id for job_id, timeout_at in self._watched_jobs.items() if timeout_at <= now]
+            timed_out_ids = timed_out_ids[:limit]
             for job_id in timed_out_ids:
                 self._watched_jobs.pop(job_id, None)
             return timed_out_ids
@@ -330,6 +331,16 @@ class MemoryStorage(StorageBackend):
     async def get_worker_token(self, worker_id: str) -> str | None:
         async with self._lock:
             return self._worker_tokens.get(worker_id)
+
+    async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
+        async with self._lock:
+            self._generic_keys[f"sts:{token}"] = worker_id
+            self._generic_key_ttls[f"sts:{token}"] = monotonic() + ttl
+
+    async def verify_worker_access_token(self, token: str) -> str | None:
+        async with self._lock:
+            await self._clean_expired()
+            return self._generic_keys.get(f"sts:{token}")
 
     async def set_task_cancellation_flag(self, task_id: str) -> None:
         key = f"task_cancel:{task_id}"

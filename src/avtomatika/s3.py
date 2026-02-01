@@ -3,13 +3,15 @@ from logging import getLogger
 from os import sep, walk
 from pathlib import Path
 from shutil import rmtree
-from typing import Any, Tuple
+from typing import Any
 
 from aiofiles import open as aiopen
 from obstore import delete_async, get_async, put_async
 from obstore import list as obstore_list
 from obstore.store import S3Store
 from orjson import dumps, loads
+from rxon.blob import calculate_config_hash, parse_uri
+from rxon.exceptions import IntegrityError
 
 from .config import Config
 from .history.base import HistoryStorageBase
@@ -56,40 +58,50 @@ class TaskFiles:
         clean_name = filename.split("/")[-1] if "://" in filename else filename.lstrip("/")
         return self.local_dir / clean_name
 
-    def _parse_s3_uri(self, uri: str) -> Tuple[str, str, bool]:
+    async def _download_single_file(
+        self,
+        key: str,
+        local_path: Path,
+        expected_size: int | None = None,
+        expected_hash: str | None = None,
+    ) -> dict[str, Any]:
+        """Downloads a single file safely using semaphore and streaming.
+        Returns metadata (size, etag).
         """
-        Parses s3://bucket/key into (bucket, key, is_directory).
-        is_directory is True if uri ends with '/'.
-        """
-        is_dir = uri.endswith("/")
-
-        if not uri.startswith("s3://"):
-            key = f"{self._s3_prefix}{uri.lstrip('/')}"
-            return self._bucket, key, is_dir
-
-        parts = uri[5:].split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key, is_dir
-
-    async def _download_single_file(self, key: str, local_path: Path) -> None:
-        """Downloads a single file safely using semaphore and streaming to avoid OOM."""
         if not local_path.parent.exists():
             await to_thread(local_path.parent.mkdir, parents=True, exist_ok=True)
 
         async with self._semaphore:
             response = await get_async(self._store, key)
+            meta = response.meta
+            file_size = meta.size
+            etag = meta.e_tag.strip('"') if meta.e_tag else None
+
+            if expected_size is not None and file_size != expected_size:
+                raise IntegrityError(f"File size mismatch for {key}: expected {expected_size}, got {file_size}")
+
+            if expected_hash is not None and etag and expected_hash != etag:
+                raise IntegrityError(f"Integrity mismatch for {key}: expected ETag {expected_hash}, got {etag}")
+
             stream = response.stream()
             async with aiopen(local_path, "wb") as f:
                 async for chunk in stream:
                     await f.write(chunk)
 
-    async def download(self, name_or_uri: str, local_name: str | None = None) -> Path:
+            return {"size": file_size, "etag": etag}
+
+    async def download(
+        self,
+        name_or_uri: str,
+        local_name: str | None = None,
+        verify_meta: dict[str, Any] | None = None,
+    ) -> Path:
         """
         Downloads a file or directory (recursively).
         If URI ends with '/', it treats it as a directory.
         """
-        bucket, key, is_dir = self._parse_s3_uri(name_or_uri)
+        bucket, key, is_dir = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
+        verify_meta = verify_meta or {}
 
         if local_name:
             target_path = self.path(local_name)
@@ -112,22 +124,42 @@ class TaskFiles:
                 tasks.append(self._download_single_file(s3_key, local_file_path))
 
             if tasks:
-                await gather(*tasks)
-
-            await self._log_event("download_dir", f"s3://{bucket}/{key}", str(target_path))
+                results = await gather(*tasks)
+                total_size = sum(r["size"] for r in results)
+                await self._log_event(
+                    "download_dir",
+                    f"s3://{bucket}/{key}",
+                    str(target_path),
+                    metadata={"total_size": total_size, "file_count": len(results)},
+                )
+            else:
+                await self._log_event(
+                    "download_dir",
+                    f"s3://{bucket}/{key}",
+                    str(target_path),
+                    metadata={"total_size": 0, "file_count": 0},
+                )
             return target_path
         else:
             logger.debug(f"Downloading s3://{bucket}/{key} -> {target_path}")
-            await self._download_single_file(key, target_path)
-            await self._log_event("download", f"s3://{bucket}/{key}", str(target_path))
+            meta = await self._download_single_file(
+                key,
+                target_path,
+                expected_size=verify_meta.get("size"),
+                expected_hash=verify_meta.get("hash"),
+            )
+            await self._log_event("download", f"s3://{bucket}/{key}", str(target_path), metadata=meta)
             return target_path
 
-    async def _upload_single_file(self, local_path: Path, s3_key: str) -> None:
-        """Uploads a single file safely using semaphore."""
+    async def _upload_single_file(self, local_path: Path, s3_key: str) -> dict[str, Any]:
+        """Uploads a single file safely using semaphore. Returns S3 metadata."""
         async with self._semaphore:
+            file_size = local_path.stat().st_size
             async with aiopen(local_path, "rb") as f:
                 content = await f.read()
-            await put_async(self._store, s3_key, content)
+            result = await put_async(self._store, s3_key, content)
+            etag = result.e_tag.strip('"') if result.e_tag else None
+            return {"size": file_size, "etag": etag}
 
     async def upload(self, local_name: str, remote_name: str | None = None) -> str:
         """
@@ -158,26 +190,30 @@ class TaskFiles:
 
             tasks = [self._upload_single_file(lp, k) for lp, k in files_map]
             if tasks:
-                await gather(*tasks)
+                results = await gather(*tasks)
+                total_size = sum(r["size"] for r in results)
+                metadata = {"total_size": total_size, "file_count": len(results)}
+            else:
+                metadata = {"total_size": 0, "file_count": 0}
 
             uri = f"s3://{self._bucket}/{target_prefix}"
-            await self._log_event("upload_dir", uri, str(local_path))
+            await self._log_event("upload_dir", uri, str(local_path), metadata=metadata)
             return uri
 
         elif local_path.exists():
             target_key = f"{self._s3_prefix}{(remote_name or local_name).lstrip('/')}"
             logger.debug(f"Uploading {local_path} -> s3://{self._bucket}/{target_key}")
 
-            await self._upload_single_file(local_path, target_key)
+            meta = await self._upload_single_file(local_path, target_key)
 
             uri = f"s3://{self._bucket}/{target_key}"
-            await self._log_event("upload", uri, str(local_path))
+            await self._log_event("upload", uri, str(local_path), metadata=meta)
             return uri
         else:
             raise FileNotFoundError(f"Local file/dir not found: {local_path}")
 
     async def read_text(self, name_or_uri: str) -> str:
-        bucket, key, _ = self._parse_s3_uri(name_or_uri)
+        bucket, key, _ = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
         filename = key.split("/")[-1]
         local_path = self.path(filename)
 
@@ -188,7 +224,7 @@ class TaskFiles:
             return await f.read()
 
     async def read_json(self, name_or_uri: str) -> Any:
-        bucket, key, _ = self._parse_s3_uri(name_or_uri)
+        bucket, key, _ = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
         filename = key.split("/")[-1]
         local_path = self.path(filename)
 
@@ -235,21 +271,31 @@ class TaskFiles:
         if self.local_dir.exists():
             await to_thread(rmtree, self.local_dir)
 
-    async def _log_event(self, operation: str, file_uri: str, local_path: str) -> None:
+    async def _log_event(
+        self,
+        operation: str,
+        file_uri: str,
+        local_path: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if not self._history:
             return
 
         try:
+            context_snapshot = {
+                "operation": operation,
+                "s3_uri": file_uri,
+                "local_path": str(local_path),
+            }
+            if metadata:
+                context_snapshot.update(metadata)
+
             await self._history.log_job_event(
                 {
                     "job_id": self._job_id,
                     "event_type": "s3_operation",
                     "state": "running",
-                    "context_snapshot": {
-                        "operation": operation,
-                        "s3_uri": file_uri,
-                        "local_path": str(local_path),
-                    },
+                    "context_snapshot": context_snapshot,
                 }
             )
         except Exception as e:
@@ -305,6 +351,16 @@ class S3Service:
         except Exception as e:
             logger.error(f"Failed to initialize S3 Store: {e}")
             self._enabled = False
+
+    def get_config_hash(self) -> str | None:
+        """Returns a hash of the current S3 configuration for consistency checks."""
+        if not self._enabled:
+            return None
+        return calculate_config_hash(
+            self.config.S3_ENDPOINT_URL,
+            self.config.S3_ACCESS_KEY,
+            self.config.S3_DEFAULT_BUCKET,
+        )
 
     def get_task_files(self, job_id: str) -> TaskFiles | None:
         if not self._enabled or not self._store or not self._semaphore:

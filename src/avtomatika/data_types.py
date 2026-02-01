@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from rxon.models import InstalledModel, Resources
+
 if TYPE_CHECKING:
     from .context import ActionFactory
 
@@ -26,28 +28,6 @@ class JobContext(NamedTuple):
     aggregation_results: dict[str, Any] | None = None
     webhook_url: str | None = None
     task_files: Any | None = None
-
-
-class GPUInfo(NamedTuple):
-    """Information about the graphics processor."""
-
-    model: str
-    vram_gb: int
-
-
-class Resources(NamedTuple):
-    """Information about worker resources."""
-
-    max_concurrent_tasks: int
-    gpu_info: GPUInfo | None
-    cpu_cores: int
-
-
-class InstalledModel(NamedTuple):
-    """Information about the installed ML model."""
-
-    name: str
-    version: str
 
 
 class WorkerInfo(NamedTuple):

@@ -252,7 +252,9 @@ async def test_setup_history_storage_initialization_failure(engine, monkeypatch)
 def test_run(engine):
     with patch("avtomatika.engine.web.run_app") as mock_run_app:
         engine.run()
-        mock_run_app.assert_called_once_with(engine.app, host=engine.config.API_HOST, port=engine.config.API_PORT)
+        mock_run_app.assert_called_once_with(
+            engine.app, host=engine.config.API_HOST, port=engine.config.API_PORT, ssl_context=None
+        )
 
 
 @pytest.mark.asyncio

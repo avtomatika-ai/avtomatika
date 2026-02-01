@@ -458,7 +458,7 @@ async def cancelled_handler(context, actions):
 # Run Job and get its ID
 curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
 -H "Content-Type: application/json" \
--H "X-Orchestrator-Token: your-secret-orchestrator-token" \
+-H "X-Client-Token: your-secret-orchestrator-token" \
 -d '{"video_url": "..."}'
 # Response: {"status": "accepted", "job_id": "YOUR_JOB_ID"}
 ```
@@ -467,7 +467,7 @@ curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
 ```bash
 # Send cancellation request using received job_id
 curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel \
--H "X-Orchestrator-Token: your-secret-orchestrator-token"
+-H "X-Client-Token: your-secret-orchestrator-token"
 ```
 You will see cancellation message in Worker logs, and `Job` in Orchestrator will transition to `task_cancelled` state.
 
@@ -1178,7 +1178,7 @@ When history is enabled, new endpoint becomes available.
 
 *   **Request:**
     ```bash
-    curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Orchestrator-Token: your_token"
+    curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
     ```
 
 *   **Response Example:**

@@ -18,7 +18,7 @@ The file consists of sections (tables), where the section name is the client's u
 
 | Field | Type | Mandatory | Description |
 | :--- | :--- | :--- | :--- |
-| `token` | String | **Yes** | Secret token the client must pass in `X-Avtomatika-Token` header. |
+| `token` | String | **Yes** | Secret token the client must pass in `X-Client-Token` header. |
 | `plan` | String | No | Tariff plan name (e.g., "free", "premium"). Used in blueprints for logic. |
 | `monthly_attempts` | Integer | No | Monthly request quota. If set, Orchestrator will track and block requests exceeding the limit. |
 | `*` | Any | No | Any other fields (e.g., `languages`, `callback_url`) will be available in `context.client.params`. |
@@ -142,6 +142,7 @@ In addition to configuration files, the Orchestrator is configured via environme
 | :--- | :--- | :--- |
 | `API_HOST` | Host to bind the API server to. | `0.0.0.0` |
 | `API_PORT` | Port to bind the API server to. | `8080` |
+| `ENABLE_CLIENT_API` | **Pure Holon Mode:** If set to `false`, disables the Client API (`/api/v1/...`). The Orchestrator will only accept tasks from a parent via RXON (Worker Interface). | `true` |
 | `REDIS_HOST` | Hostname of the Redis server. Required for production. | `""` (MemoryStorage) |
 | `REDIS_PORT` | Redis server port. | `6379` |
 | `REDIS_DB` | Redis database index. | `0` |
@@ -161,6 +162,18 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
+
+### Security & TLS (mTLS)
+
+Configure these variables to enable HTTPS and Mutual TLS (Zero Trust).
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `TLS_ENABLED` | Enable HTTPS server. | `false` |
+| `TLS_CERT_PATH` | Path to the server's SSL certificate (`.crt`). Required if TLS enabled. | `""` |
+| `TLS_KEY_PATH` | Path to the server's private key (`.key`). Required if TLS enabled. | `""` |
+| `TLS_CA_PATH` | Path to the CA certificate bundle to verify client certificates. | `""` |
+| `TLS_REQUIRE_CLIENT_CERT` | If `true`, the server will reject connections without a valid client certificate (mTLS). | `false` |
 
 ### S3 Storage (Optional)
 

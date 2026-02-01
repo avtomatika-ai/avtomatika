@@ -48,6 +48,16 @@ except ImportError:
     TraceContextTextMapPropagator = NoOpTraceContextTextMapPropagator()  # Instantiate the class
 
 from .app_keys import S3_SERVICE_KEY
+from .constants import (
+    JOB_STATUS_ERROR,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_FINISHED,
+    JOB_STATUS_PENDING,
+    JOB_STATUS_QUARANTINED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_WAITING_FOR_PARALLEL,
+    JOB_STATUS_WAITING_FOR_WORKER,
+)
 from .context import ActionFactory
 from .data_types import ClientConfig, JobContext
 from .history.base import HistoryStorageBase
@@ -59,7 +69,7 @@ logger = getLogger(
     __name__
 )  # Re-declare logger after potential redefinition in except block if opentelemetry was missing
 
-TERMINAL_STATES = {"finished", "failed", "error", "quarantined"}
+TERMINAL_STATES = {JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_ERROR, JOB_STATUS_QUARANTINED}
 
 
 class JobExecutor:
@@ -263,7 +273,7 @@ class JobExecutor:
         # When transitioning to a new state, reset the retry counter.
         job_state["retry_count"] = 0
         job_state["current_state"] = next_state
-        job_state["status"] = "running"
+        job_state["status"] = JOB_STATUS_RUNNING
         await self.storage.save_job_state(job_id, job_state)
 
         if next_state not in TERMINAL_STATES:
@@ -280,11 +290,7 @@ class JobExecutor:
                     create_task(task_files.cleanup())
 
             await self._check_and_resume_parent(job_state)
-            # Send webhook for finished/failed jobs
-            event_type = "job_finished" if next_state == "finished" else "job_failed"
-            # Since _check_and_resume_parent is for sub-jobs, we only send webhook if it's a top-level job
-            # or if the user explicitly requested it for sub-jobs (by providing webhook_url).
-            # The current logic stores webhook_url in job_state, so we just check it.
+            event_type = "job_finished" if next_state == JOB_STATUS_FINISHED else "job_failed"
             await self.engine.send_job_webhook(job_state, event_type)
 
     async def _handle_dispatch(
@@ -313,21 +319,15 @@ class JobExecutor:
             logger.info(f"Job {job_id} is now paused, awaiting human approval.")
         else:
             logger.info(f"Job {job_id} dispatching task: {task_info}")
-
             now = monotonic()
-            # Safely get timeout, falling back to the global config if not provided in the task.
-            # This prevents TypeErrors if 'timeout_seconds' is missing.
             timeout_seconds = task_info.get("timeout_seconds") or self.engine.config.WORKER_TIMEOUT_SECONDS
             timeout_at = now + timeout_seconds
-
-            # Set status to waiting and add to watch list *before* dispatching
-            job_state["status"] = "waiting_for_worker"
+            job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
             job_state["task_dispatched_at"] = now
             job_state["current_task_info"] = task_info  # Save for retries
             job_state["current_task_transitions"] = task_info.get("transitions", {})
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.add_job_to_watch(job_id, timeout_at)
-
             await self.dispatcher.dispatch(job_state, task_info)
 
     async def _handle_run_blueprint(
@@ -355,7 +355,7 @@ class JobExecutor:
             "blueprint_name": sub_blueprint_info["blueprint_name"],
             "current_state": "start",
             "initial_data": sub_blueprint_info["initial_data"],
-            "status": "pending",
+            "status": JOB_STATUS_PENDING,
             "parent_job_id": parent_job_id,
         }
         await self.storage.save_job_state(child_job_id, child_job_state)
@@ -388,7 +388,7 @@ class JobExecutor:
         branch_task_ids = [str(uuid4()) for _ in tasks_to_dispatch]
 
         # Update job state for parallel execution
-        job_state["status"] = "waiting_for_parallel_tasks"
+        job_state["status"] = JOB_STATUS_WAITING_FOR_PARALLEL
         job_state["aggregation_target"] = aggregate_into
         job_state["active_branches"] = branch_task_ids
         job_state["aggregation_results"] = {}
@@ -466,7 +466,7 @@ class JobExecutor:
             logger.critical(
                 f"Job {job_id} has failed handler execution {max_retries + 1} times. Moving to quarantine.",
             )
-            job_state["status"] = "quarantined"
+            job_state["status"] = JOB_STATUS_QUARANTINED
             job_state["error_message"] = str(error)
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.quarantine_job(job_id)
@@ -499,7 +499,7 @@ class JobExecutor:
             return
 
         # Determine the outcome of the child job to select the correct transition.
-        child_outcome = "success" if child_job_state["current_state"] == "finished" else "failure"
+        child_outcome = "success" if child_job_state["current_state"] == JOB_STATUS_FINISHED else "failure"
         transitions = parent_job_state.get("current_task_transitions", {})
         next_state = transitions.get(child_outcome, "failed")
 
@@ -514,7 +514,7 @@ class JobExecutor:
 
         # Update the parent job to its new state and re-enqueue it.
         parent_job_state["current_state"] = next_state
-        parent_job_state["status"] = "running"
+        parent_job_state["status"] = JOB_STATUS_RUNNING
         await self.storage.save_job_state(parent_job_id, parent_job_state)
         await self.storage.enqueue_job(parent_job_id)
 

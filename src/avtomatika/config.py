@@ -25,6 +25,7 @@ class Config:
         # API server settings
         self.API_HOST: str = getenv("API_HOST", "0.0.0.0")
         self.API_PORT: int = int(getenv("API_PORT", 8080))
+        self.ENABLE_CLIENT_API: bool = getenv("ENABLE_CLIENT_API", "true").lower() == "true"
 
         # Security settings
         self.CLIENT_TOKEN: str = getenv(
@@ -32,6 +33,13 @@ class Config:
             "secure-orchestrator-token",
         )
         self.GLOBAL_WORKER_TOKEN: str = getenv("GLOBAL_WORKER_TOKEN", "secure-worker-token")
+
+        # TLS / mTLS settings
+        self.TLS_ENABLED: bool = getenv("TLS_ENABLED", "false").lower() == "true"
+        self.TLS_CERT_PATH: str = getenv("TLS_CERT_PATH", "")
+        self.TLS_KEY_PATH: str = getenv("TLS_KEY_PATH", "")
+        self.TLS_CA_PATH: str = getenv("TLS_CA_PATH", "")
+        self.TLS_REQUIRE_CLIENT_CERT: bool = getenv("TLS_REQUIRE_CLIENT_CERT", "false").lower() == "true"
 
         # Logging settings
         self.LOG_LEVEL: str = getenv("LOG_LEVEL", "INFO").upper()
