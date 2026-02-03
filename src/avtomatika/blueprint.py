@@ -62,7 +62,8 @@ class ConditionalHandler:
         try:
             context_area = getattr(context, self.condition.area)
             actual_value = context_area[self.condition.field]
-            return self.condition.op(actual_value, self.condition.value)
+            result = self.condition.op(actual_value, self.condition.value)
+            return bool(result)
         except (AttributeError, KeyError):
             return False
 
@@ -279,7 +280,7 @@ class StateMachineBlueprint:
             f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context.",
         )
 
-    def render_graph(self, output_filename: str | None = None, output_format: str = "png"):
+    def render_graph(self, output_filename: str | None = None, output_format: str = "png") -> str | None:
         from graphviz import Digraph  # type: ignore[import]
 
         dot = Digraph(comment=f"State Machine for {self.name}")

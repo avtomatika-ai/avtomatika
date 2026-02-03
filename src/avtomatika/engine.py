@@ -1,7 +1,7 @@
 from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import create_task, gather, get_running_loop, wait_for
 from logging import getLogger
-from typing import Any
+from typing import Any, Optional
 from uuid import uuid4
 
 from aiohttp import ClientSession, web
@@ -58,7 +58,7 @@ def json_dumps(obj: Any) -> str:
     return dumps(obj).decode("utf-8")
 
 
-def json_response(data, **kwargs: Any) -> web.Response:
+def json_response(data: Any, **kwargs: Any) -> web.Response:
     return web.json_response(data, dumps=json_dumps, **kwargs)
 
 
@@ -70,11 +70,15 @@ class OrchestratorEngine:
         self.config = config
         self.blueprints: dict[str, StateMachineBlueprint] = {}
         self.history_storage: HistoryStorageBase = NoOpHistoryStorage()
-        self.ws_manager = WebSocketManager()
+        self.ws_manager = WebSocketManager(self.storage)
         self.app = web.Application(middlewares=[compression_middleware])
         self.app[ENGINE_KEY] = self
-        self.worker_service = None
+        self.worker_service: Optional[WorkerService] = None
         self._setup_done = False
+        self.webhook_sender: WebhookSender
+        self.dispatcher: Dispatcher
+        self.runner: web.AppRunner
+        self.site: web.TCPSite
 
         from rxon import HttpListener
 
@@ -175,6 +179,9 @@ class OrchestratorEngine:
             raise web.HTTPUnauthorized(text=str(e)) from e
         except ValueError as e:
             raise web.HTTPBadRequest(text=str(e)) from e
+
+        if self.worker_service is None:
+            raise web.HTTPInternalServerError(text="WorkerService is not initialized.")
 
         if message_type == "register":
             return await self.worker_service.register_worker(payload)
@@ -352,6 +359,7 @@ class OrchestratorEngine:
         initial_data: dict[str, Any],
         source: str = "internal",
         tracing_context: dict[str, str] | None = None,
+        data_metadata: dict[str, Any] | None = None,
     ) -> str:
         """Creates a job directly, bypassing the HTTP API layer.
         Useful for internal schedulers and triggers.
@@ -377,6 +385,7 @@ class OrchestratorEngine:
             "status": JOB_STATUS_PENDING,
             "tracing_context": tracing_context or {},
             "client_config": client_config,
+            "data_metadata": data_metadata or {},
         }
         await self.storage.save_job_state(job_id, job_state)
         await self.storage.enqueue_job(job_id)

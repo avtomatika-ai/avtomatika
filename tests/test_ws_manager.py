@@ -11,8 +11,15 @@ logger = getLogger(__name__)
 
 
 @pytest.fixture
-def manager():
-    return WebSocketManager()
+def storage():
+    storage_mock = AsyncMock()
+    storage_mock.update_job_state = AsyncMock()
+    return storage_mock
+
+
+@pytest.fixture
+def manager(storage):
+    return WebSocketManager(storage)
 
 
 @pytest.mark.asyncio
@@ -58,11 +65,18 @@ async def test_ws_manager_send_command_fails(manager):
 
 
 @pytest.mark.asyncio
-async def test_handle_message_progress(manager, caplog):
+async def test_handle_message_progress(manager, storage):
+    """Tests that progress messages update the storage."""
     worker_id = "worker-1"
-    message = {"event": MSG_TYPE_PROGRESS, "job_id": "job-1", "progress": 0.5}
+    job_id = "job-1"
+    progress = 0.5
+    message = "Processing..."
 
-    await manager.handle_message(worker_id, message)
+    msg_payload = {"event": MSG_TYPE_PROGRESS, "job_id": job_id, "progress": progress, "message": message}
+
+    await manager.handle_message(worker_id, msg_payload)
+
+    storage.update_job_state.assert_called_once_with(job_id, {"progress": progress, "progress_message": message})
 
 
 @pytest.mark.asyncio

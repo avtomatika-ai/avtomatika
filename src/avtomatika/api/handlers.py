@@ -25,11 +25,11 @@ from ..worker_config_loader import load_worker_configs_to_redis
 logger = getLogger(__name__)
 
 
-def json_dumps(obj) -> str:
+def json_dumps(obj: Any) -> str:
     return dumps(obj).decode("utf-8")
 
 
-def json_response(data, **kwargs) -> web.Response:
+def json_response(data: Any, **kwargs: Any) -> web.Response:
     return web.json_response(data, dumps=json_dumps, **kwargs)
 
 

@@ -184,6 +184,9 @@ class Dispatcher:
             selected_worker = self._select_default(capable_workers, task_type)
 
         worker_id = selected_worker.get("worker_id")
+        if not worker_id:
+            raise RuntimeError(f"Selected worker for task '{task_type}' has no worker_id")
+
         logger.info(
             f"Dispatching task '{task_type}' to worker {worker_id} (strategy: {dispatch_strategy})",
         )

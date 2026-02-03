@@ -95,7 +95,7 @@ class RedisStorage(StorageBackend):
         self,
         job_id: str,
         update_data: dict[str, Any],
-    ) -> dict[Any, Any] | None | Any:
+    ) -> dict[str, Any]:
         """Atomically update the job state in Redis using a transaction."""
         key = self._get_key(job_id)
 
@@ -104,7 +104,7 @@ class RedisStorage(StorageBackend):
                 try:
                     await pipe.watch(key)
                     current_state_raw = await pipe.get(key)
-                    current_state = self._unpack(current_state_raw) if current_state_raw else {}
+                    current_state: dict[str, Any] = self._unpack(current_state_raw) if current_state_raw else {}
                     current_state.update(update_data)
 
                     pipe.multi()
@@ -147,7 +147,7 @@ class RedisStorage(StorageBackend):
         key = f"orchestrator:worker:info:{worker_id}"
         tasks_key = f"orchestrator:worker:tasks:{worker_id}"
 
-        tasks = await self._redis.smembers(tasks_key)  # type: ignore
+        tasks = await self._redis.smembers(tasks_key)  # type: ignore[var-annotated]
 
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.delete(key)
@@ -156,7 +156,7 @@ class RedisStorage(StorageBackend):
             pipe.srem("orchestrator:index:workers:idle", worker_id)
 
             for task in tasks:
-                task_str = task.decode("utf-8") if isinstance(task, bytes) else task
+                task_str = task.decode("utf-8") if isinstance(task, bytes) else str(task)
                 pipe.srem(f"orchestrator:index:workers:task:{task_str}", worker_id)
 
             await pipe.execute()
@@ -204,8 +204,8 @@ class RedisStorage(StorageBackend):
         """Finds idle workers that support the given task using set intersection."""
         task_index = f"orchestrator:index:workers:task:{task_type}"
         idle_index = "orchestrator:index:workers:idle"
-        worker_ids = await self._redis.sinter(task_index, idle_index)  # type: ignore
-        return [wid.decode("utf-8") if isinstance(wid, bytes) else wid for wid in worker_ids]
+        worker_ids = await self._redis.sinter(task_index, idle_index)  # type: ignore[var-annotated]
+        return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
 
     async def enqueue_task_for_worker(self, worker_id: str, task_payload: dict[str, Any], priority: float) -> None:
         key = f"orchestrator:task_queue:{worker_id}"
@@ -274,13 +274,14 @@ class RedisStorage(StorageBackend):
         existence = await pipe.execute()
         dead_ids = [worker_ids[i] for i, exists in enumerate(existence) if not exists]
         for wid in dead_ids:
-            tasks = await self._redis.smembers(f"orchestrator:worker:tasks:{wid}")  # type: ignore
+            tasks = await self._redis.smembers(f"orchestrator:worker:tasks:{wid}")  # type: ignore[var-annotated]
             async with self._redis.pipeline(transaction=True) as p:
                 p.delete(f"orchestrator:worker:tasks:{wid}")
                 p.srem("orchestrator:index:workers:all", wid)
                 p.srem("orchestrator:index:workers:idle", wid)
                 for t in tasks:
-                    p.srem(f"orchestrator:index:workers:task:{t.decode() if isinstance(t, bytes) else t}", wid)
+                    t_str = t.decode() if isinstance(t, bytes) else str(t)
+                    p.srem(f"orchestrator:index:workers:task:{t_str}", wid)
                 await p.execute()
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:

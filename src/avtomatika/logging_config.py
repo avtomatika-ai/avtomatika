@@ -1,6 +1,7 @@
 from datetime import datetime
 from logging import DEBUG, Formatter, StreamHandler, getLogger
 from sys import stdout
+from typing import Any, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from pythonjsonlogger import json
@@ -9,14 +10,22 @@ from pythonjsonlogger import json
 class TimezoneFormatter(Formatter):
     """Formatter that respects a custom timezone."""
 
-    def __init__(self, fmt=None, datefmt=None, style="%", validate=True, *, tz_name="UTC"):
+    def __init__(
+        self,
+        fmt: Optional[str] = None,
+        datefmt: Optional[str] = None,
+        style: Literal["%", "{", "$"] = "%",
+        validate: bool = True,
+        *,
+        tz_name: str = "UTC",
+    ) -> None:
         super().__init__(fmt, datefmt, style, validate)
         self.tz = ZoneInfo(tz_name)
 
-    def converter(self, timestamp):
+    def converter(self, timestamp: float) -> datetime:  # type: ignore[override]
         return datetime.fromtimestamp(timestamp, self.tz)
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: Any, datefmt: Optional[str] = None) -> str:
         dt = self.converter(record.created)
         if datefmt:
             s = dt.strftime(datefmt)
@@ -28,14 +37,14 @@ class TimezoneFormatter(Formatter):
         return s
 
 
-class TimezoneJsonFormatter(json.JsonFormatter):
+class TimezoneJsonFormatter(json.JsonFormatter):  # type: ignore[name-defined]
     """JSON Formatter that respects a custom timezone."""
 
-    def __init__(self, *args, tz_name="UTC", **kwargs):
+    def __init__(self, *args: Any, tz_name: str = "UTC", **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.tz = ZoneInfo(tz_name)
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: Any, datefmt: Optional[str] = None) -> str:
         # Override formatTime to use timezone-aware datetime
         dt = datetime.fromtimestamp(record.created, self.tz)
         if datefmt:
@@ -44,7 +53,7 @@ class TimezoneJsonFormatter(json.JsonFormatter):
         return dt.isoformat()
 
 
-def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: str = "UTC"):
+def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: str = "UTC") -> None:
     """Configures structured logging for the entire application."""
     logger = getLogger("avtomatika")
     logger.setLevel(log_level)

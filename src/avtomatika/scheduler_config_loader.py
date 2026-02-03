@@ -22,14 +22,17 @@ def load_schedules_from_file(file_path: str) -> list[ScheduledJobConfig]:
 
     schedules = []
     for name, config in data.items():
-        # Skip sections that might be metadata (though TOML structure usually implies all top-level keys are jobs)
         if not isinstance(config, dict):
             continue
+
+        blueprint = config.get("blueprint")
+        if not isinstance(blueprint, str):
+            raise ValueError(f"Schedule '{name}' is missing a 'blueprint' name.")
 
         schedules.append(
             ScheduledJobConfig(
                 name=name,
-                blueprint=config.get("blueprint"),
+                blueprint=blueprint,
                 input_data=config.get("input_data", {}),
                 interval_seconds=config.get("interval_seconds"),
                 daily_at=config.get("daily_at"),

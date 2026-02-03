@@ -581,12 +581,11 @@ async def test_worker_no_token_failure(aiohttp_client, app):
 @pytest.mark.asyncio
 async def test_progress_update_handling(aiohttp_client, app):
     client = await aiohttp_client(app)
-    engine: OrchestratorEngine = app[ENGINE_KEY]
-
-    handle_message_spy = AsyncMock(wraps=engine.ws_manager.handle_message)
-    engine.ws_manager.handle_message = handle_message_spy
+    storage = app[STORAGE_KEY]
 
     worker_id = "progress-worker"
+    job_id = "job-456"
+    await storage.save_job_state(job_id, {"id": job_id, "status": "running", "blueprint_name": "test_bp"})
     async with client.ws_connect(
         f"/_worker/ws/{worker_id}", headers={AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     ) as ws:
@@ -594,12 +593,15 @@ async def test_progress_update_handling(aiohttp_client, app):
             "type": "event",
             "event": "progress_update",
             "task_id": "task-123",
-            "job_id": "job-456",
-            "progress": 0.5,
-            "message": "Halfway done!",
+            "job_id": job_id,
+            "progress": 0.75,
+            "message": "Almost there!",
         }
         await ws.send_json(progress_payload)
 
         await asyncio.sleep(0.1)
 
-    handle_message_spy.assert_called_once_with(worker_id, progress_payload)
+    updated_state = await storage.get_job_state(job_id)
+    assert updated_state is not None
+    assert updated_state["progress"] == 0.75
+    assert updated_state["progress_message"] == "Almost there!"

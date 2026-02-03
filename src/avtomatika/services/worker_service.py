@@ -10,9 +10,11 @@ from rxon.validators import validate_identifier
 from ..app_keys import S3_SERVICE_KEY
 from ..config import Config
 from ..constants import (
+    ERROR_CODE_DEPENDENCY,
     ERROR_CODE_INTEGRITY_MISMATCH,
     ERROR_CODE_INVALID_INPUT,
     ERROR_CODE_PERMANENT,
+    ERROR_CODE_SECURITY,
     ERROR_CODE_TRANSIENT,
     JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
@@ -214,9 +216,9 @@ class WorkerService:
         job_id = job_state["id"]
         logger.warning(f"Task {task_id} for job {job_id} failed with error type '{error_type}'.")
 
-        if error_type == ERROR_CODE_PERMANENT:
+        if error_type in (ERROR_CODE_PERMANENT, ERROR_CODE_SECURITY, ERROR_CODE_DEPENDENCY):
             job_state["status"] = JOB_STATUS_QUARANTINED
-            job_state["error_message"] = f"Task failed with permanent error: {error_message}"
+            job_state["error_message"] = f"Task failed with permanent error ({error_type}): {error_message}"
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.quarantine_job(job_id)
         elif error_type == ERROR_CODE_INVALID_INPUT:
@@ -230,7 +232,6 @@ class WorkerService:
             logger.critical(f"Data integrity mismatch detected for job {job_id}: {error_message}")
         else:
             await self.engine.handle_task_failure(job_state, task_id, error_message)
-
         return "result_accepted_failure"
 
     async def issue_access_token(self, worker_id: str) -> TokenResponse:

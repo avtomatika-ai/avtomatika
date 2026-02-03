@@ -1,8 +1,8 @@
-from asyncio import CancelledError, Queue, QueueFull, create_task, sleep
+from asyncio import CancelledError, Queue, QueueFull, Task, create_task, sleep
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from logging import getLogger
-from typing import Any
+from typing import Any, Optional
 
 from aiohttp import ClientSession, ClientTimeout
 
@@ -24,7 +24,7 @@ class WebhookSender:
         self.timeout = ClientTimeout(total=10)
         self.max_retries = 3
         self._queue: Queue[tuple[str, WebhookPayload]] = Queue(maxsize=1000)
-        self._worker_task = None
+        self._worker_task: Optional[Task[None]] = None
 
     def start(self) -> None:
         if not self._worker_task:

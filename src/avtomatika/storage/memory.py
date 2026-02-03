@@ -12,12 +12,12 @@ class MemoryStorage(StorageBackend):
     Not persistent.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._jobs: dict[str, dict[str, Any]] = {}
         self._workers: dict[str, dict[str, Any]] = {}
         self._worker_ttls: dict[str, float] = {}
-        self._worker_task_queues: dict[str, PriorityQueue] = {}
-        self._job_queue = Queue()
+        self._worker_task_queues: dict[str, PriorityQueue[Any]] = {}
+        self._job_queue: Queue[str] = Queue()
         self._quarantine_queue: list[str] = []
         self._watched_jobs: dict[str, float] = {}
         self._client_configs: dict[str, dict[str, Any]] = {}

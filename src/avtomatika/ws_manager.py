@@ -5,6 +5,7 @@ from typing import Any
 from aiohttp import web
 
 from .constants import MSG_TYPE_PROGRESS
+from .storage.base import StorageBackend
 
 logger = getLogger(__name__)
 
@@ -12,9 +13,10 @@ logger = getLogger(__name__)
 class WebSocketManager:
     """Manages active WebSocket connections from workers."""
 
-    def __init__(self) -> None:
+    def __init__(self, storage: StorageBackend) -> None:
         self._connections: dict[str, web.WebSocketResponse] = {}
         self._lock = Lock()
+        self.storage = storage
 
     async def register(self, worker_id: str, ws: web.WebSocketResponse) -> None:
         """Registers a new WebSocket connection for a worker."""
@@ -48,15 +50,21 @@ class WebSocketManager:
                 logger.warning(f"Cannot send command: No active WebSocket connection for worker {worker_id}.")
                 return False
 
-    @staticmethod
-    async def handle_message(worker_id: str, message: dict[str, Any]) -> None:
+    async def handle_message(self, worker_id: str, message: dict[str, Any]) -> None:
         """Handles an incoming message from a worker."""
         event_type = message.get("event")
         if event_type == MSG_TYPE_PROGRESS:
+            job_id = message.get("job_id")
+            progress = message.get("progress", 0)
+            msg_text = message.get("message", "")
             logger.info(
-                f"Received progress update from worker {worker_id} for job {message.get('job_id')}: "
-                f"{message.get('progress', 0) * 100:.0f}% - {message.get('message', '')}"
+                f"Received progress update from worker {worker_id} for job {job_id}: {progress * 100:.0f}% - {msg_text}"
             )
+            if job_id:
+                try:
+                    await self.storage.update_job_state(job_id, {"progress": progress, "progress_message": msg_text})
+                except Exception as e:
+                    logger.error(f"Failed to update progress for job {job_id}: {e}")
         else:
             logger.debug(f"Received unhandled event from worker {worker_id}: {event_type}")
 

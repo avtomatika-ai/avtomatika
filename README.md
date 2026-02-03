@@ -438,9 +438,15 @@ For detailed specifications and examples, please refer to the [**Configuration G
 
 The orchestrator has built-in mechanisms for handling failures based on the `error.code` field in a worker's response.
 
-*   **TRANSIENT_ERROR**: A temporary error (e.g., network failure, rate limit). The orchestrator will automatically retry the task several times.
-*   **PERMANENT_ERROR**: A permanent error (e.g., a corrupted file). The task will be immediately sent to quarantine for manual investigation.
+*   **TRANSIENT_ERROR**: A temporary error (e.g., network failure). The orchestrator will automatically retry the task several times.
+*   **RESOURCE_EXHAUSTED_ERROR / TIMEOUT_ERROR / INTERNAL_ERROR**: Treated as transient errors and retried.
+*   **PERMANENT_ERROR**: A permanent error. The task will be immediately sent to quarantine.
+*   **SECURITY_ERROR / DEPENDENCY_ERROR**: Treated as permanent errors (e.g., security violation or missing model). Immediate quarantine.
 *   **INVALID_INPUT_ERROR**: An error in the input data. The entire pipeline (Job) will be immediately moved to the failed state.
+
+### Progress Tracking
+
+Workers can report real-time execution progress (0-100%) and status messages. This information is automatically persisted by the Orchestrator and exposed via the Job Status API (`GET /api/v1/jobs/{job_id}`).
 
 ### Concurrency & Performance
 
