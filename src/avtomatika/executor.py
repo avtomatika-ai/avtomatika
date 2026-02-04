@@ -238,6 +238,9 @@ class JobExecutor:
                             action_factory.sub_blueprint_to_run,
                             duration_ms,
                         )
+                    elif job_state["current_state"] in blueprint.end_states:
+                        status = JOB_STATUS_FINISHED if job_state["current_state"] == "finished" else JOB_STATUS_FAILED
+                        await self._handle_terminal_reached(job_state, status, duration_ms)
 
                 except Exception as e:
                     # This catches errors within the handler's execution.
@@ -247,6 +250,40 @@ class JobExecutor:
             await self.storage.ack_job(message_id)
             if message_id in self._processing_messages:
                 self._processing_messages.remove(message_id)
+
+    async def _handle_terminal_reached(
+        self,
+        job_state: dict[str, Any],
+        status: str,
+        duration_ms: int,
+    ) -> None:
+        job_id = job_state["id"]
+        current_state = job_state["current_state"]
+        logger.info(f"Job {job_id} reached terminal state '{current_state}' with status '{status}'")
+
+        await self.history_storage.log_job_event(
+            {
+                "job_id": job_id,
+                "state": current_state,
+                "event_type": "job_completed",
+                "duration_ms": duration_ms,
+                "context_snapshot": job_state,
+            },
+        )
+
+        job_state["status"] = status
+        await self.storage.save_job_state(job_id, job_state)
+
+        # Clean up S3 files if service is available
+        s3_service = self.engine.app.get(S3_SERVICE_KEY)
+        if s3_service:
+            task_files = s3_service.get_task_files(job_id)
+            if task_files:
+                create_task(task_files.cleanup())
+
+        await self._check_and_resume_parent(job_state)
+        event_type = "job_finished" if status == JOB_STATUS_FINISHED else "job_failed"
+        await self.engine.send_job_webhook(job_state, event_type)
 
     async def _handle_transition(
         self,
@@ -270,28 +307,11 @@ class JobExecutor:
             },
         )
 
-        # When transitioning to a new state, reset the retry counter.
         job_state["retry_count"] = 0
         job_state["current_state"] = next_state
         job_state["status"] = JOB_STATUS_RUNNING
         await self.storage.save_job_state(job_id, job_state)
-
-        if next_state not in TERMINAL_STATES:
-            await self.storage.enqueue_job(job_id)
-        else:
-            logger.info(f"Job {job_id} reached terminal state {next_state}")
-
-            # Clean up S3 files if service is available
-            s3_service = self.engine.app.get(S3_SERVICE_KEY)
-            if s3_service:
-                task_files = s3_service.get_task_files(job_id)
-                if task_files:
-                    # Run cleanup in background to not block response
-                    create_task(task_files.cleanup())
-
-            await self._check_and_resume_parent(job_state)
-            event_type = "job_finished" if next_state == JOB_STATUS_FINISHED else "job_failed"
-            await self.engine.send_job_webhook(job_state, event_type)
+        await self.storage.enqueue_job(job_id)
 
     async def _handle_dispatch(
         self,

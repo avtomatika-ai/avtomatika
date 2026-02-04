@@ -91,6 +91,20 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def update_job_state_atomic(
+        self,
+        job_id: str,
+        update_callback: Any,
+    ) -> dict[str, Any]:
+        """Atomically update the state of a job using a callback function.
+
+        :param job_id: Unique identifier for the job.
+        :param update_callback: A callable that takes the current state and returns the updated state.
+        :return: The updated full state of the job.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def register_worker(
         self,
         worker_id: str,

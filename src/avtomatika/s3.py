@@ -335,12 +335,11 @@ class S3Service:
         try:
             self._store = S3Store(
                 bucket=self.config.S3_DEFAULT_BUCKET,
-                access_key_id=self.config.S3_ACCESS_KEY,
-                secret_access_key=self.config.S3_SECRET_KEY,
+                aws_access_key_id=self.config.S3_ACCESS_KEY,
+                aws_secret_access_key=self.config.S3_SECRET_KEY,
                 region=self.config.S3_REGION,
                 endpoint=self.config.S3_ENDPOINT_URL,
                 allow_http="http://" in self.config.S3_ENDPOINT_URL,
-                force_path_style=True,
             )
             self._semaphore = Semaphore(self.config.S3_MAX_CONCURRENCY)
             logger.info(

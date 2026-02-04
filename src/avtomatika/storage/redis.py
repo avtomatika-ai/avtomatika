@@ -97,6 +97,19 @@ class RedisStorage(StorageBackend):
         update_data: dict[str, Any],
     ) -> dict[str, Any]:
         """Atomically update the job state in Redis using a transaction."""
+
+        def _merge(state: dict[str, Any]) -> dict[str, Any]:
+            state.update(update_data)
+            return state
+
+        return await self.update_job_state_atomic(job_id, _merge)
+
+    async def update_job_state_atomic(
+        self,
+        job_id: str,
+        update_callback: Any,
+    ) -> dict[str, Any]:
+        """Atomically update the job state in Redis using a transaction and callback."""
         key = self._get_key(job_id)
 
         async with self._redis.pipeline(transaction=True) as pipe:
@@ -105,12 +118,11 @@ class RedisStorage(StorageBackend):
                     await pipe.watch(key)
                     current_state_raw = await pipe.get(key)
                     current_state: dict[str, Any] = self._unpack(current_state_raw) if current_state_raw else {}
-                    current_state.update(update_data)
-
+                    updated_state = update_callback(current_state)
                     pipe.multi()
-                    pipe.set(key, self._pack(current_state))
+                    pipe.set(key, self._pack(updated_state))
                     await pipe.execute()
-                    return current_state
+                    return updated_state
                 except WatchError:
                     continue
 

@@ -104,7 +104,6 @@ class WorkerService:
 
         job_id = result_payload.get("job_id")
         task_id = result_payload.get("task_id")
-        result_data = result_payload.get("result", {})
 
         if not job_id or not task_id:
             raise ValueError("job_id and task_id are required")
@@ -113,25 +112,33 @@ class WorkerService:
         if not job_state:
             raise LookupError("Job not found")
 
+        result_status = result_payload.get("status", TASK_STATUS_SUCCESS)
+        worker_data_content = result_payload.get("data")
+
         if job_state.get("status") == JOB_STATUS_WAITING_FOR_PARALLEL:
             await self.storage.remove_job_from_watch(f"{job_id}:{task_id}")
-            job_state.setdefault("aggregation_results", {})[task_id] = result_data
 
-            branches = job_state.setdefault("active_branches", [])
-            if task_id in branches:
-                branches.remove(task_id)
+            def _update_parallel_results(state: dict[str, Any]) -> dict[str, Any]:
+                state.setdefault("aggregation_results", {})[task_id] = result_payload
+                branches = state.setdefault("active_branches", [])
+                if task_id in branches:
+                    branches.remove(task_id)
 
-            if not branches:
+                if not branches:
+                    state["status"] = JOB_STATUS_RUNNING
+                    state["current_state"] = state["aggregation_target"]
+                return state
+
+            updated_job_state = await self.storage.update_job_state_atomic(job_id, _update_parallel_results)
+
+            if not updated_job_state.get("active_branches"):
                 logger.info(f"All parallel branches for job {job_id} have completed.")
-                job_state["status"] = JOB_STATUS_RUNNING
-                job_state["current_state"] = job_state["aggregation_target"]
-                await self.storage.save_job_state(job_id, job_state)
                 await self.storage.enqueue_job(job_id)
             else:
+                remaining = len(updated_job_state["active_branches"])
                 logger.info(
-                    f"Branch {task_id} for job {job_id} completed. Waiting for {len(branches)} more.",
+                    f"Branch {task_id} for job {job_id} completed. Waiting for {remaining} more.",
                 )
-                await self.storage.save_job_state(job_id, job_state)
 
             return "parallel_branch_result_accepted"
 
@@ -148,14 +155,12 @@ class WorkerService:
                 "event_type": "task_finished",
                 "duration_ms": duration_ms,
                 "worker_id": authenticated_worker_id,
-                "context_snapshot": {**job_state, "result": result_data},
+                "context_snapshot": {**job_state, "result": result_payload},
             },
         )
 
-        result_status = result_data.get("status", TASK_STATUS_SUCCESS)  # Default to success? Constant?
-
         if result_status == TASK_STATUS_FAILURE:
-            return await self._handle_task_failure(job_state, task_id, result_data)
+            return await self._handle_task_failure(job_state, task_id, result_payload)
 
         if result_status == TASK_STATUS_CANCELLED:
             logger.info(f"Task {task_id} for job {job_id} was cancelled by worker.")
@@ -171,13 +176,11 @@ class WorkerService:
             return "result_accepted_cancelled"
 
         transitions = job_state.get("current_task_transitions", {})
-        result_status = result_data.get("status", TASK_STATUS_SUCCESS)
         next_state = transitions.get(result_status)
 
         if next_state:
             logger.info(f"Job {job_id} transitioning based on worker status '{result_status}' to state '{next_state}'")
 
-            worker_data_content = result_data.get("data")
             if worker_data_content and isinstance(worker_data_content, dict):
                 if "state_history" not in job_state:
                     job_state["state_history"] = {}
@@ -202,8 +205,8 @@ class WorkerService:
             await self.storage.save_job_state(job_id, job_state)
             return "result_accepted_failure"
 
-    async def _handle_task_failure(self, job_state: dict, task_id: str, result_data: dict) -> str:
-        error_details = result_data.get("error", {})
+    async def _handle_task_failure(self, job_state: dict, task_id: str, result_payload: dict) -> str:
+        error_details = result_payload.get("error", {})
         error_type = ERROR_CODE_TRANSIENT
         error_message = "No error details provided."
 

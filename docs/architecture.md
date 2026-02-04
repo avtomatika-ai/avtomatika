@@ -137,7 +137,7 @@ This is the main background process responsible for executing jobs.
 - **Fault Tolerance:** Implements retry logic and moving failed tasks to quarantine. The Orchestrator handles errors from workers based on their type, allowing flexible management of failed tasks.
 
   **Error Types Returned by Worker:**
-  A worker can return one of three error types in the `result.error.code` field:
+  A worker can return one of three error types in the `error.code` field:
   - `TRANSIENT_ERROR` (Default): Indicates a temporary problem (e.g., network failure, external service unavailability). The Orchestrator will **retry** dispatching the task several times before moving it to quarantine.
   - `PERMANENT_ERROR`: Indicates a permanent problem that will not be resolved by retrying (e.g., corrupted file, incompatible version). The task will be immediately **moved to quarantine** without retries.
   - `INVALID_INPUT_ERROR`: Indicates a fundamental problem with the task input data (invalid format, missing parameters). The `Job` to which the task belongs will be immediately **moved to the `failed` state**, as further execution is pointless.

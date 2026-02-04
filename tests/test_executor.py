@@ -13,6 +13,9 @@ def mock_engine():
     engine.history_storage = AsyncMock()
     engine.dispatcher = AsyncMock()
     engine.blueprints = {}
+    engine.app = MagicMock()
+    engine.app.get.return_value = None  # Disable services by default
+    engine.send_job_webhook = AsyncMock()
     engine.config = MagicMock()
     engine.config.JOB_MAX_RETRIES = 3  # Default max retries for tests
     return engine
@@ -70,7 +73,7 @@ async def test_process_job_calls_webhook(job_executor):
     job_state = {
         "id": job_id,
         "blueprint_name": "webhook-test-bp",
-        "current_state": "start",
+        "current_state": "finished",
         "initial_data": {},
         "state_history": {},
         "client_config": {},

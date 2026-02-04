@@ -147,11 +147,9 @@ These endpoints are used by workers to register, receive tasks, and submit resul
       "job_id": "...",
       "task_id": "...",
       "worker_id": "...",
-      "result": {
-        "status": "success",
-        "data": { "output": "..." },
-        "error": null
-      }
+      "status": "success",
+      "data": { "output": "..." },
+      "error": null
     }
     ```
 -   **Response (`200 OK`):** `{"status": "result_accepted_success"}`

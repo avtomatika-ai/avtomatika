@@ -63,7 +63,8 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
         payload_data = {
             "job_id": job_id,
             "task_id": "some_task",
-            "result": {"status": "failure", "error": {"code": "TRANSIENT_ERROR", "message": "worker failed"}},
+            "status": "failure",
+            "error": {"code": "TRANSIENT_ERROR", "message": "worker failed"},
             "worker_id": "test-worker",
         }
 
@@ -116,12 +117,6 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
     await storage.save_job_state(job_id, initial_job_state)
 
     # 2. Simulate a single permanent failure response
-    payload_data = {
-        "job_id": job_id,
-        "task_id": "some_task",
-        "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "fatal error"}},
-    }
-
     from avtomatika.services.worker_service import WorkerService
 
     worker_service = WorkerService(storage, engine.history_storage, config, engine)
@@ -130,7 +125,8 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
     payload_data = {
         "job_id": job_id,
         "task_id": "some_task",
-        "result": {"status": "failure", "error": {"code": "PERMANENT_ERROR", "message": "fatal error"}},
+        "status": "failure",
+        "error": {"code": "PERMANENT_ERROR", "message": "fatal error"},
         "worker_id": "test-worker",
     }
 
@@ -170,12 +166,6 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
     await storage.save_job_state(job_id, initial_job_state)
 
     # 2. Simulate a single invalid input failure response
-    payload_data = {
-        "job_id": job_id,
-        "task_id": "some_task",
-        "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "bad params"}},
-    }
-
     from avtomatika.services.worker_service import WorkerService
 
     worker_service = WorkerService(storage, engine.history_storage, config, engine)
@@ -184,7 +174,8 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
     payload_data = {
         "job_id": job_id,
         "task_id": "some_task",
-        "result": {"status": "failure", "error": {"code": "INVALID_INPUT_ERROR", "message": "bad params"}},
+        "status": "failure",
+        "error": {"code": "INVALID_INPUT_ERROR", "message": "bad params"},
         "worker_id": "test-worker",
     }
 

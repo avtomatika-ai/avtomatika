@@ -131,7 +131,14 @@ class StateMachineBlueprint:
         self.name = name
         self.api_endpoint = api_endpoint
         self.api_version = api_version
-        self.data_stores: dict[str, AsyncDictStore] = data_stores if data_stores is not None else {}
+        self.data_stores: dict[str, AsyncDictStore] = {}
+        if data_stores:
+            for ds_name, ds_data in data_stores.items():
+                if isinstance(ds_data, AsyncDictStore):
+                    self.data_stores[ds_name] = ds_data
+                else:
+                    self.data_stores[ds_name] = AsyncDictStore(ds_data)
+
         self.handlers: dict[str, Callable] = {}
         self.aggregator_handlers: dict[str, Callable] = {}
         self.conditional_handlers: list[ConditionalHandler] = []

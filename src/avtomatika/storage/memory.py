@@ -62,6 +62,17 @@ class MemoryStorage(StorageBackend):
             self._jobs[job_id].update(update_data)
             return self._jobs[job_id]
 
+    async def update_job_state_atomic(
+        self,
+        job_id: str,
+        update_callback: Any,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            current_state = self._jobs.get(job_id, {})
+            updated_state = update_callback(current_state)
+            self._jobs[job_id] = updated_state
+            return updated_state
+
     async def register_worker(
         self,
         worker_id: str,
