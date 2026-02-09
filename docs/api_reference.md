@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/api_reference.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/api_reference.md)
+
 # Orchestrator API Reference
 
 This document describes all HTTP endpoints provided by the Orchestrator server. The API is divided into three logical groups: Public, Client, and Internal (for Workers).
@@ -65,6 +67,7 @@ These endpoints are designed for external systems that initiate and monitor work
     *   `initial_data` (object, optional): Initial data for the job.
     *   `webhook_url` (string, optional): URL to receive asynchronous notifications about job completion, failure, or quarantine.
 -   **Response (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
+-   **Response (`429 Too Many Requests`):** If the client or IP exceeds the configured rate limit.
 
 ### Get Job Status
 

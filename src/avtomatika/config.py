@@ -76,6 +76,10 @@ class Config:
 
         # Rate limiting settings
         self.RATE_LIMITING_ENABLED: bool = getenv("RATE_LIMITING_ENABLED", "true").lower() == "true"
+        self.RATE_LIMIT_LIMIT: int = int(getenv("RATE_LIMIT_LIMIT", 100))
+        self.RATE_LIMIT_PERIOD: int = int(getenv("RATE_LIMIT_PERIOD", 60))
+        self.RATE_LIMIT_HEARTBEAT_LIMIT: int = int(getenv("RATE_LIMIT_HEARTBEAT_LIMIT", 120))
+        self.RATE_LIMIT_POLL_LIMIT: int = int(getenv("RATE_LIMIT_POLL_LIMIT", 60))
 
         # External config files
         self.WORKERS_CONFIG_PATH: str = getenv("WORKERS_CONFIG_PATH", "")

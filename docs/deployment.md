@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/deployment.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/deployment.md)
+
 # Deployment and Testing
 
 This document contains recommendations for running the system in a production environment, as well as instructions for local development and testing.

@@ -10,6 +10,7 @@ jobs_failed_total: Counter
 job_duration_seconds: Summary
 task_queue_length: Gauge
 active_workers: Gauge
+ratelimit_blocked_total: Counter
 
 
 def init_metrics() -> None:
@@ -17,7 +18,13 @@ def init_metrics() -> None:
     Initializes Prometheus metrics.
     Uses a registry check for idempotency, which is important for tests.
     """
-    global jobs_total, jobs_failed_total, job_duration_seconds, task_queue_length, active_workers
+    global \
+        jobs_total, \
+        jobs_failed_total, \
+        job_duration_seconds, \
+        task_queue_length, \
+        active_workers, \
+        ratelimit_blocked_total
 
     if "orchestrator_jobs_total" in REGISTRY.collectors:
         # Get existing metrics if they are already registered
@@ -26,6 +33,7 @@ def init_metrics() -> None:
         job_duration_seconds = REGISTRY.collectors["orchestrator_job_duration_seconds"]
         task_queue_length = REGISTRY.collectors["orchestrator_task_queue_length"]
         active_workers = REGISTRY.collectors["orchestrator_active_workers"]
+        ratelimit_blocked_total = REGISTRY.collectors["orchestrator_ratelimit_blocked_total"]
         return
 
     jobs_total = Counter(
@@ -50,4 +58,9 @@ def init_metrics() -> None:
     active_workers = Gauge(
         "orchestrator_active_workers",
         "Number of active workers reporting to the orchestrator.",
+    )
+    ratelimit_blocked_total = Counter(
+        "orchestrator_ratelimit_blocked_total",
+        "Total requests blocked by rate limiter",
+        const_labels={"identifier": "", "path": ""},
     )

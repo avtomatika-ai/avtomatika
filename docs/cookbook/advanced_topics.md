@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/advanced_topics.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/cookbook/advanced_topics.md)
+
 # Cookbook: Advanced Features
 
 This section describes more complex but powerful system features useful in real-world scenarios.

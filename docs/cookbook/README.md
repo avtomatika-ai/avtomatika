@@ -1,6 +1,12 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/README.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/cookbook/README.md)
+
 # Cookbook: Recipes for Orchestrator Library
 
-This document contains ready-to-use code examples ("recipes") for solving typical tasks when creating pipelines using the new library.
+This cookbook provides a collection of recipes for building workflows (blueprints) with the Avtomatika Orchestrator.
+
+> **Production Note:** The examples below use `print()` for simplicity and clarity. In a production environment, you should use the standard Python `logging` module. The Orchestrator automatically configures structured JSON logging, and using `logging.info(...)` ensures your logs are properly formatted and captured.
+
+## Table of Contents
 
 ### **Recipe 1: Creating a Simple Linear Pipeline**
 

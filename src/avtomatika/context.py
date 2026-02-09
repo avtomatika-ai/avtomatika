@@ -1,4 +1,7 @@
+from logging import getLogger
 from typing import Any
+
+logger = getLogger(__name__)
 
 
 class ActionFactory:
@@ -50,7 +53,9 @@ class ActionFactory:
         Dispatches multiple tasks for parallel execution.
         """
         self._check_for_existing_action()
-        print(f"Job {self._job_id}: Dispatching {len(tasks)} tasks in parallel, aggregating into '{aggregate_into}'")
+        logger.debug(
+            f"Job {self._job_id}: Dispatching {len(tasks)} tasks in parallel, aggregating into '{aggregate_into}'"
+        )
         self._parallel_tasks_to_dispatch_val = {
             "tasks": tasks,
             "aggregate_into": aggregate_into,
@@ -59,7 +64,7 @@ class ActionFactory:
     def transition_to(self, state: str) -> None:
         """Schedules a transition to a new state."""
         self._check_for_existing_action()
-        print(f"Job {self._job_id}: Transitioning to '{state}'")
+        logger.debug(f"Job {self._job_id}: Transitioning to '{state}'")
         self._next_state_val = state
 
     def dispatch_task(
@@ -75,7 +80,7 @@ class ActionFactory:
     ) -> None:
         """Dispatches a task to a worker for execution."""
         self._check_for_existing_action()
-        print(f"Job {self._job_id}: Dispatching task '{task_type}'")
+        logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}'")
         self._task_to_dispatch_val = {
             "type": task_type,
             "params": params,
@@ -95,7 +100,7 @@ class ActionFactory:
     ) -> None:
         """Pauses the pipeline until an external signal (human approval) is received."""
         self._check_for_existing_action()
-        print(f"Job {self._job_id}: Awaiting human approval via {integration}")
+        logger.debug(f"Job {self._job_id}: Awaiting human approval via {integration}")
         self._task_to_dispatch_val = {
             "type": "human_approval",
             "integration": integration,
@@ -111,7 +116,7 @@ class ActionFactory:
     ) -> None:
         """Runs a child blueprint and waits for its result."""
         self._check_for_existing_action()
-        print(f"Job {self._job_id}: Running sub-blueprint '{blueprint_name}'")
+        logger.debug(f"Job {self._job_id}: Running sub-blueprint '{blueprint_name}'")
         self._sub_blueprint_to_run_val = {
             "blueprint_name": blueprint_name,
             "initial_data": initial_data,

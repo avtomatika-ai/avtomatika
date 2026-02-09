@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/configuration.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/configuration.md)
+
 # Configuration Files Reference
 
 Avtomatika uses [TOML](https://toml.io/en/) format files to manage access and settings for clients and workers.
@@ -162,6 +164,11 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
+| `RATE_LIMITING_ENABLED` | Enable rate limiting middleware. | `true` |
+| `RATE_LIMIT_LIMIT` | Default maximum number of requests allowed per period for general API endpoints. | `100` |
+| `RATE_LIMIT_PERIOD` | Rate limiting period in seconds. | `60` |
+| `RATE_LIMIT_HEARTBEAT_LIMIT` | Specific limit for worker heartbeat requests per period. | `120` |
+| `RATE_LIMIT_POLL_LIMIT` | Specific limit for worker task poll requests per period. | `60` |
 
 ### Security & TLS (mTLS)
 

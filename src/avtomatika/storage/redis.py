@@ -277,24 +277,60 @@ class RedisStorage(StorageBackend):
         return [wid.decode("utf-8") if isinstance(wid, bytes) else wid for wid in worker_ids]
 
     async def cleanup_expired_workers(self) -> None:
-        worker_ids = await self.get_active_worker_ids()
-        if not worker_ids:
+        """
+        Removes expired workers from indexes and cleans up their task queues.
+        Also re-enqueues orphaned tasks to the global queue if necessary.
+        """
+        # 1. Get all known workers from the index
+        all_worker_ids = await self._redis.smembers("orchestrator:index:workers:all")  # type: ignore
+        if not all_worker_ids:
             return
+
+        worker_ids_str = [wid.decode("utf-8") if isinstance(wid, bytes) else wid for wid in all_worker_ids]
+
+        # 2. Check which ones still have an info key
         pipe = self._redis.pipeline()
-        for wid in worker_ids:
+        for wid in worker_ids_str:
             pipe.exists(f"orchestrator:worker:info:{wid}")
         existence = await pipe.execute()
-        dead_ids = [worker_ids[i] for i, exists in enumerate(existence) if not exists]
+
+        dead_ids = [worker_ids_str[i] for i, exists in enumerate(existence) if not exists]
+
+        if not dead_ids:
+            return
+
+        logger.info(f"Found {len(dead_ids)} expired workers. Cleaning up.")
+
         for wid in dead_ids:
-            tasks = await self._redis.smembers(f"orchestrator:worker:tasks:{wid}")  # type: ignore[var-annotated]
+            tasks_key = f"orchestrator:worker:tasks:{wid}"
+            queue_key = f"orchestrator:task_queue:{wid}"
+
+            # Get supported tasks to clean up task-specific indexes
+            tasks = await self._redis.smembers(tasks_key)  # type: ignore[var-annotated]
+
+            # Check for orphaned tasks in the worker's private queue
+            orphaned_tasks_raw = await self._redis.zrange(queue_key, 0, -1)
+
             async with self._redis.pipeline(transaction=True) as p:
-                p.delete(f"orchestrator:worker:tasks:{wid}")
+                # Clean up indexes
+                p.delete(tasks_key)
+                p.delete(queue_key)  # Delete the private queue
                 p.srem("orchestrator:index:workers:all", wid)
                 p.srem("orchestrator:index:workers:idle", wid)
+
                 for t in tasks:
                     t_str = t.decode() if isinstance(t, bytes) else str(t)
                     p.srem(f"orchestrator:index:workers:task:{t_str}", wid)
+
                 await p.execute()
+
+            # Handle orphaned tasks (re-queueing logic could be added here,
+            # currently we just log them as they will timeout via Watcher)
+            if orphaned_tasks_raw:
+                logger.warning(
+                    f"Worker {wid} expired with {len(orphaned_tasks_raw)} pending tasks in queue. "
+                    "These tasks will eventually be picked up by Watcher as timed out."
+                )
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
         await self._redis.zadd("orchestrator:watched_jobs", {job_id: timeout_at})

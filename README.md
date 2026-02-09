@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/README.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/README.md)
+
 # Avtomatika Orchestrator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -460,6 +462,26 @@ The architecture supports horizontal scaling. Multiple Orchestrator instances ca
 *   **Stateless API:** The API is stateless; all state is persisted in Redis.
 *   **Instance Identity:** Each instance should have a unique `INSTANCE_ID` (defaults to hostname) for correct handling of Redis Streams consumer groups.
 *   **Distributed Locking:** Background processes (`Watcher`, `ReputationCalculator`) use distributed locks (via Redis `SET NX`) to coordinate and prevent race conditions when multiple instances are active.
+
+### Logging & Observability
+
+Avtomatika is designed for modern observability stacks (ELK, Loki, Prometheus).
+
+*   **Structured Logging:** By default, logs are output in JSON format, making them easy to parse and index. Can be switched to text via `LOG_FORMAT="text"`.
+*   **Timezone Awareness:** All log timestamps respect the globally configured `TZ` environment variable.
+*   **Traceability:** Logs include `job_id`, `worker_id`, and `task_id` for full end-to-end tracing.
+*   **Metrics:** Prometheus metrics are available at `/_public/metrics`, including a specific counter `orchestrator_ratelimit_blocked_total` to track blocked requests.
+
+### Rate Limiting
+
+The Orchestrator includes a built-in, granular rate limiter based on Redis to protect against abuse and DDoS.
+
+*   **Granular Protection:** Limits are applied per Client Token (for API clients) or per Worker ID (for workers).
+*   **Context Aware:** Different limits apply to different operations:
+    *   **Heartbeats:** Higher limit (default 120/min) to allow frequent status updates.
+    *   **Polling:** Moderate limit (default 60/min) for task fetching.
+    *   **General API:** Default limit (default 100/min) for other operations.
+*   **Global Enforcement:** The middleware is applied globally, protecting all entry points including Worker API and Client API.
 
 ### Storage Backend
 

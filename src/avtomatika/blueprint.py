@@ -1,8 +1,11 @@
+from logging import getLogger
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
 from typing import Any, Callable, NamedTuple
 
 from .datastore import AsyncDictStore
+
+logger = getLogger(__name__)
 
 # Simple parser for expressions like "context.area.field operator value"
 # The order of operators is important: >= and <= must come before > and <
@@ -213,10 +216,8 @@ class StateMachineBlueprint:
         """Parses handler source code to find all possible transitions."""
         import ast
         import inspect
-        import logging
         import textwrap
 
-        logger = logging.getLogger(__name__)
         transitions: dict[str, set[str]] = {}
 
         all_handlers = (
@@ -312,5 +313,5 @@ class StateMachineBlueprint:
         if not output_filename:
             return dot.source
         dot.render(output_filename, format=output_format, cleanup=True)
-        print(f"Graph rendered to {output_filename}.{output_format}")
+        logger.info(f"Graph rendered to {output_filename}.{output_format}")
         return None

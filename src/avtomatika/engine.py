@@ -38,6 +38,7 @@ from .health_checker import HealthChecker
 from .history.base import HistoryStorageBase
 from .history.noop import NoOpHistoryStorage
 from .logging_config import setup_logging
+from .ratelimit import rate_limit_middleware_factory
 from .reputation import ReputationCalculator
 from .s3 import S3Service
 from .scheduler import Scheduler
@@ -71,7 +72,23 @@ class OrchestratorEngine:
         self.blueprints: dict[str, StateMachineBlueprint] = {}
         self.history_storage: HistoryStorageBase = NoOpHistoryStorage()
         self.ws_manager = WebSocketManager(self.storage)
-        self.app = web.Application(middlewares=[compression_middleware])
+
+        middlewares = [compression_middleware]
+        if config.RATE_LIMITING_ENABLED:
+            overrides = {
+                "heartbeat": config.RATE_LIMIT_HEARTBEAT_LIMIT,
+                "tasks/next": config.RATE_LIMIT_POLL_LIMIT,
+            }
+            middlewares.append(
+                rate_limit_middleware_factory(
+                    self.storage,
+                    config.RATE_LIMIT_LIMIT,
+                    config.RATE_LIMIT_PERIOD,
+                    overrides=overrides,
+                )
+            )
+
+        self.app = web.Application(middlewares=middlewares)
         self.app[ENGINE_KEY] = self
         self.worker_service: Optional[WorkerService] = None
         self._setup_done = False
@@ -323,13 +340,16 @@ class OrchestratorEngine:
             await app[S3_SERVICE_KEY].close()
 
         logger.info("Cancelling background tasks...")
+        # Cancel tasks to signal them to stop
         app[HEALTH_CHECKER_TASK_KEY].cancel()
         app[WATCHER_TASK_KEY].cancel()
         app[REPUTATION_CALCULATOR_TASK_KEY].cancel()
-        app[EXECUTOR_TASK_KEY].cancel()
-        # Scheduler task manages its own loop cancellation in stop(), but just in case:
-        app[SCHEDULER_TASK_KEY].cancel()
-        logger.info("Background tasks cancelled.")
+
+        # For JobExecutor and Scheduler, we use the stop() method to allow them to finish current iteration
+        # app[EXECUTOR_TASK_KEY].cancel()
+        # app[SCHEDULER_TASK_KEY].cancel()
+
+        logger.info("Background tasks signaled to stop.")
 
         logger.info("Gathering background tasks with a 10s timeout...")
         try:
@@ -471,9 +491,9 @@ class OrchestratorEngine:
                 ca_path=self.config.TLS_CA_PATH,
                 require_client_cert=self.config.TLS_REQUIRE_CLIENT_CERT,
             )
-            print(f"TLS enabled. mTLS required: {self.config.TLS_REQUIRE_CLIENT_CERT}")
+            logger.info(f"TLS enabled. mTLS required: {self.config.TLS_REQUIRE_CLIENT_CERT}")
 
-        print(
+        logger.info(
             f"Starting OrchestratorEngine API server on {self.config.API_HOST}:{self.config.API_PORT} in blocking mode."
         )
         web.run_app(self.app, host=self.config.API_HOST, port=self.config.API_PORT, ssl_context=ssl_context)
@@ -498,13 +518,15 @@ class OrchestratorEngine:
         self.site = web.TCPSite(self.runner, self.config.API_HOST, self.config.API_PORT, ssl_context=ssl_context)
         await self.site.start()
         protocol = "https" if self.config.TLS_ENABLED else "http"
-        print(f"OrchestratorEngine API server running on {protocol}://{self.config.API_HOST}:{self.config.API_PORT}")
+        logger.info(
+            f"OrchestratorEngine API server running on {protocol}://{self.config.API_HOST}:{self.config.API_PORT}"
+        )
 
     async def stop(self):
         """Stops the orchestrator engine."""
-        print("Stopping OrchestratorEngine API server...")
+        logger.info("Stopping OrchestratorEngine API server...")
         if hasattr(self, "site"):
             await self.site.stop()
         if hasattr(self, "runner"):
             await self.runner.cleanup()
-        print("OrchestratorEngine API server stopped.")
+        logger.info("OrchestratorEngine API server stopped.")

@@ -1,3 +1,5 @@
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/creating_blueprint.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/cookbook/creating_blueprint.md)
+
 # Cookbook: Creating a Blueprint (Pipeline)
 
 Blueprints (`StateMachineBlueprint`) are the foundation for defining business logic in the system. Each blueprint represents a state machine ("script") that the Orchestrator will execute.

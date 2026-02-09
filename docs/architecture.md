@@ -1,5 +1,7 @@
 > **Note:** This document describes the **Python implementation** of the HLN standard. For the high-level architectural specification, please refer to the `hln` package.
 
+**EN** | [ES](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/architecture.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/architecture.md)
+
 # Orchestrator Architecture
 
 This document describes the high-level architecture of the orchestration system, its key components, and their interaction.
@@ -432,11 +434,21 @@ All requests to protected endpoints pass through a chain of `middlewares`.
 System architecture allows running multiple Orchestrator instances in parallel to ensure fault tolerance and load distribution.
 
 -   **Stateless API:** HTTP API is completely stateless. All data about tasks and workers is stored in Redis. This allows a load balancer (e.g., NGINX) to distribute requests among any number of Orchestrator instances.
--   **Distributed Locking:** Background processes like `Watcher` (timeout check) and `ReputationCalculator` (reputation calculation) use distributed locking mechanism to guarantee work is performed by only one instance at any given time.
-    -   **Mechanism:** Uses atomic Redis operation `SET key value NX PX ttl`.
-    -   **Behavior:** At cycle start, background task attempts to acquire global lock. If lock is already held by another active instance, current instance skips iteration. This prevents race conditions and operation duplication.
+- **Distributed Locking:** Background processes (`Watcher`, `ReputationCalculator`) use distributed locking mechanism to guarantee work is performed by only one instance at any given time.
+    - **Mechanism:** Uses atomic Redis operation `SET key value NX PX ttl`.
+    - **Behavior:** At cycle start, background task attempts to acquire global lock. If lock is already held by another active instance, current instance skips iteration. This prevents race conditions and operation duplication.
 
-## 12. Deployment and Scaling Recommendations
+## 12. Logging and Observability
+
+Avtomatika is built for modern cloud-native environments with deep observability.
+
+- **Structured JSON Logging:** By default, the system uses `python-json-logger` to output logs in JSON format, ready for ELK, Loki, or other log aggregators.
+- **Timezone Awareness:** All timestamps in logs, the history API, and scheduler triggers respect the global `TZ` configuration.
+- **Traceability:** Every log entry produced during job execution automatically includes `job_id`, and where applicable, `worker_id` and `task_id`.
+- **Global Rate Limiting:** A Redis-based rate limiter protects all entry points (Public, Client, and Worker APIs). It uses context-aware limits (e.g., higher for heartbeats, lower for polling) to ensure stability.
+
+## 13. Deployment and Scaling Recommendations
+
 
 To ensure reliable and performant system operation in production, following practices are recommended:
 
