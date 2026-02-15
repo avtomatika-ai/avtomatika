@@ -37,7 +37,7 @@ class TimezoneFormatter(Formatter):
         return s
 
 
-class TimezoneJsonFormatter(json.JsonFormatter):  # type: ignore[name-defined]
+class TimezoneJsonFormatter(json.JsonFormatter):
     """JSON Formatter that respects a custom timezone."""
 
     def __init__(self, *args: Any, tz_name: str = "UTC", **kwargs: Any) -> None:

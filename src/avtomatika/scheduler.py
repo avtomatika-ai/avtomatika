@@ -113,7 +113,11 @@ class Scheduler:
     async def _trigger_job(self, job: ScheduledJobConfig) -> None:
         try:
             await self.engine.create_background_job(
-                blueprint_name=job.blueprint, initial_data=job.input_data, source=f"scheduler:{job.name}"
+                blueprint_name=job.blueprint,
+                initial_data=job.input_data,
+                source=f"scheduler:{job.name}",
+                dispatch_timeout=job.dispatch_timeout,
+                result_timeout=job.result_timeout,
             )
         except Exception as e:
             logger.error(f"Failed to create background job {job.name}: {e}")

@@ -73,7 +73,7 @@ Encapsulates core business logic, separating it from the HTTP API.
 This is the central class that brings all components together. Its main tasks:
 - Initialize the `aiohttp` web application and delegate route setup to the API layer.
 - **Initialize Services:** Bootstraps `WorkerService`, `S3Service`, etc.
-- Register "Blueprints" (`StateMachineBlueprint`).
+- **Register "Blueprints":** Supports both manual registration of `StateMachineBlueprint` and automatic loading from a directory specified by `BLUEPRINTS_DIR`.
 - Manage the lifecycle of background processes (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
 - Provide access to shared resources via `aiohttp.web.AppKey`.
 
@@ -143,6 +143,11 @@ This is the main background process responsible for executing jobs.
   - `TRANSIENT_ERROR` (Default): Indicates a temporary problem (e.g., network failure, external service unavailability). The Orchestrator will **retry** dispatching the task several times before moving it to quarantine.
   - `PERMANENT_ERROR`: Indicates a permanent problem that will not be resolved by retrying (e.g., corrupted file, incompatible version). The task will be immediately **moved to quarantine** without retries.
   - `INVALID_INPUT_ERROR`: Indicates a fundamental problem with the task input data (invalid format, missing parameters). The `Job` to which the task belongs will be immediately **moved to the `failed` state**, as further execution is pointless.
+
+  **Expiration Mechanisms (Timeouts):**
+  Orchestrator supports two types of task timeouts:
+  - **`dispatch_timeout`** (Queue Timeout): Maximum time a task can wait for a free worker. If no worker picks up the task within this time, it is cancelled.
+  - **`result_timeout`** (Result Deadline): Absolute deadline for receiving the result since dispatch. If a worker picks up the task but fails to return a result before this moment, the result is ignored, and the task is marked as failed.
 
   **Fault Tolerance Levels:**
   - **Task Level Retry:** The Orchestrator manages retries for `TRANSIENT_ERROR`.

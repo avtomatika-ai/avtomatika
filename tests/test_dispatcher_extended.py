@@ -20,12 +20,12 @@ def dispatcher(mock_storage):
 async def test_dispatcher_cheapest_strategy(dispatcher, mock_storage):
     """Verifies that the 'cheapest' strategy selects the worker with lowest cost_per_second."""
     workers = [
-        {"worker_id": "expensive", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.5},
-        {"worker_id": "cheap", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.1},
-        {"worker_id": "medium", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.3},
+        {"worker_id": "expensive", "status": "idle", "supported_skills": ["task"], "cost_per_second": 0.5},
+        {"worker_id": "cheap", "status": "idle", "supported_skills": ["task"], "cost_per_second": 0.1},
+        {"worker_id": "medium", "status": "idle", "supported_skills": ["task"], "cost_per_second": 0.3},
     ]
     # Update for O(1) dispatcher
-    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
     mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}
@@ -47,7 +47,7 @@ async def test_dispatcher_best_value_strategy(dispatcher, mock_storage):
         {
             "worker_id": "mid_reliability",
             "status": "idle",
-            "supported_tasks": ["task"],
+            "supported_skills": ["task"],
             "cost_per_second": 0.2,
             "reputation": 0.5,
         },
@@ -55,7 +55,7 @@ async def test_dispatcher_best_value_strategy(dispatcher, mock_storage):
         {
             "worker_id": "high_cost_perfect",
             "status": "idle",
-            "supported_tasks": ["task"],
+            "supported_skills": ["task"],
             "cost_per_second": 0.5,
             "reputation": 1.0,
         },
@@ -63,12 +63,12 @@ async def test_dispatcher_best_value_strategy(dispatcher, mock_storage):
         {
             "worker_id": "cheap_reliable",
             "status": "idle",
-            "supported_tasks": ["task"],
+            "supported_skills": ["task"],
             "cost_per_second": 0.1,
             "reputation": 0.8,
         },
     ]
-    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
     mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}
@@ -84,10 +84,10 @@ async def test_dispatcher_best_value_strategy(dispatcher, mock_storage):
 async def test_dispatcher_max_cost_filtering(dispatcher, mock_storage):
     """Verifies that workers exceeding max_cost are filtered out."""
     workers = [
-        {"worker_id": "too_expensive", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 1.0},
-        {"worker_id": "just_right", "status": "idle", "supported_tasks": ["task"], "cost_per_second": 0.05},
+        {"worker_id": "too_expensive", "status": "idle", "supported_skills": ["task"], "cost_per_second": 1.0},
+        {"worker_id": "just_right", "status": "idle", "supported_skills": ["task"], "cost_per_second": 0.05},
     ]
-    mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+    mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
     mock_storage.get_workers.return_value = workers
 
     job_state = {"id": "job-1"}

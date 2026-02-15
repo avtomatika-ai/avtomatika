@@ -16,6 +16,10 @@ from ..constants import (
     ERROR_CODE_PERMANENT,
     ERROR_CODE_SECURITY,
     ERROR_CODE_TRANSIENT,
+    IGNORED_REASON_CANCELLED,
+    IGNORED_REASON_LATE,
+    IGNORED_REASON_NOT_FOUND,
+    IGNORED_REASON_STALE,
     JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     JOB_STATUS_QUARANTINED,
@@ -87,12 +91,44 @@ class WorkerService:
         Retrieves the next task for a worker using long-polling configuration.
         """
         logger.debug(f"Worker {worker_id} is requesting a new task.")
-        return await self.storage.dequeue_task_for_worker(worker_id, self.config.WORKER_POLL_TIMEOUT_SECONDS)
+        task = await self.storage.dequeue_task_for_worker(worker_id, self.config.WORKER_POLL_TIMEOUT_SECONDS)
 
-    async def process_task_result(self, result_payload: dict[str, Any], authenticated_worker_id: str) -> str:
+        if task:
+            job_id = task.get("job_id")
+            if job_id:
+                now = monotonic()
+
+                async def _mark_picked_up(state: dict[str, Any]) -> dict[str, Any]:
+                    state["task_picked_up_at"] = now
+                    return state
+
+                try:
+                    updated_state = await self.storage.update_job_state_atomic(job_id, _mark_picked_up)
+
+                    # Determine the new deadline for the execution phase
+                    result_deadline = updated_state.get("result_deadline")
+                    if result_deadline is not None:
+                        # Use the absolute deadline for the result
+                        new_timeout_at = result_deadline
+                    else:
+                        # Fallback to execution-only timeout from pick-up time
+                        execution_timeout = (
+                            updated_state.get("execution_timeout_seconds") or self.config.WORKER_TIMEOUT_SECONDS
+                        )
+                        new_timeout_at = now + execution_timeout
+
+                    await self.storage.add_job_to_watch(job_id, new_timeout_at)
+
+                    logger.info(f"Task {task.get('task_id')} for job {job_id} picked up by worker {worker_id}")
+                except Exception as e:
+                    logger.error(f"Failed to update pick-up time for job {job_id}: {e}")
+
+        return task
+
+    async def process_task_result(self, result_payload: dict[str, Any], authenticated_worker_id: str) -> dict[str, Any]:
         """
         Processes a task result submitted by a worker.
-        Returns a status string constant.
+        Returns a standardized dictionary response.
         """
         payload_worker_id = result_payload.get("worker_id")
 
@@ -110,12 +146,65 @@ class WorkerService:
 
         job_state = await self.storage.get_job_state(job_id)
         if not job_state:
-            raise LookupError("Job not found")
+            # UNIFIED: Handle missing job (might be flushed or expired)
+            return {
+                "status": "ignored",
+                "reason": IGNORED_REASON_NOT_FOUND,
+                "message": f"Job {job_id} not found (expired or deleted).",
+            }
+
+        # SAFETY CHECK: Verify that the submitted task_id matches the current task of the job.
+        # This prevents late results from old tasks (e.g. after a timeout and retry)
+        # from overwriting data in a job that has already moved on.
+        current_task_id = job_state.get("current_task_id")
+        if current_task_id and current_task_id != task_id:
+            logger.warning(
+                f"Received STALE result for job {job_id}. "
+                f"Submitted task_id: {task_id}, current task_id in job: {current_task_id}. Ignoring."
+            )
+            return {
+                "status": "ignored",
+                "reason": IGNORED_REASON_STALE,
+                "message": f"Result ignored: task_id {task_id} is no longer active for job {job_id}.",
+            }
+
+        # Protection: If the job is already failed (e.g., by Watcher due to timeout),
+        # or finished, we should not process any late results from workers.
+        from ..executor import TERMINAL_STATES
+
+        current_status = job_state.get("status")
+
+        if current_status in TERMINAL_STATES:
+            # UNIFIED: Handle terminal states
+            error_message = (job_state.get("error_message") or "").lower()
+            if "timeout" in error_message:
+                reason = IGNORED_REASON_LATE
+            elif current_status == JOB_STATUS_CANCELLED:
+                reason = IGNORED_REASON_CANCELLED
+            else:
+                reason = "job_already_terminated"  # Generic terminal reason
+
+            logger.warning(
+                f"Received late result for job {job_id} (status: {current_status}, reason: {reason}). Ignoring."
+            )
+            from .. import metrics
+
+            metrics.tasks_ignored_total.inc(
+                {
+                    metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"),
+                    "reason": reason,
+                }
+            )
+            return {
+                "status": "ignored",
+                "reason": reason,
+                "message": (f"Result ignored: the job is already in a terminal state ({current_status})."),
+            }
 
         result_status = result_payload.get("status", TASK_STATUS_SUCCESS)
         worker_data_content = result_payload.get("data")
 
-        if job_state.get("status") == JOB_STATUS_WAITING_FOR_PARALLEL:
+        if current_status == JOB_STATUS_WAITING_FOR_PARALLEL:
             await self.storage.remove_job_from_watch(f"{job_id}:{task_id}")
 
             def _update_parallel_results(state: dict[str, Any]) -> dict[str, Any]:
@@ -140,7 +229,7 @@ class WorkerService:
                     f"Branch {task_id} for job {job_id} completed. Waiting for {remaining} more.",
                 )
 
-            return "parallel_branch_result_accepted"
+            return {"status": "accepted", "transition": "parallel_branch_accepted"}
 
         await self.storage.remove_job_from_watch(job_id)
 
@@ -160,7 +249,8 @@ class WorkerService:
         )
 
         if result_status == TASK_STATUS_FAILURE:
-            return await self._handle_task_failure(job_state, task_id, result_payload)
+            await self._handle_task_failure(job_state, task_id, result_payload)
+            return {"status": "accepted", "transition": "failure_handled"}
 
         if result_status == TASK_STATUS_CANCELLED:
             logger.info(f"Task {task_id} for job {job_id} was cancelled by worker.")
@@ -173,7 +263,7 @@ class WorkerService:
                 job_state["status"] = JOB_STATUS_RUNNING
                 await self.storage.save_job_state(job_id, job_state)
                 await self.storage.enqueue_job(job_id)
-            return "result_accepted_cancelled"
+            return {"status": "accepted", "transition": "cancelled_handled"}
 
         transitions = job_state.get("current_task_transitions", {})
         next_state = transitions.get(result_status)
@@ -197,15 +287,32 @@ class WorkerService:
             job_state["status"] = JOB_STATUS_RUNNING
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.enqueue_job(job_id)
-            return "result_accepted_success"
+            return {"status": "accepted", "transition": "success_transition"}
         else:
             logger.error(f"Job {job_id} failed. Worker returned unhandled status '{result_status}'.")
             job_state["status"] = JOB_STATUS_FAILED
             job_state["error_message"] = f"Worker returned unhandled status: {result_status}"
             await self.storage.save_job_state(job_id, job_state)
-            return "result_accepted_failure"
 
-    async def _handle_task_failure(self, job_state: dict, task_id: str, result_payload: dict) -> str:
+            # Cleanup S3 on terminal failure
+            await self._cleanup_s3_if_needed(job_id)
+
+            return {"status": "accepted", "transition": "unhandled_status_failure"}
+
+    async def _cleanup_s3_if_needed(self, job_id: str) -> None:
+        """Helper to cleanup S3 files if auto-cleanup is enabled."""
+        if self.config.S3_AUTO_CLEANUP:
+            from asyncio import create_task
+
+            from ..app_keys import S3_SERVICE_KEY
+
+            s3_service = self.engine.app.get(S3_SERVICE_KEY)
+            if s3_service:
+                task_files = s3_service.get_task_files(job_id)
+                if task_files:
+                    create_task(task_files.cleanup())
+
+    async def _handle_task_failure(self, job_state: dict, task_id: str, result_payload: dict) -> None:
         error_details = result_payload.get("error", {})
         error_type = ERROR_CODE_TRANSIENT
         error_message = "No error details provided."
@@ -235,7 +342,6 @@ class WorkerService:
             logger.critical(f"Data integrity mismatch detected for job {job_id}: {error_message}")
         else:
             await self.engine.handle_task_failure(job_state, task_id, error_message)
-        return "result_accepted_failure"
 
     async def issue_access_token(self, worker_id: str) -> TokenResponse:
         """Generates and stores a temporary access token."""
@@ -251,8 +357,9 @@ class WorkerService:
     async def update_worker_heartbeat(
         self, worker_id: str, update_data: Optional[dict[str, Any]]
     ) -> Optional[dict[str, Any]]:
-        """Updates worker TTL and status."""
+        """Updates worker TTL and status, and checks for tasks that should be cancelled."""
         ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
+        response_data: dict[str, Any] = {"status": "ok"}
 
         if update_data:
             updated_worker = await self.storage.update_worker_status(worker_id, update_data, ttl)
@@ -264,7 +371,35 @@ class WorkerService:
                         "worker_info_snapshot": updated_worker,
                     },
                 )
-            return updated_worker
+
+                # Check current tasks for cancellation
+                current_tasks = update_data.get("current_tasks", [])
+                if current_tasks:
+                    cancel_task_ids = []
+                    from ..executor import TERMINAL_STATES
+
+                    for task_id in current_tasks:
+                        # Find job_id for this task_id.
+                        # In Avtomatika, task_id is often the same as job_id or can be mapped.
+                        job_state = await self.storage.get_job_state(task_id)
+                        if not job_state:
+                            # If job is missing, it's definitely stale
+                            cancel_task_ids.append(task_id)
+                            continue
+
+                        status = job_state.get("status")
+                        # If the job is in a terminal state or cancelled, tell the worker to stop
+                        if status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED:
+                            # Verification: check if THIS worker is still the one assigned
+                            if job_state.get("task_worker_id") != worker_id:
+                                cancel_task_ids.append(task_id)
+                            else:
+                                cancel_task_ids.append(task_id)
+
+                    if cancel_task_ids:
+                        response_data["cancel_task_ids"] = cancel_task_ids
+
+            return response_data
         else:
             refreshed = await self.storage.refresh_worker_ttl(worker_id, ttl)
             return {"status": "ttl_refreshed"} if refreshed else None

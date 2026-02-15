@@ -1,7 +1,7 @@
 from logging import getLogger
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
-from typing import Any, Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, cast
 
 from .datastore import AsyncDictStore
 
@@ -289,7 +289,7 @@ class StateMachineBlueprint:
         )
 
     def render_graph(self, output_filename: str | None = None, output_format: str = "png") -> str | None:
-        from graphviz import Digraph  # type: ignore[import]
+        from graphviz import Digraph
 
         dot = Digraph(comment=f"State Machine for {self.name}")
         dot.attr("node", shape="box", style="rounded")
@@ -311,7 +311,7 @@ class StateMachineBlueprint:
             dot.node(state, state)
 
         if not output_filename:
-            return dot.source
+            return cast(str, dot.source)
         dot.render(output_filename, format=output_format, cleanup=True)
         logger.info(f"Graph rendered to {output_filename}.{output_format}")
         return None

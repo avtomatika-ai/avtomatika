@@ -61,11 +61,15 @@ These endpoints are designed for external systems that initiate and monitor work
     ```json
     {
       "initial_data": { ... },
-      "webhook_url": "https://callback.url/webhook"
+      "webhook_url": "https://callback.url/webhook",
+      "dispatch_timeout": 60,
+      "result_timeout": 300
     }
     ```
     *   `initial_data` (object, optional): Initial data for the job.
     *   `webhook_url` (string, optional): URL to receive asynchronous notifications about job completion, failure, or quarantine.
+    *   `dispatch_timeout` (integer, optional): Maximum time in seconds a task can wait in the queue for a worker.
+    *   `result_timeout` (integer, optional): Absolute deadline in seconds for receiving the result since job creation.
 -   **Response (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
 -   **Response (`429 Too Many Requests`):** If the client or IP exceeds the configured rate limit.
 
@@ -75,6 +79,29 @@ These endpoints are designed for external systems that initiate and monitor work
 -   **Description:** Returns the full current state of the specified job.
 -   **Response (`200 OK`):** JSON object with `Job` state.
 -   **Response (`404 Not Found`):** If a job with such ID is not found.
+
+### Get S3 Upload URL
+
+-   **Endpoint:** `GET /api/v1/jobs/{job_id}/files/upload`
+-   **Description:** Generates a temporary S3 presigned URL for uploading a file directly to the job's storage.
+-   **Query Parameters:**
+    *   `filename` (string, required): Name of the file to be uploaded.
+    *   `expires_in` (integer, optional): Link validity in seconds. Default: `3600`.
+-   **Response (`200 OK`):** `{"url": "...", "expires_in": 3600, "method": "PUT"}`
+-   **Response (`501 Not Implemented`):** If S3 support is not enabled.
+
+### Upload File (Direct Streaming)
+
+-   **Endpoint:** `PUT /api/v1/jobs/{job_id}/files/content/{filename}`
+-   **Description:** Uploads a file directly to S3 via Orchestrator streaming proxy. Bypasses local disk and uses minimal RAM.
+-   **Body:** Binary file content.
+-   **Response (`200 OK`):** `{"status": "uploaded", "s3_uri": "..."}`
+
+### Download File (Stable Link)
+
+-   **Endpoint:** `GET /api/v1/jobs/{job_id}/files/download/{filename}`
+-   **Description:** A stable link that automatically redirects to a fresh S3 presigned URL. Useful for browser downloads or as a permanent result link.
+-   **Response (`302 Found`):** Redirects to the S3 URL.
 
 ### Cancel Running Task
 
@@ -116,11 +143,11 @@ These endpoints are used by workers to register, receive tasks, and submit resul
 
 -   **Endpoint:** `POST /_worker/workers/register`
 -   **Description:** Registers a worker in the system.
--   **Request Body:** JSON object with full worker description (ID, supported tasks, resources, etc.).
+-   **Request Body:** JSON object with full worker description (ID, supported skills, resources, etc.).
     ```json
     {
       "worker_id": "worker-123",
-      "supported_tasks": ["video_processing", "audio_transcription"]
+      "supported_skills": ["video_processing", "audio_transcription"]
     }
     ```
 -   **Response (`200 OK`):** `{"status": "registered"}`
@@ -130,7 +157,7 @@ These endpoints are used by workers to register, receive tasks, and submit resul
 -   **Endpoint:** `PATCH /_worker/workers/{worker_id}`
 -   **Description:** Universal endpoint for confirming activity and updating state.
     -   **Empty Body:** Acts as a lightweight "ping", only updates worker TTL.
-    -   **Request Body (JSON):** Updates worker data (status, load, available tasks) and updates TTL.
+    -   **Request Body (JSON):** Updates worker data (status, load, available skills) and updates TTL.
 -   **Response (`200 OK`):** `{"status": "ttl_refreshed"}` or JSON with updated worker state.
 
 ### Get Next Task (Long-Polling)
@@ -155,7 +182,11 @@ These endpoints are used by workers to register, receive tasks, and submit resul
       "error": null
     }
     ```
--   **Response (`200 OK`):** `{"status": "result_accepted_success"}`
+-   **Response (`200 OK`):** 
+    - `{"status": "accepted", "transition": "..."}`: Result accepted and pipeline continues.
+    - `{"status": "ignored", "reason": "stale", "message": "..."}`: Task ID mismatch (job moved on).
+    - `{"status": "ignored", "reason": "late", "message": "..."}`: Result received after deadline/timeout.
+    - `{"status": "ignored", "reason": "cancelled", "message": "..."}`: Job was cancelled.
 
 ### Establish WebSocket Connection
 

@@ -1,6 +1,7 @@
 from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import create_task, gather, get_running_loop, wait_for
 from logging import getLogger
+from time import monotonic
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -31,7 +32,14 @@ from .blueprint import StateMachineBlueprint
 from .client_config_loader import load_client_configs_to_redis
 from .compression import compression_middleware
 from .config import Config
-from .constants import JOB_STATUS_FAILED, JOB_STATUS_PENDING, JOB_STATUS_QUARANTINED, JOB_STATUS_WAITING_FOR_WORKER
+from .constants import (
+    COMMAND_CANCEL_TASK,
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_PENDING,
+    JOB_STATUS_QUARANTINED,
+    JOB_STATUS_WAITING_FOR_WORKER,
+)
 from .dispatcher import Dispatcher
 from .executor import JobExecutor
 from .health_checker import HealthChecker
@@ -114,6 +122,12 @@ class OrchestratorEngine:
     def setup(self) -> None:
         if self._setup_done:
             return
+
+        if self.config.BLUEPRINTS_DIR:
+            from .blueprint_loader import load_blueprints_from_dir
+
+            load_blueprints_from_dir(self, self.config.BLUEPRINTS_DIR)
+
         setup_routes(self.app, self)
         self.app.on_startup.append(self.on_startup)
         self.app.on_shutdown.append(self.on_shutdown)
@@ -172,13 +186,10 @@ class OrchestratorEngine:
 
     async def handle_rxon_message(self, message_type: str, payload: Any, context: dict) -> Any:
         """Core handler for RXON protocol messages via any listener."""
-        from rxon.security import extract_cert_identity
-
         from .security import verify_worker_auth
 
-        request = context.get("raw_request")
         token = context.get("token")
-        cert_identity = extract_cert_identity(request) if request else None
+        cert_identity = context.get("cert_identity")
 
         worker_id_hint = context.get("worker_id_hint")
 
@@ -201,7 +212,17 @@ class OrchestratorEngine:
             raise web.HTTPInternalServerError(text="WorkerService is not initialized.")
 
         if message_type == "register":
-            return await self.worker_service.register_worker(payload)
+            # Protocol Version Check
+            from rxon.constants import PROTOCOL_VERSION
+
+            worker_version = context.get("protocol_version")
+            warning = None
+            if worker_version and worker_version != PROTOCOL_VERSION:
+                warning = f"Protocol version mismatch! Orchestrator: {PROTOCOL_VERSION}, Worker: {worker_version}."
+                logger.warning(f"Worker {worker_id_hint}: {warning}")
+
+            await self.worker_service.register_worker(payload)
+            return {"status": "registered", "version": PROTOCOL_VERSION, "warning": warning}
 
         elif message_type == "poll":
             return await self.worker_service.get_next_task(auth_worker_id)
@@ -237,7 +258,6 @@ class OrchestratorEngine:
             return None
 
     async def on_startup(self, app: web.Application) -> None:
-        # Fail Fast: Check Storage Connection
         if not await self.storage.ping():
             logger.critical("Failed to connect to Storage Backend (Redis). Exiting.")
             raise RuntimeError("Storage Backend is unavailable.")
@@ -253,10 +273,8 @@ class OrchestratorEngine:
                 "opentelemetry-instrumentation-aiohttp-client not found. AIOHTTP client instrumentation is disabled."
             )
         await self._setup_history_storage()
-        # Start history background worker
         await self.history_storage.start()
 
-        # Load client configs if the path is provided
         if self.config.CLIENTS_CONFIG_PATH:
             from os.path import exists
 
@@ -272,7 +290,6 @@ class OrchestratorEngine:
                 "or deny access if no token is found."
             )
 
-        # Load individual worker configs if the path is provided
         if self.config.WORKERS_CONFIG_PATH:
             from os.path import exists
 
@@ -340,14 +357,9 @@ class OrchestratorEngine:
             await app[S3_SERVICE_KEY].close()
 
         logger.info("Cancelling background tasks...")
-        # Cancel tasks to signal them to stop
         app[HEALTH_CHECKER_TASK_KEY].cancel()
         app[WATCHER_TASK_KEY].cancel()
         app[REPUTATION_CALCULATOR_TASK_KEY].cancel()
-
-        # For JobExecutor and Scheduler, we use the stop() method to allow them to finish current iteration
-        # app[EXECUTOR_TASK_KEY].cancel()
-        # app[SCHEDULER_TASK_KEY].cancel()
 
         logger.info("Background tasks signaled to stop.")
 
@@ -380,6 +392,8 @@ class OrchestratorEngine:
         source: str = "internal",
         tracing_context: dict[str, str] | None = None,
         data_metadata: dict[str, Any] | None = None,
+        dispatch_timeout: int | None = None,
+        result_timeout: int | None = None,
     ) -> str:
         """Creates a job directly, bypassing the HTTP API layer.
         Useful for internal schedulers and triggers.
@@ -389,7 +403,6 @@ class OrchestratorEngine:
             raise ValueError(f"Blueprint '{blueprint_name}' not found.")
 
         job_id = str(uuid4())
-        # Use a special internal client config
         client_config = {
             "token": "internal-scheduler",
             "plan": "system",
@@ -406,12 +419,18 @@ class OrchestratorEngine:
             "tracing_context": tracing_context or {},
             "client_config": client_config,
             "data_metadata": data_metadata or {},
+            "dispatch_timeout": dispatch_timeout,
+            "result_timeout": result_timeout,
         }
         await self.storage.save_job_state(job_id, job_state)
+
+        if dispatch_timeout:
+            now = monotonic()
+            await self.storage.add_job_to_watch(job_id, now + dispatch_timeout)
+
         await self.storage.enqueue_job(job_id)
         metrics.jobs_total.inc({metrics.LABEL_BLUEPRINT: blueprint.name})
 
-        # Log the creation in history as well (so we can track scheduled jobs)
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
@@ -445,8 +464,14 @@ class OrchestratorEngine:
                 return
 
             now = get_running_loop().time()
-            timeout_seconds = task_info.get("timeout_seconds", self.config.WORKER_TIMEOUT_SECONDS)
-            timeout_at = now + timeout_seconds
+
+            # Recalculate timeout for retry, respecting existing deadlines
+            dispatch_deadline = job_state.get("dispatch_deadline")
+            result_deadline = job_state.get("result_deadline")
+            execution_timeout = task_info.get("timeout_seconds") or self.config.WORKER_TIMEOUT_SECONDS
+
+            deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
+            timeout_at = min(deadlines) if deadlines else now + execution_timeout
 
             job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
             job_state["task_dispatched_at"] = now
@@ -478,6 +503,110 @@ class OrchestratorEngine:
 
         # Run in background to not block the main flow
         await self.webhook_sender.send(webhook_url, payload)
+
+    async def handle_job_timeout(self, job_state: dict[str, Any]) -> None:
+        """Handles job/task timeout by either retrying or failing the job."""
+        job_id = job_state["id"]
+        status = job_state.get("status")
+        from .executor import TERMINAL_STATES
+
+        if status in TERMINAL_STATES:
+            return
+
+        now = monotonic()
+        picked_up = job_state.get("task_picked_up_at")
+        dispatch_deadline = job_state.get("dispatch_deadline")
+        result_deadline = job_state.get("result_deadline")
+
+        blueprint_name = job_state.get("blueprint_name", "unknown")
+        timeout_type = "dispatch" if picked_up is None else "execution"
+
+        # 1. Determine error message and reason
+        error_message = "Worker task timed out."
+        if picked_up is None:
+            if dispatch_deadline and now >= dispatch_deadline:
+                error_message = "Worker task timed out while waiting in queue (dispatch timeout)."
+            elif result_deadline and now >= result_deadline:
+                error_message = "Worker task timed out: result deadline reached before pickup."
+        else:
+            error_message = "Worker task timed out: execution/result deadline reached."
+
+        logger.warning(f"Job {job_id} ({blueprint_name}) timed out ({timeout_type}): {error_message}")
+
+        # 2. Update metrics
+        from . import metrics
+
+        metrics.jobs_timeouts_total.inc({metrics.LABEL_BLUEPRINT: blueprint_name, "type": timeout_type})
+
+        # 3. Log to history (if it was assigned to a worker)
+        worker_id = job_state.get("task_worker_id")
+        if worker_id:
+            await self.history_storage.log_job_event(
+                {
+                    "job_id": job_id,
+                    "state": job_state.get("current_state"),
+                    "event_type": "task_finished",
+                    "worker_id": worker_id,
+                    "context_snapshot": {
+                        "status": "failure",
+                        "error": "timeout",
+                        "message": error_message,
+                    },
+                }
+            )
+
+        # 4. Handle auto-cleanup
+        if self.config.S3_AUTO_CLEANUP:
+            from .app_keys import S3_SERVICE_KEY
+
+            s3_service = self.app.get(S3_SERVICE_KEY)
+            if s3_service:
+                task_files = s3_service.get_task_files(job_id)
+                if task_files:
+                    create_task(task_files.cleanup())
+
+        # 5. Decide: Retry or Fail
+        # If it timed out during execution, we give it a chance to be retried on another worker
+        if picked_up is not None:
+            task_id = str(job_state.get("current_task_id") or job_id)
+            await self.handle_task_failure(job_state, task_id, error_message)
+        else:
+            # If it timed out in queue (PENDING or waiting for worker), it's usually a permanent failure
+            # because no worker is available to handle it in time.
+            job_state["status"] = JOB_STATUS_FAILED
+            job_state["error_message"] = error_message
+            await self.storage.save_job_state(job_id, job_state)
+            await self.send_job_webhook(job_state, "job_failed")
+            metrics.jobs_failed_total.inc({metrics.LABEL_BLUEPRINT: blueprint_name})
+
+    async def cancel_job(self, job_id: str) -> bool:
+        """Cancels a job and its active tasks."""
+        job_state = await self.storage.get_job_state(job_id)
+        if not job_state:
+            return False
+
+        from .executor import TERMINAL_STATES
+
+        if job_state.get("status") in TERMINAL_STATES:
+            return False
+
+        task_id = job_state.get("current_task_id")
+        worker_id = job_state.get("task_worker_id")
+
+        if task_id:
+            await self.storage.set_task_cancellation_flag(task_id)
+
+        job_state["status"] = JOB_STATUS_CANCELLED
+        await self.storage.save_job_state(job_id, job_state)
+
+        if worker_id:
+            worker_info = await self.storage.get_worker_info(worker_id)
+            if worker_info and worker_info.get("capabilities", {}).get("websockets"):
+                command = {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
+                await self.ws_manager.send_command(worker_id, command)
+
+        logger.info(f"Job {job_id} has been cancelled.")
+        return True
 
     def run(self) -> None:
         self.setup()

@@ -95,6 +95,8 @@ Each section represents a scheduled job. The section name serves as the job's un
 | :--- | :--- | :--- | :--- |
 | `blueprint` | String | **Yes** | The name of the blueprint to execute. |
 | `input_data` | Dictionary | No | Initial data payload for the job. Defaults to empty dict. |
+| `dispatch_timeout` | Integer | No | Queue expiration (seconds). Task fails if not picked up by a worker. |
+| `result_timeout` | Integer | No | Execution deadline (seconds). Absolute time since creation for result. |
 | `interval_seconds` | Integer | *One of* | Run job every N seconds. |
 | `daily_at` | String | *One of* | Run daily at specific time ("HH:MM"). |
 | `weekly_days` | List[String] | *One of* | Run on specific days ("mon", "tue", ...) at `time`. |
@@ -154,10 +156,11 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WORKERS_CONFIG_PATH` | Path to `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Path to `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Path to `schedules.toml`. | `""` |
+| `BLUEPRINTS_DIR` | Path to a directory with Python files containing `StateMachineBlueprint` instances to be loaded automatically. | `""` |
 | `TZ` | **Global Timezone:** Affects scheduler triggers, log timestamps, and history API output (e.g., "Europe/Moscow", "UTC"). | `UTC` |
 | `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `LOG_FORMAT` | Log format (`text` or `json`). | `json` |
-| `WORKER_TIMEOUT_SECONDS` | Maximum time allowed for a worker to complete a task. | `300` |
+| `WORKER_TIMEOUT_SECONDS` | Default deadline for a worker to complete a task (used if no `result_timeout` set). | `300` |
 | `WORKER_POLL_TIMEOUT_SECONDS` | Timeout for long-polling task requests from workers. | `30` |
 | `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Interval for updating worker TTL (used for health checks). | `60` |
 | `JOB_MAX_RETRIES` | Maximum number of retries for transient task failures. | `3` |
@@ -194,4 +197,5 @@ Configure these variables to enable S3 Payload Offloading.
 | `S3_DEFAULT_BUCKET` | Default bucket name for job payloads. | `avtomatika-payloads` |
 | `S3_REGION` | S3 Region. | `us-east-1` |
 | `S3_MAX_CONCURRENCY` | Maximum number of concurrent connections to S3 across all jobs. Prevents file descriptor exhaustion. | `100` |
+| `S3_AUTO_CLEANUP` | If `true`, automatically deletes S3 files and local temporary artifacts when a job completes or fails. | `true` |
 | `TASK_FILES_DIR` | Local directory for temporary file storage during job execution. | `/tmp/avtomatika-payloads` |

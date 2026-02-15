@@ -1,14 +1,11 @@
 from asyncio import Semaphore, gather, to_thread
+from datetime import timedelta
 from logging import getLogger
 from os import sep, walk
 from pathlib import Path
 from shutil import rmtree
-from typing import Any
+from typing import Any, cast
 
-from aiofiles import open as aiopen
-from obstore import delete_async, get_async, put_async
-from obstore import list as obstore_list
-from obstore.store import S3Store
 from orjson import dumps, loads
 from rxon.blob import calculate_config_hash, parse_uri
 from rxon.exceptions import IntegrityError
@@ -19,10 +16,17 @@ from .history.base import HistoryStorageBase
 logger = getLogger(__name__)
 
 try:
+    from aiofiles import open as aiopen
+    from obstore import delete_async, get_async, put_async, sign
+    from obstore import list as obstore_list
+    from obstore.store import S3Store
+
     HAS_S3_LIBS = True
 except ImportError:
+    # Define stubs for type hinting and avoid NameErrors
     HAS_S3_LIBS = False
     S3Store = Any
+    delete_async = get_async = put_async = sign = obstore_list = aiopen = None  # type: ignore[assignment]
 
 
 class TaskFiles:
@@ -57,6 +61,16 @@ class TaskFiles:
         self._ensure_local_dir()
         clean_name = filename.split("/")[-1] if "://" in filename else filename.lstrip("/")
         return self.local_dir / clean_name
+
+    def generate_presigned_url(
+        self,
+        filename: str,
+        method: str = "GET",
+        expires_in: int = 3600,
+    ) -> str:
+        """Generates a temporary S3 access link for a file within this job's prefix."""
+        target_key = f"{self._s3_prefix}{filename.lstrip('/')}"
+        return cast(str, sign(self._store, method, target_key, timedelta(seconds=expires_in)))
 
     async def _download_single_file(
         self,
@@ -160,6 +174,18 @@ class TaskFiles:
             result = await put_async(self._store, s3_key, content)
             etag = result.e_tag.strip('"') if result.e_tag else None
             return {"size": file_size, "etag": etag}
+
+    async def upload_stream(self, filename: str, stream: Any) -> str:
+        """Streams data directly to S3 from an async iterator (e.g. aiohttp request content)."""
+        target_key = f"{self._s3_prefix}{filename.lstrip('/')}"
+        async with self._semaphore:
+            # obstore.put_async supports AsyncIterable[bytes]
+            result = await put_async(self._store, target_key, stream)
+            etag = result.e_tag.strip('"') if result.e_tag else None
+
+            uri = f"s3://{self._bucket}/{target_key}"
+            await self._log_event("upload_stream", uri, "N/A (streaming)", metadata={"etag": etag})
+            return uri
 
     async def upload(self, local_name: str, remote_name: str | None = None) -> str:
         """
@@ -355,10 +381,13 @@ class S3Service:
         """Returns a hash of the current S3 configuration for consistency checks."""
         if not self._enabled:
             return None
-        return calculate_config_hash(
-            self.config.S3_ENDPOINT_URL,
-            self.config.S3_ACCESS_KEY,
-            self.config.S3_DEFAULT_BUCKET,
+        return cast(
+            str | None,
+            calculate_config_hash(
+                self.config.S3_ENDPOINT_URL,
+                self.config.S3_ACCESS_KEY,
+                self.config.S3_DEFAULT_BUCKET,
+            ),
         )
 
     def get_task_files(self, job_id: str) -> TaskFiles | None:
@@ -373,6 +402,12 @@ class S3Service:
             self._semaphore,
             self._history,
         )
+
+    def generate_presigned_url(self, key: str, method: str = "GET", expires_in: int = 3600) -> str:
+        """Generates a temporary S3 access link for an arbitrary key."""
+        if not self._enabled or not self._store:
+            raise RuntimeError("S3 support is not enabled or initialized.")
+        return cast(str, sign(self._store, method, key, timedelta(seconds=expires_in)))
 
     async def close(self) -> None:
         pass

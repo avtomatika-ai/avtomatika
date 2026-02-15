@@ -1,5 +1,5 @@
 from contextlib import suppress
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
@@ -14,7 +14,7 @@ def rate_limit_middleware_factory(
     default_limit: int,
     period: int,
     overrides: dict[str, int] | None = None,
-) -> Callable:
+) -> Any:
     """A factory that creates a rate-limiting middleware."""
     limit_overrides = overrides or {}
 

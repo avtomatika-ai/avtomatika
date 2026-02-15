@@ -8,7 +8,7 @@ GPU_WORKER = {
     "worker_id": "gpu-worker-01",
     "address": "http://gpu-worker",
     "dynamic_token": "gpu-secret",
-    "supported_tasks": ["image_generation", "video_montage"],
+    "supported_skills": ["image_generation", "video_montage"],
     "resources": {
         "gpu_info": {"model": "NVIDIA T4", "vram_gb": 16},
     },
@@ -21,7 +21,7 @@ CPU_WORKER = {
     "worker_id": "cpu-worker-01",
     "address": "http://cpu-worker",
     "dynamic_token": "cpu-secret",
-    "supported_tasks": ["text_analysis"],
+    "supported_skills": ["text_analysis"],
     "resources": {"gpu_info": None},
     "installed_models": [],
 }
@@ -30,10 +30,13 @@ CPU_WORKER = {
 @pytest.fixture
 def mock_storage():
     storage = MagicMock()
-    storage.find_workers_for_task = AsyncMock(return_value=[])
+    storage.find_workers_for_skill = AsyncMock(return_value=[])
+    storage.find_hot_workers = AsyncMock(return_value=[])
+    storage.find_workers_by_hot_skill = AsyncMock(return_value=[])
     storage.get_workers = AsyncMock(return_value=[])
     storage.enqueue_task_for_worker = AsyncMock()
     storage.save_job_state = AsyncMock()
+    storage.increment_worker_load = AsyncMock()
     return storage
 
 
@@ -64,9 +67,9 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
     """Tests that the dispatcher gets workers, selects one, and queues a task for it."""
     mock_worker = {
         "worker_id": "worker-123",
-        "supported_tasks": ["test_task"],
+        "supported_skills": ["test_task"],
     }
-    mock_storage.find_workers_for_task.return_value = ["worker-123"]
+    mock_storage.find_workers_for_skill.return_value = ["worker-123"]
     mock_storage.get_workers.return_value = [mock_worker]
     mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -75,7 +78,7 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
     await dispatcher.dispatch(job_state, task_info)
 
     # Assertions
-    mock_storage.find_workers_for_task.assert_called_once_with("test_task")
+    mock_storage.find_workers_for_skill.assert_called_once_with("test_task")
     mock_storage.get_workers.assert_called_once_with(["worker-123"])
     mock_storage.enqueue_task_for_worker.assert_called_once()
 
@@ -93,7 +96,7 @@ async def test_dispatch_logs_warning_for_busy_mo_worker(dispatcher, mock_storage
     """Tests that the dispatcher logs a warning if no workers found.
     Updated for O(1) dispatcher: checks for 'No idle workers found' warning.
     """
-    mock_storage.find_workers_for_task.return_value = []
+    mock_storage.find_workers_for_skill.return_value = []
 
     job_state = {"id": "job-abc", "tracing_context": {}}
     task_info = {"type": "test_task"}
@@ -109,9 +112,9 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
     """Tests that the dispatcher correctly passes the priority to the storage."""
     mock_worker = {
         "worker_id": "worker-123",
-        "supported_tasks": ["test_task"],
+        "supported_skills": ["test_task"],
     }
-    mock_storage.find_workers_for_task.return_value = ["worker-123"]
+    mock_storage.find_workers_for_skill.return_value = ["worker-123"]
     mock_storage.get_workers.return_value = [mock_worker]
     mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -146,7 +149,7 @@ class TestDispatcherFiltering:
         from src.avtomatika.context import ActionFactory
 
         workers = [GPU_WORKER, CPU_WORKER]
-        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -176,7 +179,7 @@ class TestDispatcherFiltering:
         mock_storage,
     ):
         workers = [GPU_WORKER, CPU_WORKER]
-        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -199,16 +202,16 @@ class TestDispatcherFiltering:
         """Tests that filtering by `max_cost` works correctly."""
         cheapest_worker = {
             "worker_id": "worker-cheap",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.01,
         }
         expensive_worker = {
             "worker_id": "worker-expensive",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.05,
         }
         workers = [expensive_worker, cheapest_worker]
-        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -234,16 +237,16 @@ class TestDispatcherStrategies:
         """Tests that with the 'cheapest' strategy, the cheapest worker is selected."""
         cheapest_worker = {
             "worker_id": "worker-cheap",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.01,
         }
         expensive_worker = {
             "worker_id": "worker-expensive",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.05,
         }
         workers = [expensive_worker, cheapest_worker]
-        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
@@ -266,19 +269,19 @@ class TestDispatcherStrategies:
         # Cheap, but with a bad reputation. Score = 0.02 / 0.5 = 0.04
         worker_A = {
             "worker_id": "worker-A",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.02,
             "reputation": 0.5,
         }
         # Expensive, but with a perfect reputation. Score = 0.03 / 1.0 = 0.03
         worker_B = {
             "worker_id": "worker-B",
-            "supported_tasks": ["test_task"],
+            "supported_skills": ["test_task"],
             "cost_per_second": 0.03,
             "reputation": 1.0,
         }
         workers = [worker_A, worker_B]
-        mock_storage.find_workers_for_task.return_value = [w["worker_id"] for w in workers]
+        mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 

@@ -2,13 +2,12 @@ from collections import defaultdict
 from logging import getLogger
 from random import choice
 from typing import Any
-from uuid import uuid4
 
 try:
-    from opentelemetry.propagate import inject  # type: ignore[import]
+    from opentelemetry.propagate import inject
 except ImportError:
 
-    def inject(carrier, context=None):  # type: ignore[misc]
+    def inject(carrier, context=None):
         pass
 
 
@@ -29,32 +28,40 @@ class Dispatcher:
         self._round_robin_indices: dict[str, int] = defaultdict(int)
 
     @staticmethod
-    def _is_worker_compliant(
+    def _check_worker_compliance(
         worker: dict[str, Any],
         requirements: dict[str, Any],
-    ) -> bool:
-        """Checks if a worker meets the specified resource requirements."""
+    ) -> tuple[bool, str | None]:
+        """Checks if a worker meets requirements. Returns (is_compliant, rejection_reason)."""
         if required_gpu := requirements.get("gpu_info"):
             gpu_info = worker.get("resources", {}).get("gpu_info")
             if not gpu_info:
-                return False
-            if required_gpu.get("model") and required_gpu["model"] not in gpu_info.get(
-                "model",
-                "",
-            ):
-                return False
-            if required_gpu.get("vram_gb") and required_gpu["vram_gb"] > gpu_info.get(
-                "vram_gb",
-                0,
-            ):
-                return False
+                return False, "missing_gpu"
+            if required_gpu.get("model") and required_gpu["model"] not in gpu_info.get("model", ""):
+                return False, f"gpu_model_mismatch ({gpu_info.get('model')})"
+            if required_gpu.get("vram_gb") and required_gpu["vram_gb"] > gpu_info.get("vram_gb", 0):
+                return False, "vram_insufficient"
 
         if required_models := requirements.get("installed_models"):
             installed_models = {m["name"] for m in worker.get("installed_models", [])}
             if not set(required_models).issubset(installed_models):
-                return False
+                return False, "missing_models"
 
-        return True
+        # HLN UNIVERSALITY: Match against custom 'extra' capabilities
+        if extra_reqs := requirements.get("extra_requirements"):
+            worker_extra = worker.get("capabilities", {}).get("extra", {})
+            for key, req_value in extra_reqs.items():
+                worker_value = worker_extra.get(key)
+                if worker_value != req_value:
+                    return False, f"extra_mismatch: {key}"
+
+        return True, None
+
+    @staticmethod
+    def _is_worker_compliant(worker: dict[str, Any], requirements: dict[str, Any]) -> bool:
+        # Wrapper for backward compatibility if needed, but better use _check_worker_compliance
+        is_valid, _ = Dispatcher._check_worker_compliance(worker, requirements)
+        return is_valid
 
     @staticmethod
     def _select_default(
@@ -62,15 +69,19 @@ class Dispatcher:
         task_type: str,
     ) -> dict[str, Any]:
         """Default strategy: first selects "warm" workers (those that have the
-        task in their cache), and then selects the cheapest among them.
+        task in their hot_skills or hot_cache), and then selects the cheapest among them.
 
         Note: This strategy uses the deprecated `cost` field for backward
         compatibility. For more accurate cost-based selection, use the `cheapest`
         strategy.
         """
-        warm_workers = [w for w in workers if task_type in w.get("hot_cache", [])]
+        # 1. Prioritize Hot Skills
+        hot_skill_workers = [w for w in workers if task_type in w.get("hot_skills", [])]
 
-        target_pool = warm_workers or workers
+        # 2. Then Hot Cache
+        hot_cache_workers = [w for w in workers if task_type in w.get("hot_cache", [])]
+
+        target_pool = hot_skill_workers or hot_cache_workers or workers
 
         # The `cost` field is deprecated but maintained for backward compatibility.
         min_cost = min(w.get("cost", float("inf")) for w in target_pool)
@@ -106,15 +117,28 @@ class Dispatcher:
         workers: list[dict[str, Any]],
         task_type: str,
     ) -> dict[str, Any]:
-        """Selects the cheapest worker based on 'cost_per_second'."""
-        return min(workers, key=lambda w: w.get("cost_per_second", float("inf")))
+        """Selects the cheapest worker based on cost for the specific task_type."""
+
+        def get_cost(w):
+            # Check modern cost_per_skill first
+            capabilities = w.get("capabilities", {})
+            cost_map = capabilities.get("cost_per_skill", {})
+            if task_type in cost_map:
+                return cost_map[task_type]
+            # Fallback to legacy fields
+            return w.get("cost_per_second", w.get("cost", float("inf")))
+
+        return min(workers, key=get_cost)
 
     @staticmethod
-    def _get_best_value_score(worker: dict[str, Any]) -> float:
+    def _get_best_value_score(worker: dict[str, Any], task_type: str) -> float:
         """Calculates a "score" for a worker using the formula cost / reputation.
         The lower the score, the better.
         """
-        cost = worker.get("cost_per_second", float("inf"))
+        capabilities = worker.get("capabilities", {})
+        cost_map = capabilities.get("cost_per_skill", {})
+        cost = cost_map.get(task_type, worker.get("cost_per_second", worker.get("cost", float("inf"))))
+
         # Default reputation is 1.0 if absent
         reputation = worker.get("reputation", 1.0)
         # Avoid division by zero
@@ -126,7 +150,7 @@ class Dispatcher:
         task_type: str,
     ) -> dict[str, Any]:
         """Selects the worker with the best price-quality (reputation) ratio."""
-        return min(workers, key=self._get_best_value_score)
+        return min(workers, key=lambda w: self._get_best_value_score(w, task_type))
 
     async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]) -> None:
         job_id = job_state["id"]
@@ -137,32 +161,79 @@ class Dispatcher:
         dispatch_strategy = task_info.get("dispatch_strategy", "default")
         resource_requirements = task_info.get("resource_requirements")
 
-        candidate_ids = await self.storage.find_workers_for_task(task_type)
-        if not candidate_ids:
-            logger.warning(f"No idle workers found for task '{task_type}'")
-            raise RuntimeError(f"No suitable workers for task type '{task_type}'")
+        # HLN OPTIMIZATION: Hot Cache and Hot Skill awareness
+        model_hint = task_info.get("params", {}).get("model_name")
+        capable_workers = []
 
-        capable_workers = await self.storage.get_workers(candidate_ids)
+        hot_skill_ids = await self.storage.find_workers_by_hot_skill(task_type)
+        if hot_skill_ids:
+            logger.info(f"HLN: Found {len(hot_skill_ids)} HOT workers for skill '{task_type}'.")
+            capable_workers = await self.storage.get_workers(hot_skill_ids)
+            from . import metrics
+
+            metrics.tasks_hot_dispatched_total.inc(
+                {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"}
+            )
+
+        if not capable_workers and model_hint:
+            hot_ids = await self.storage.find_hot_workers(task_type, model_hint)
+            if hot_ids:
+                logger.info(f"HLN: Found {len(hot_ids)} HOT workers with model '{model_hint}' loaded.")
+                capable_workers = await self.storage.get_workers(hot_ids)
+                from . import metrics
+
+                metrics.tasks_hot_dispatched_total.inc(
+                    {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_cache"}
+                )
+
+        if not capable_workers:
+            candidate_ids = await self.storage.find_workers_for_skill(task_type)
+            if not candidate_ids:
+                logger.warning(f"No idle workers found for task '{task_type}'")
+                raise RuntimeError(f"No suitable workers for task type '{task_type}'")
+            capable_workers = await self.storage.get_workers(candidate_ids)
+
         logger.debug(f"Found {len(capable_workers)} capable workers for task '{task_type}'")
 
         if not capable_workers:
             raise RuntimeError(f"No suitable workers for task type '{task_type}' (data missing)")
 
         if resource_requirements:
-            compliant_workers = [w for w in capable_workers if self._is_worker_compliant(w, resource_requirements)]
+            compliant_workers = []
+            rejection_reasons: dict[str, int] = defaultdict(int)
+
+            for w in capable_workers:
+                is_valid, reason = self._check_worker_compliance(w, resource_requirements)
+                if is_valid:
+                    compliant_workers.append(w)
+                else:
+                    rejection_reasons[reason or "unknown"] += 1
+
             logger.debug(
                 f"Compliant workers for resources '{resource_requirements}': "
                 f"{[w['worker_id'] for w in compliant_workers]}"
             )
             if not compliant_workers:
+                summary = dict(rejection_reasons)
+                logger.warning(f"No worker satisfies requirements. Rejection summary: {summary}")
                 raise RuntimeError(
-                    f"No worker satisfies the resource requirements for task '{task_type}'",
+                    f"No worker satisfies the resource requirements for task '{task_type}'. Reasons: {summary}",
                 )
             capable_workers = compliant_workers
 
         max_cost = task_info.get("max_cost")
         if max_cost is not None:
-            cost_compliant_workers = [w for w in capable_workers if w.get("cost_per_second", float("inf")) <= max_cost]
+
+            def is_cost_compliant(w: dict[str, Any]) -> bool:
+                capabilities = w.get("capabilities", {})
+                cost_map = capabilities.get("cost_per_skill", {})
+                if task_type in cost_map:
+                    return bool(cost_map[task_type] <= max_cost)
+                # Fallback to legacy fields
+                cost = w.get("cost_per_second", w.get("cost", float("inf")))
+                return bool(cost <= max_cost)
+
+            cost_compliant_workers = [w for w in capable_workers if is_cost_compliant(w)]
             logger.debug(
                 f"Cost compliant workers (max_cost={max_cost}): {[w['worker_id'] for w in cost_compliant_workers]}"
             )
@@ -191,7 +262,7 @@ class Dispatcher:
             f"Dispatching task '{task_type}' to worker {worker_id} (strategy: {dispatch_strategy})",
         )
 
-        task_id = task_info.get("task_id") or str(uuid4())
+        task_id = task_info.get("task_id") or job_id
         payload = {
             "job_id": job_id,
             "task_id": task_id,
@@ -200,16 +271,19 @@ class Dispatcher:
             "tracing_context": {},
             "params_metadata": job_state.get("data_metadata"),
         }
-        # Inject tracing context into the payload, not headers
         inject(payload["tracing_context"], context=job_state.get("tracing_context"))
 
         try:
             priority = task_info.get("priority", 0.0)
             await self.storage.enqueue_task_for_worker(worker_id, payload, priority)
+
+            # HLN SCALABILITY: Optimistically increment load to prevent overloading
+            # the worker before the next heartbeat arrives.
+            await self.storage.increment_worker_load(worker_id)
+
             logger.info(
                 f"Task {task_id} with priority {priority} successfully enqueued for worker {worker_id}",
             )
-            # Save task ID and worker ID in the Job state for cancellation capability
             job_state["current_task_id"] = task_id
             job_state["task_worker_id"] = worker_id
             await self.storage.save_job_state(job_id, job_state)

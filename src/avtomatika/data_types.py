@@ -37,7 +37,7 @@ class WorkerInfo(NamedTuple):
     address: str
     dynamic_token: str
     worker_type: str
-    supported_tasks: list[str]
+    supported_skills: list[str]
     resources: Resources
     installed_software: dict[str, str]
     installed_models: list[InstalledModel]

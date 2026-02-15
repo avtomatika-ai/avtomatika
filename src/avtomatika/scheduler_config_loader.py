@@ -13,6 +13,8 @@ class ScheduledJobConfig:
     weekly_days: list[str] | None = None
     monthly_dates: list[int] | None = None
     time: str | None = None
+    dispatch_timeout: int | None = None
+    result_timeout: int | None = None
 
 
 def load_schedules_from_file(file_path: str) -> list[ScheduledJobConfig]:
@@ -39,6 +41,8 @@ def load_schedules_from_file(file_path: str) -> list[ScheduledJobConfig]:
                 weekly_days=config.get("weekly_days"),
                 monthly_dates=config.get("monthly_dates"),
                 time=config.get("time"),
+                dispatch_timeout=config.get("dispatch_timeout"),
+                result_timeout=config.get("result_timeout"),
             )
         )
     return schedules

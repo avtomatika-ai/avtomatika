@@ -102,7 +102,6 @@ class JobExecutor:
                 logger.warning(f"Job {job_id} is already in a terminal state '{job_state['status']}', skipping.")
                 return
 
-            # Ensure retry_count is initialized.
             if "retry_count" not in job_state:
                 job_state["retry_count"] = 0
 
@@ -116,7 +115,6 @@ class JobExecutor:
                 },
             )
 
-            # Set up distributed tracing context.
             parent_context = TraceContextTextMapPropagator().extract(
                 carrier=job_state.get("tracing_context", {}),
             )
@@ -128,14 +126,12 @@ class JobExecutor:
                 span.set_attribute("job.id", job_id)
                 span.set_attribute("job.current_state", job_state["current_state"])
 
-                # Inject the current tracing context back into the job state for propagation.
                 tracing_context: dict[str, str] = {}
                 inject(tracing_context)
                 job_state["tracing_context"] = tracing_context
 
                 blueprint = self.engine.blueprints.get(job_state["blueprint_name"])
                 if not blueprint:
-                    # This is a critical, non-retriable error.
                     duration_ms = int((monotonic() - start_time) * 1000)
                     await self._handle_failure(
                         job_state,
@@ -146,8 +142,11 @@ class JobExecutor:
                     )
                     return
 
-                # Prepare the context and action factory for the handler.
-                action_factory = ActionFactory(job_id)
+                action_factory = ActionFactory(
+                    job_id,
+                    default_dispatch_timeout=job_state.get("dispatch_timeout"),
+                    default_result_timeout=job_state.get("result_timeout"),
+                )
                 client_config_dict = job_state.get("client_config", {})
                 client_config = ClientConfig(
                     token=client_config_dict.get("token", ""),
@@ -155,7 +154,6 @@ class JobExecutor:
                     params=client_config_dict.get("params", {}),
                 )
 
-                # Get TaskFiles if S3 service is available
                 s3_service = self.engine.app.get(S3_SERVICE_KEY)
                 task_files = s3_service.get_task_files(job_id) if s3_service else None
 
@@ -173,16 +171,13 @@ class JobExecutor:
                 )
 
                 try:
-                    # Find and execute the appropriate handler for the current state.
-                    # It's important to check for aggregator handlers first for states
-                    # that are targets of parallel execution.
+                    # Aggregator handlers take priority for states that are targets of parallel execution.
                     is_aggregator_state = job_state.get("aggregation_target") == job_state.get("current_state")
                     if is_aggregator_state and job_state.get("current_state") in blueprint.aggregator_handlers:
                         handler = blueprint.aggregator_handlers[job_state["current_state"]]
                     else:
                         handler = blueprint.find_handler(context.current_state, context)
 
-                    # Build arguments for the handler dynamically.
                     param_names = blueprint.get_handler_params(handler)
                     params_to_inject: dict[str, Any] = {}
 
@@ -193,19 +188,14 @@ class JobExecutor:
                         if "task_files" in param_names:
                             params_to_inject["task_files"] = task_files
                     else:
-                        # New injection logic with prioritized lookup.
                         context_as_dict = context._asdict()
                         for param_name in param_names:
-                            # Direct injection of task_files
                             if param_name == "task_files":
                                 params_to_inject[param_name] = task_files
-                            # Look in JobContext fields first.
                             elif param_name in context_as_dict:
                                 params_to_inject[param_name] = context_as_dict[param_name]
-                            # Then look in state_history (data from previous steps/workers).
                             elif param_name in context.state_history:
                                 params_to_inject[param_name] = context.state_history[param_name]
-                            # Finally, look in the initial data the job was created with.
                             elif param_name in context.initial_data:
                                 params_to_inject[param_name] = context.initial_data[param_name]
 
@@ -213,7 +203,6 @@ class JobExecutor:
 
                     duration_ms = int((monotonic() - start_time) * 1000)
 
-                    # Process the single action requested by the handler.
                     if action_factory.next_state:
                         await self._handle_transition(
                             job_state,
@@ -243,7 +232,6 @@ class JobExecutor:
                         await self._handle_terminal_reached(job_state, status, duration_ms)
 
                 except Exception as e:
-                    # This catches errors within the handler's execution.
                     duration_ms = int((monotonic() - start_time) * 1000)
                     await self._handle_failure(job_state, e, duration_ms)
         finally:
@@ -274,9 +262,9 @@ class JobExecutor:
         job_state["status"] = status
         await self.storage.save_job_state(job_id, job_state)
 
-        # Clean up S3 files if service is available
+        # Clean up S3 files if service is available and auto-cleanup is enabled
         s3_service = self.engine.app.get(S3_SERVICE_KEY)
-        if s3_service:
+        if s3_service and self.engine.config.S3_AUTO_CLEANUP:
             task_files = s3_service.get_task_files(job_id)
             if task_files:
                 create_task(task_files.cleanup())
@@ -340,12 +328,33 @@ class JobExecutor:
         else:
             logger.info(f"Job {job_id} dispatching task: {task_info}")
             now = monotonic()
-            timeout_seconds = task_info.get("timeout_seconds") or self.engine.config.WORKER_TIMEOUT_SECONDS
-            timeout_at = now + timeout_seconds
+
+            dispatch_timeout = task_info.get("dispatch_timeout_seconds")
+            result_timeout = task_info.get("result_timeout_seconds")
+            execution_timeout = task_info.get("timeout_seconds")
+
+            # Absolute deadlines from now
+            dispatch_deadline = now + dispatch_timeout if dispatch_timeout is not None else None
+            result_deadline = now + result_timeout if result_timeout is not None else None
+
+            # Initial watch: wait for the EARLIEST event (either too late to start or too late for result)
+            deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
+            if deadlines:
+                timeout_at = min(deadlines)
+            else:
+                # Global fallback if no specific timeouts are set
+                timeout_at = now + (execution_timeout or self.engine.config.WORKER_TIMEOUT_SECONDS)
+
             job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
             job_state["task_dispatched_at"] = now
-            job_state["current_task_info"] = task_info  # Save for retries
+            job_state["current_task_info"] = task_info
             job_state["current_task_transitions"] = task_info.get("transitions", {})
+
+            # Store deadlines for WorkerService and Watcher
+            job_state["dispatch_deadline"] = dispatch_deadline
+            job_state["result_deadline"] = result_deadline
+            job_state["execution_timeout_seconds"] = execution_timeout
+
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.add_job_to_watch(job_id, timeout_at)
             await self.dispatcher.dispatch(job_state, task_info)
@@ -377,6 +386,8 @@ class JobExecutor:
             "initial_data": sub_blueprint_info["initial_data"],
             "status": JOB_STATUS_PENDING,
             "parent_job_id": parent_job_id,
+            "dispatch_timeout": sub_blueprint_info.get("dispatch_timeout"),
+            "result_timeout": sub_blueprint_info.get("result_timeout"),
         }
         await self.storage.save_job_state(child_job_id, child_job_state)
         await self.storage.enqueue_job(child_job_id)
@@ -429,8 +440,23 @@ class JobExecutor:
             }
 
             now = monotonic()
-            timeout_seconds = task_info.get("timeout_seconds") or self.engine.config.WORKER_TIMEOUT_SECONDS
-            timeout_at = now + timeout_seconds
+            dispatch_timeout = task_info.get("dispatch_timeout_seconds")
+            result_timeout = task_info.get("result_timeout_seconds")
+            execution_timeout = task_info.get("timeout_seconds")
+
+            # Absolute deadlines for the branch
+            dispatch_deadline = now + dispatch_timeout if dispatch_timeout is not None else None
+            result_deadline = now + result_timeout if result_timeout is not None else None
+
+            deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
+            if deadlines:
+                timeout_at = min(deadlines)
+            else:
+                timeout_at = now + (execution_timeout or self.engine.config.WORKER_TIMEOUT_SECONDS)
+
+            # Note: For parallel branches, we store deadlines in the task info itself
+            # or rely on the Watcher to check the branch's specific watch entry.
+            # We add branch-specific info for the Watcher to use if needed.
 
             await self.storage.add_job_to_watch(
                 f"{job_id}:{branch_id}",
@@ -471,18 +497,15 @@ class JobExecutor:
         )
 
         if current_retries < max_retries:
-            # --- Perform a retry on the handler execution ---
             job_state["retry_count"] = current_retries + 1
             job_state["status"] = "awaiting_retry"
             job_state["error_message"] = str(error)
             await self.storage.save_job_state(job_id, job_state)
-            # Re-enqueue the job to try the same state handler again.
             await self.storage.enqueue_job(job_id)
             logger.warning(
                 f"Job {job_id} failed in-handler, will be retried. Attempt {job_state['retry_count']}.",
             )
         else:
-            # --- Max retries reached, move to quarantine ---
             logger.critical(
                 f"Job {job_id} has failed handler execution {max_retries + 1} times. Moving to quarantine.",
             )
@@ -490,7 +513,13 @@ class JobExecutor:
             job_state["error_message"] = str(error)
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.quarantine_job(job_id)
-            # If this quarantined job was a sub-job, we must now resume its parent.
+
+            s3_service = self.engine.app.get(S3_SERVICE_KEY)
+            if s3_service and self.engine.config.S3_AUTO_CLEANUP:
+                task_files = s3_service.get_task_files(job_id)
+                if task_files:
+                    create_task(task_files.cleanup())
+
             await self._check_and_resume_parent(job_state)
             await self.engine.send_job_webhook(job_state, "job_quarantined")
             from . import metrics
@@ -518,12 +547,10 @@ class JobExecutor:
             )
             return
 
-        # Determine the outcome of the child job to select the correct transition.
         child_outcome = "success" if child_job_state["current_state"] == JOB_STATUS_FINISHED else "failure"
         transitions = parent_job_state.get("current_task_transitions", {})
         next_state = transitions.get(child_outcome, "failed")
 
-        # Save the result of the sub-job into the parent's history for better tracing.
         if "state_history" not in parent_job_state:
             parent_job_state["state_history"] = {}
         parent_job_state["state_history"][f"sub_job_{child_job_id}_result"] = {
@@ -532,7 +559,6 @@ class JobExecutor:
             "error_message": child_job_state.get("error_message"),
         }
 
-        # Update the parent job to its new state and re-enqueue it.
         parent_job_state["current_state"] = next_state
         parent_job_state["status"] = JOB_STATUS_RUNNING
         await self.storage.save_job_state(parent_job_id, parent_job_state)
@@ -560,10 +586,8 @@ class JobExecutor:
 
         while self._running:
             try:
-                # Wait for an available slot before fetching a new job
                 await semaphore.acquire()
 
-                # Block for a configured time waiting for a job
                 block_time = self.engine.config.REDIS_STREAM_BLOCK_MS
                 result = await self.storage.dequeue_job(block=block_time if block_time > 0 else None)
 
@@ -571,12 +595,9 @@ class JobExecutor:
                     job_id, message_id = result
                     task = create_task(self._process_job(job_id, message_id))
                     task.add_done_callback(self._handle_task_completion)
-                    # Release the semaphore slot when the task is done
                     task.add_done_callback(lambda _: semaphore.release())
                 else:
-                    # Timeout reached, release slot and loop again
                     semaphore.release()
-                    # Prevent busy loop if blocking is disabled (e.g. in tests) or failed
                     if block_time <= 0:
                         await sleep(0.1)
 
@@ -584,7 +605,6 @@ class JobExecutor:
                 break
             except Exception:
                 logger.exception("Error in JobExecutor main loop.")
-                # If an error occurred (e.g. Redis connection lost), sleep briefly to avoid log spam
                 semaphore.release()
                 await sleep(1)
         logger.info("JobExecutor stopped.")

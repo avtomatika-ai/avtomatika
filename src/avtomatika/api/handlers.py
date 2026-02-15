@@ -10,11 +10,11 @@ from orjson import OPT_INDENT_2, dumps, loads
 from .. import metrics
 from ..app_keys import (
     ENGINE_KEY,
+    S3_SERVICE_KEY,
 )
 from ..blueprint import StateMachineBlueprint
 from ..client_config_loader import load_client_configs_to_redis
 from ..constants import (
-    COMMAND_CANCEL_TASK,
     JOB_STATUS_PENDING,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_HUMAN,
@@ -47,15 +47,17 @@ def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[we
         try:
             request_body = await request.json(loads=loads)
             initial_data = request_body.get("initial_data", {})
-            # Backward compatibility: if initial_data key is missing, assume body is initial_data
+            # Backward compatibility
             if (
                 "initial_data" not in request_body
                 and request_body
-                and not any(k in request_body for k in ("webhook_url",))
+                and not any(k in request_body for k in ("webhook_url", "dispatch_timeout"))
             ):
                 initial_data = request_body
 
             webhook_url = request_body.get("webhook_url")
+            dispatch_timeout = request_body.get("dispatch_timeout")
+            result_timeout = request_body.get("result_timeout")
         except Exception:
             return json_response({"error": "Invalid JSON body"}, status=400)
 
@@ -73,8 +75,17 @@ def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[we
             "tracing_context": carrier,
             "client_config": client_config,
             "webhook_url": webhook_url,
+            "dispatch_timeout": dispatch_timeout,
+            "result_timeout": result_timeout,
         }
         await engine.storage.save_job_state(job_id, job_state)
+
+        # HLN RELIABILITY: Immediately start watching for dispatch timeout
+        from time import monotonic
+
+        if dispatch_timeout:
+            await engine.storage.add_job_to_watch(job_id, monotonic() + dispatch_timeout)
+
         await engine.storage.enqueue_job(job_id)
         metrics.jobs_total.inc({metrics.LABEL_BLUEPRINT: blueprint.name})
         return json_response({"status": "accepted", "job_id": job_id}, status=202)
@@ -99,43 +110,9 @@ async def cancel_job_handler(request: web.Request) -> web.Response:
     if not job_id:
         return json_response({"error": "job_id is required in path"}, status=400)
 
-    job_state = await engine.storage.get_job_state(job_id)
-    if not job_state:
-        return json_response({"error": "Job not found"}, status=404)
-
-    if job_state.get("status") != JOB_STATUS_WAITING_FOR_WORKER:
-        return json_response(
-            {"error": "Job is not in a state that can be cancelled (must be waiting for a worker)."},
-            status=409,
-        )
-
-    worker_id = job_state.get("task_worker_id")
-    if not worker_id:
-        return json_response(
-            {"error": "Cannot cancel job: worker_id not found in job state."},
-            status=500,
-        )
-
-    worker_info = await engine.storage.get_worker_info(worker_id)
-    task_id = job_state.get("current_task_id")
-    if not task_id:
-        return json_response(
-            {"error": "Cannot cancel job: task_id not found in job state."},
-            status=500,
-        )
-
-    # Set Redis flag as a reliable fallback/primary mechanism
-    await engine.storage.set_task_cancellation_flag(task_id)
-
-    # Attempt WebSocket-based cancellation if supported
-    if worker_info and worker_info.get("capabilities", {}).get("websockets"):
-        command = {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
-        sent = await engine.ws_manager.send_command(worker_id, command)
-        if sent:
-            return json_response({"status": "cancellation_request_sent"})
-        else:
-            logger.warning(f"Failed to send WebSocket cancellation for task {task_id}, but Redis flag is set.")
-            # Proceed to return success, as the Redis flag will handle it
+    cancelled = await engine.cancel_job(job_id)
+    if not cancelled:
+        return json_response({"error": "Job not found or already terminal."}, status=404)
 
     return json_response({"status": "cancellation_request_accepted"})
 
@@ -233,6 +210,87 @@ async def get_quarantined_jobs_handler(request: web.Request) -> web.Response:
     return json_response(jobs)
 
 
+async def get_job_file_upload_handler(request: web.Request) -> web.Response:
+    engine = request.app[ENGINE_KEY]
+    job_id = request.match_info.get("job_id")
+    filename = request.query.get("filename")
+    try:
+        expires_in = int(request.query.get("expires_in", "3600"))
+    except ValueError:
+        return json_response({"error": "expires_in must be an integer"}, status=400)
+
+    if not job_id or not filename:
+        return json_response({"error": "job_id and filename (query param) are required"}, status=400)
+
+    s3_service = engine.app.get(S3_SERVICE_KEY)
+    if not s3_service or not s3_service._enabled:
+        return json_response({"error": "S3 support is not enabled"}, status=501)
+
+    task_files = s3_service.get_task_files(job_id)
+    if not task_files:
+        return json_response({"error": "Failed to initialize S3 storage for this job"}, status=500)
+
+    try:
+        # We only support PUT here now, as GET is handled by the redirect endpoint
+        url = task_files.generate_presigned_url(filename, method="PUT", expires_in=expires_in)
+        return json_response({"url": url, "expires_in": expires_in, "method": "PUT"})
+    except Exception as e:
+        logger.error(f"Failed to generate upload URL: {e}")
+        return json_response({"error": str(e)}, status=500)
+
+
+async def stream_job_file_upload_handler(request: web.Request) -> web.Response:
+    engine = request.app[ENGINE_KEY]
+    job_id = request.match_info.get("job_id")
+    filename = request.match_info.get("filename")
+
+    if not job_id or not filename:
+        return json_response({"error": "job_id and filename (path param) are required"}, status=400)
+
+    s3_service = engine.app.get(S3_SERVICE_KEY)
+    if not s3_service or not s3_service._enabled:
+        return json_response({"error": "S3 support is not enabled"}, status=501)
+
+    task_files = s3_service.get_task_files(job_id)
+    if not task_files:
+        return json_response({"error": "Failed to initialize S3 storage for this job"}, status=500)
+
+    try:
+        # Pipe the request content stream directly to S3
+        uri = await task_files.upload_stream(filename, request.content)
+        return json_response({"status": "uploaded", "s3_uri": uri})
+    except Exception as e:
+        logger.error(f"Streaming upload failed for {filename}: {e}")
+        return json_response({"error": str(e)}, status=500)
+
+
+async def get_job_file_download_handler(request: web.Request) -> web.StreamResponse:
+    engine = request.app[ENGINE_KEY]
+    job_id = request.match_info.get("job_id")
+    filename = request.match_info.get("filename")
+
+    if not job_id or not filename:
+        raise web.HTTPBadRequest(text="job_id and filename are required")
+
+    s3_service = engine.app.get(S3_SERVICE_KEY)
+    if not s3_service or not s3_service._enabled:
+        raise web.HTTPNotImplemented(text="S3 support is not enabled")
+
+    task_files = s3_service.get_task_files(job_id)
+    if not task_files:
+        raise web.HTTPInternalServerError(text="Failed to initialize S3 storage for this job")
+
+    try:
+        # Generate a short-lived URL for the redirect (60 seconds is enough for the browser to start downloading)
+        url = task_files.generate_presigned_url(filename, method="GET", expires_in=60)
+        raise web.HTTPFound(location=url)
+    except web.HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to generate download redirect for {filename}: {e}")
+        raise web.HTTPInternalServerError(text=str(e)) from e
+
+
 async def reload_worker_configs_handler(request: web.Request) -> web.Response:
     engine = request.app[ENGINE_KEY]
     logger.info("Received request to reload worker configurations.")
@@ -293,5 +351,9 @@ async def docs_handler(request: web.Request) -> web.Response:
         endpoints_json = dumps(blueprint_endpoints, option=OPT_INDENT_2).decode("utf-8")
         marker = "group: 'Protected API',\n                endpoints: ["
         content = content.replace(marker, f"{marker}\n{endpoints_json.strip('[]')},")
+
+    s3_service = engine.app.get(S3_SERVICE_KEY)
+    s3_enabled = "true" if (s3_service and s3_service._enabled) else "false"
+    content = content.replace("{{S3_ENABLED}}", s3_enabled)
 
     return web.Response(text=content, content_type="text/html")

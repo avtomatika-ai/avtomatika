@@ -175,7 +175,7 @@ async def test_sts_flow(pki, mtls_config):
     async with aiohttp.ClientSession() as session:
         # Try to register using the Token
         headers = {AUTH_HEADER_WORKER: access_token}
-        reg_data = {"worker_id": worker_id, "worker_type": "sts-worker", "supported_tasks": ["t1"]}
+        reg_data = {"worker_id": worker_id, "worker_type": "sts-worker", "supported_skills": ["t1"]}
 
         async with session.post(
             f"{base_url}/_worker/workers/register", json=reg_data, headers=headers, ssl=no_cert_ssl_ctx

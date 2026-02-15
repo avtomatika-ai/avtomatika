@@ -1,3 +1,3 @@
 [test_worker]
 token = "worker_token_123"
-supported_tasks = ["error_task"]
+supported_skills = ["error_task"]

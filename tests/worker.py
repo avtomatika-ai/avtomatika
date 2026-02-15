@@ -19,7 +19,7 @@ async def register_with_avtomatika(app):
     worker_payload = {
         "worker_id": WORKER_ID,
         "worker_type": "e2e_test_worker",
-        "supported_tasks": ["error_task"],
+        "supported_skills": ["error_task"],
         "status": "idle",
     }
     headers = {AUTH_HEADER_WORKER: WORKER_TOKEN}

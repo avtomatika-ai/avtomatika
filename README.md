@@ -224,7 +224,10 @@ async def publish_handler_old_style(context):
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **O(1) Dispatcher**: Uses advanced Redis Set intersections to find suitable workers instantly.
+*   **Smart Dispatching**: High-performance routing using Redis Set intersections.
+    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded in memory (based on `model_name` param) or have everything ready for a specific skill.
+    *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
+*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands (like task cancellations) directly in response to worker heartbeats, ensuring reliability even without persistent connections.
 *   **Zero Trust Security**:
     *   **mTLS (Mutual TLS)**: Mutual authentication between Orchestrator and Workers using certificates.
     *   **STS (Security Token Service)**: Token rotation mechanism with short-lived access tokens.
@@ -339,6 +342,7 @@ Avtomatika includes a built-in distributed scheduler. It allows you to trigger b
 
 *   **Configuration:** Defined in `schedules.toml`.
 *   **Timezone Aware:** Supports global timezone configuration (e.g., `TZ="Europe/Moscow"`).
+*   **Expiration Support:** Supports `dispatch_timeout` and `result_timeout` to ensure tasks don't run or complete too late.
 *   **Distributed Locking:** Safe to run with multiple orchestrator instances; jobs are guaranteed to run only once per interval using distributed locks (Redis/Memory).
 
 ```toml
@@ -346,6 +350,7 @@ Avtomatika includes a built-in distributed scheduler. It allows you to trigger b
 [nightly_backup]
 blueprint = "backup_flow"
 daily_at = "02:00"
+dispatch_timeout = 60 # Fail if no worker picks it up within 1 minute
 ```
 
 ### 6. Webhook Notifications
@@ -388,7 +393,9 @@ POST /api/v1/jobs/my_flow
     "initial_data": {
         "video_url": "..."
     },
-    "webhook_url": "https://my-app.com/webhooks/avtomatika"
+    "webhook_url": "https://my-app.com/webhooks/avtomatika",
+    "dispatch_timeout": 30,
+    "result_timeout": 120
 }
 ```
 
@@ -508,6 +515,13 @@ By default, the engine uses in-memory storage. For production, you must configur
         ```
         *   SQLite: `sqlite:///path/to/history.db`
         *   PostgreSQL: `postgresql://user:pass@host/db`
+
+### Dynamic Blueprint Loading
+
+Avtomatika supports automatic loading of blueprints from a directory. This allows you to deploy and update your workflow logic by simply copying Python files without changing the orchestrator's core code.
+
+*   **Configure**: Set the `BLUEPRINTS_DIR` environment variable to the path containing your blueprint files.
+*   **How it works**: At startup, the engine scans the directory for all `.py` files, imports them, and automatically registers any found `StateMachineBlueprint` instances.
 
 ### Security
 

@@ -76,7 +76,12 @@ async def test_issue_token_with_mtls(engine):
         # We also need extract_cert_identity to return not None, so engine check passes
         m.setattr("rxon.security.extract_cert_identity", lambda r: "worker-1")
 
-        context = {"raw_request": MagicMock(), "token": None, "worker_id_hint": "worker-1"}
+        context = {
+            "raw_request": MagicMock(),
+            "token": None,
+            "worker_id_hint": "worker-1",
+            "cert_identity": "worker-1",
+        }
 
         expected_token = TokenResponse(access_token="abc", expires_in=3600, worker_id="worker-1")
         engine.worker_service.issue_access_token.return_value = expected_token

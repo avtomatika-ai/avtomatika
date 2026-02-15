@@ -7,8 +7,15 @@ logger = getLogger(__name__)
 class ActionFactory:
     """A factory that provides handlers with methods for process control."""
 
-    def __init__(self, job_id: str):
+    def __init__(
+        self,
+        job_id: str,
+        default_dispatch_timeout: int | None = None,
+        default_result_timeout: int | None = None,
+    ):
         self._job_id = job_id
+        self._default_dispatch_timeout = default_dispatch_timeout
+        self._default_result_timeout = default_result_timeout
         self._next_state_val: str | None = None
         self._task_to_dispatch_val: dict[str, Any] | None = None
         self._sub_blueprint_to_run_val: dict[str, Any] | None = None
@@ -75,12 +82,23 @@ class ActionFactory:
         dispatch_strategy: str = "default",
         resource_requirements: dict[str, Any] | None = None,
         timeout_seconds: int | None = None,
+        dispatch_timeout_seconds: int | None = None,
+        result_timeout_seconds: int | None = None,
         max_cost: float | None = None,
         priority: float = 0.0,
     ) -> None:
         """Dispatches a task to a worker for execution."""
         self._check_for_existing_action()
         logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}'")
+
+        # Priority: explicit param > job default
+        final_dispatch_timeout = (
+            dispatch_timeout_seconds if dispatch_timeout_seconds is not None else self._default_dispatch_timeout
+        )
+        final_result_timeout = (
+            result_timeout_seconds if result_timeout_seconds is not None else self._default_result_timeout
+        )
+
         self._task_to_dispatch_val = {
             "type": task_type,
             "params": params,
@@ -88,6 +106,8 @@ class ActionFactory:
             "dispatch_strategy": dispatch_strategy,
             "resource_requirements": resource_requirements,
             "timeout_seconds": timeout_seconds,
+            "dispatch_timeout_seconds": final_dispatch_timeout,
+            "result_timeout_seconds": final_result_timeout,
             "max_cost": max_cost,
             "priority": priority,
         }
@@ -113,6 +133,8 @@ class ActionFactory:
         blueprint_name: str,
         initial_data: dict[str, Any],
         transitions: dict[str, str],
+        dispatch_timeout: int | None = None,
+        result_timeout: int | None = None,
     ) -> None:
         """Runs a child blueprint and waits for its result."""
         self._check_for_existing_action()
@@ -121,4 +143,6 @@ class ActionFactory:
             "blueprint_name": blueprint_name,
             "initial_data": initial_data,
             "transitions": transitions,
+            "dispatch_timeout": dispatch_timeout,
+            "result_timeout": result_timeout,
         }

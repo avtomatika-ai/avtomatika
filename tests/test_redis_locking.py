@@ -21,7 +21,7 @@ async def test_redis_storage_locking():
     assert await storage.acquire_lock(key, holder_1, ttl=10) is True
 
     # 2. Try acquire by another holder (should fail)
-    assert await storage.acquire_lock(key, holder_2, ttl=10) is False
+    assert not await storage.acquire_lock(key, holder_2, ttl=10)
 
     # 3. Release by wrong holder (should fail)
     assert await storage.release_lock(key, holder_2) is False

@@ -35,7 +35,7 @@ class TestRedisStorage(StorageTestSuite):
         info = {
             "worker_id": worker_id,
             "status": "idle",
-            "supported_tasks": ["task_a"],
+            "supported_skills": ["task_a"],
         }
         await storage.register_worker(worker_id, info, ttl)
 

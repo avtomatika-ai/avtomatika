@@ -17,7 +17,7 @@ async def test_register_worker_invalid_id():
 
     service = WorkerService(storage, history, config, engine)
 
-    invalid_payload = {"worker_id": "bad/worker/id", "worker_type": "cpu", "supported_tasks": []}
+    invalid_payload = {"worker_id": "bad/worker/id", "worker_type": "cpu", "supported_skills": []}
 
     with pytest.raises(ValueError, match="Invalid worker_id"):
         await service.register_worker(invalid_payload)
@@ -37,7 +37,7 @@ async def test_register_worker_valid_id():
 
     service = WorkerService(storage, history, config, engine)
 
-    valid_payload = {"worker_id": "good-worker-id_123", "worker_type": "cpu", "supported_tasks": []}
+    valid_payload = {"worker_id": "good-worker-id_123", "worker_type": "cpu", "supported_skills": []}
 
     # Should not raise exception
     await service.register_worker(valid_payload)

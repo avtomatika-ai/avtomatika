@@ -301,7 +301,7 @@ async def test_worker_registration_with_full_data(aiohttp_client, app):
     worker_payload = {
         "worker_id": "video-worker-gpu-01",
         "worker_type": "gpu_worker",
-        "supported_tasks": [
+        "supported_skills": [
             "ai_text_from_idea",
             "ai_images_from_script",
             "video_montage",
@@ -337,7 +337,7 @@ async def test_worker_registration_with_full_data(aiohttp_client, app):
     stored_data = workers[0]
 
     assert stored_data["worker_id"] == worker_payload["worker_id"]
-    assert stored_data["supported_tasks"] == worker_payload["supported_tasks"]
+    assert stored_data["supported_skills"] == worker_payload["supported_skills"]
     assert stored_data["resources"]["gpu_info"]["model"] == worker_payload["resources"]["gpu_info"]["model"]
     assert len(stored_data["installed_models"]) == 2
     assert stored_data["multi_orchestrator_info"]["mode"] == "FAILOVER"
@@ -353,7 +353,7 @@ async def test_empty_heartbeat_refreshes_ttl(aiohttp_client, app):
     worker_payload = {
         "worker_id": worker_id,
         "worker_type": "test",
-        "supported_tasks": ["test"],
+        "supported_skills": ["test"],
     }
     headers = {AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     resp = await client.post(
@@ -467,7 +467,7 @@ async def test_task_cancellation_via_websocket_mocked(aiohttp_client, app):
         {
             "worker_id": worker_id,
             "worker_type": "ws_worker",
-            "supported_tasks": ["any_task"],
+            "supported_skills": ["any_task"],
             "capabilities": {"websockets": True},
         },
         ttl=60,
@@ -479,7 +479,7 @@ async def test_task_cancellation_via_websocket_mocked(aiohttp_client, app):
     cancel_resp = await client.post(f"/api/v1/jobs/{job_id}/cancel", headers=headers)
 
     assert cancel_resp.status == 200
-    assert (await cancel_resp.json())["status"] == "cancellation_request_sent"
+    assert (await cancel_resp.json())["status"] == "cancellation_request_accepted"
 
     ws_manager_spy.send_command.assert_called_once()
     call_args, _ = ws_manager_spy.send_command.call_args
@@ -513,7 +513,7 @@ async def test_worker_individual_token_auth(aiohttp_client, app):
     await storage.set_worker_token(worker_id, hashed_individual_token)
 
     headers = {AUTH_HEADER_WORKER: individual_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
+    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -533,7 +533,7 @@ async def test_worker_individual_token_auth_failure(aiohttp_client, app):
     await storage.set_worker_token(worker_id, correct_token)
 
     headers = {AUTH_HEADER_WORKER: wrong_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
+    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -554,7 +554,7 @@ async def test_worker_global_token_fallback(aiohttp_client, app):
     worker_id = "worker-using-global-token"
 
     headers = {AUTH_HEADER_WORKER: global_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
+    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -569,7 +569,7 @@ async def test_worker_no_token_failure(aiohttp_client, app):
     await storage.flush_all()
 
     worker_id = "worker-with-no-token"
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_tasks": ["test"]}
+    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
 
     resp = await client.post("/_worker/workers/register", json=payload)  # No headers
 

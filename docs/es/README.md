@@ -340,6 +340,7 @@ Avtomatika incluye un programador distribuido integrado. Te permite activar blue
 
 *   **Configuración:** Definida en `schedules.toml`.
 *   **Conciencia de Zona Horaria:** Soporta configuración global de zona horaria (por ejemplo, `TZ="Europe/Madrid"`).
+*   **Soporte de Expiración:** Soporta `dispatch_timeout` y `result_timeout` para asegurar que las tareas no se ejecuten o completen demasiado tarde.
 *   **Bloqueo Distribuido:** Seguro para ejecutar con múltiples instancias del orquestador; se garantiza que los trabajos se ejecuten solo una vez por intervalo utilizando bloqueos distribuidos (Redis/Memoria).
 
 ```toml
@@ -347,6 +348,7 @@ Avtomatika incluye un programador distribuido integrado. Te permite activar blue
 [nightly_backup]
 blueprint = "backup_flow"
 daily_at = "02:00"
+dispatch_timeout = 60 # Falla si ningún worker la recoge en 1 minuto
 ```
 
 ### 6. Notificaciones Webhook
@@ -389,7 +391,9 @@ POST /api/v1/jobs/my_flow
     "initial_data": {
         "video_url": "..."
     },
-    "webhook_url": "https://my-app.com/webhooks/avtomatika"
+    "webhook_url": "https://my-app.com/webhooks/avtomatika",
+    "dispatch_timeout": 30,
+    "result_timeout": 120
 }
 ```
 
@@ -509,6 +513,13 @@ Por defecto, el motor utiliza almacenamiento en memoria. Para producción, debes
         ```
         *   SQLite: `sqlite:///ruta/a/history.db`
         *   PostgreSQL: `postgresql://user:pass@host/db`
+
+### Carga Dinámica de Blueprints
+
+Avtomatika admite la carga automática de blueprints desde un directorio. Esto le permite implementar y actualizar la lógica de su flujo de trabajo simplemente copiando archivos de Python sin cambiar el código central del orquestador.
+
+*   **Configurar**: Establezca la variable de entorno `BLUEPRINTS_DIR` con la ruta que contiene sus archivos de blueprint.
+*   **Cómo funciona**: Al inicio, el motor escanea el directorio en busca de todos los archivos `.py`, los importa y registra automáticamente cualquier instancia de `StateMachineBlueprint` encontrada.
 
 ### Seguridad
 

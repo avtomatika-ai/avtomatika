@@ -9,7 +9,7 @@ logger = getLogger(__name__)
 async def load_client_configs_to_redis(
     storage: StorageBackend,
     config_path: str = "clients.toml",
-):
+) -> None:
     """Reads client configurations from a TOML file and loads them into Redis.
 
     This function should be called on application startup. It populates Redis

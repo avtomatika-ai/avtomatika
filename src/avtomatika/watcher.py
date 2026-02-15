@@ -3,8 +3,6 @@ from logging import getLogger
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from .constants import JOB_STATUS_FAILED, JOB_STATUS_WAITING_FOR_WORKER
-
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
 
@@ -36,29 +34,19 @@ class Watcher:
                         timed_out_job_ids = await self.storage.get_timed_out_jobs(limit=100)
 
                         for job_id in timed_out_job_ids:
-                            logger.warning(f"Job {job_id} timed out. Moving to failed state.")
+                            logger.warning(f"Job {job_id} timed out. Processing timeout...")
                             try:
                                 # Get the latest version to avoid overwriting
                                 job_state = await self.storage.get_job_state(job_id)
-                                if job_state and job_state["status"] == JOB_STATUS_WAITING_FOR_WORKER:
-                                    job_state["status"] = JOB_STATUS_FAILED
-                                    job_state["error_message"] = "Worker task timed out."
-                                    await self.storage.save_job_state(job_id, job_state)
+                                if not job_state:
+                                    continue
 
-                                    # Increment the metric
-                                    from . import metrics
+                                # Use the engine's timeout handler for complex logic (retries, etc.)
+                                await self.engine.handle_job_timeout(job_state)
 
-                                    metrics.jobs_failed_total.inc(
-                                        {
-                                            metrics.LABEL_BLUEPRINT: job_state.get(
-                                                "blueprint_name",
-                                                "unknown",
-                                            ),
-                                        },
-                                    )
                             except Exception:
                                 logger.exception(
-                                    f"Failed to update state for timed out job {job_id}",
+                                    f"Failed to process timeout for job {job_id}",
                                 )
                     finally:
                         # Always release the lock so we (or others) can run next time

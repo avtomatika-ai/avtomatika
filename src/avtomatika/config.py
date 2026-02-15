@@ -73,6 +73,7 @@ class Config:
         self.S3_REGION: str = getenv("S3_REGION", "us-east-1")
         self.S3_DEFAULT_BUCKET: str = getenv("S3_DEFAULT_BUCKET", "avtomatika-payloads")
         self.S3_MAX_CONCURRENCY: int = int(getenv("S3_MAX_CONCURRENCY", 100))
+        self.S3_AUTO_CLEANUP: bool = getenv("S3_AUTO_CLEANUP", "true").lower() == "true"
 
         # Rate limiting settings
         self.RATE_LIMITING_ENABLED: bool = getenv("RATE_LIMITING_ENABLED", "true").lower() == "true"
@@ -85,6 +86,7 @@ class Config:
         self.WORKERS_CONFIG_PATH: str = getenv("WORKERS_CONFIG_PATH", "")
         self.CLIENTS_CONFIG_PATH: str = getenv("CLIENTS_CONFIG_PATH", "")
         self.SCHEDULES_CONFIG_PATH: str = getenv("SCHEDULES_CONFIG_PATH", "")
+        self.BLUEPRINTS_DIR: str = getenv("BLUEPRINTS_DIR", "")
 
         # Timezone settings
         self.TZ: str = getenv("TZ", "UTC")

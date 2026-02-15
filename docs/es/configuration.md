@@ -95,6 +95,8 @@ Cada sección representa un trabajo programado. El nombre de la sección sirve c
 | :--- | :--- | :--- | :--- |
 | `blueprint` | Cadena | **Sí** | El nombre del blueprint a ejecutar. |
 | `input_data` | Diccionario | No | Carga útil de datos iniciales para el trabajo. Por defecto es un diccionario vacío. |
+| `dispatch_timeout` | Entero | No | Expiración de cola (segundos). El trabajo falla si no es recogido por un worker. |
+| `result_timeout` | Entero | No | Plazo de ejecución (segundos). Tiempo absoluto desde la creación para el resultado. |
 | `interval_seconds` | Entero | *Uno de* | Ejecutar trabajo cada N segundos. |
 | `daily_at` | Cadena | *Uno de* | Ejecutar diariamente a una hora específica ("HH:MM"). |
 | `weekly_days` | Lista[Cadena] | *Uno de* | Ejecutar en días específicos ("mon", "tue", ...) a la `time`. |
@@ -154,6 +156,7 @@ Además de los archivos de configuración, el Orquestador se configura a través
 | `WORKERS_CONFIG_PATH` | Ruta a `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Ruta a `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Ruta a `schedules.toml`. | `""` |
+| `BLUEPRINTS_DIR` | Ruta a un directorio con archivos de Python que contienen instancias de `StateMachineBlueprint` para ser cargadas automáticamente. | `""` |
 | `TZ` | **Zona Horaria Global:** Afecta a los disparadores del programador, marcas de tiempo de logs y salida de API de historial (por ejemplo, "Europe/Madrid", "UTC"). | `UTC` |
 | `LOG_LEVEL` | Nivel de registro (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `LOG_FORMAT` | Formato de registro (`text` o `json`). | `json` |
@@ -194,4 +197,5 @@ Configura estas variables para habilitar la Descarga de Carga Útil en S3.
 | `S3_DEFAULT_BUCKET` | Nombre del bucket predeterminado para cargas útiles de trabajos. | `avtomatika-payloads` |
 | `S3_REGION` | Región S3. | `us-east-1` |
 | `S3_MAX_CONCURRENCY` | Número máximo de conexiones concurrentes a S3 en todos los trabajos. Previene el agotamiento de descriptores de archivos. | `100` |
+| `S3_AUTO_CLEANUP` | Si es `true`, elimina automáticamente los archivos de S3 y los artefactos temporales locales cuando un trabajo se completa o falla. Establezca en `false` si desea gestionar la limpieza manualmente o mediante políticas de ciclo de vida de S3. | `true` |
 | `TASK_FILES_DIR` | Directorio local para almacenamiento temporal de archivos durante la ejecución del trabajo. | `/tmp/avtomatika-payloads` |

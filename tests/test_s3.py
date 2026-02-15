@@ -274,3 +274,79 @@ async def test_job_executor_s3_injection(config):
 
     await executor._process_job(job_id, "msg-1")
     assert handler_called is True
+
+
+@pytest.mark.asyncio
+async def test_job_executor_s3_auto_cleanup(config):
+    from avtomatika.app_keys import S3_SERVICE_KEY
+    from avtomatika.blueprint import StateMachineBlueprint
+    from avtomatika.engine import OrchestratorEngine
+    from avtomatika.executor import JobExecutor
+
+    mock_storage = AsyncMock()
+    mock_history = AsyncMock()
+
+    # 1. Test WITH auto-cleanup enabled (default)
+    config.S3_AUTO_CLEANUP = True
+    engine = OrchestratorEngine(mock_storage, config)
+    engine.webhook_sender = AsyncMock()
+    engine.webhook_sender.start = MagicMock()
+    engine.dispatcher = MagicMock()
+
+    mock_s3 = MagicMock()
+    mock_task_files = MagicMock()
+    mock_task_files.cleanup = AsyncMock()
+    mock_s3.get_task_files.return_value = mock_task_files
+    engine.app[S3_SERVICE_KEY] = mock_s3
+
+    bp = StateMachineBlueprint("cleanup_test")
+
+    @bp.handler_for("start", is_start=True, is_end=True)
+    async def terminal_handler():
+        pass
+
+    engine.register_blueprint(bp)
+    executor = JobExecutor(engine, mock_history)
+
+    job_id = "job-cleanup-on"
+    job_state = {
+        "id": job_id,
+        "blueprint_name": "cleanup_test",
+        "current_state": "start",
+        "status": "running",
+        "initial_data": {},
+        "client_config": {},
+    }
+    mock_storage.get_job_state.return_value = job_state
+
+    await executor._process_job(job_id, "msg-1")
+    mock_task_files.cleanup.assert_called_once()
+
+    # 2. Test WITHOUT auto-cleanup
+    config.S3_AUTO_CLEANUP = False
+    engine2 = OrchestratorEngine(mock_storage, config)
+    engine2.webhook_sender = AsyncMock()
+    engine2.webhook_sender.start = MagicMock()
+    engine2.dispatcher = MagicMock()
+
+    mock_task_files2 = MagicMock()
+    mock_task_files2.cleanup = AsyncMock()
+    mock_s3_2 = MagicMock()
+    mock_s3_2.get_task_files.return_value = mock_task_files2
+    engine2.app[S3_SERVICE_KEY] = mock_s3_2
+    engine2.register_blueprint(bp)
+
+    executor2 = JobExecutor(engine2, mock_history)
+    job_id2 = "job-cleanup-off"
+    job_state2 = {
+        "id": job_id2,
+        "blueprint_name": "cleanup_test",
+        "current_state": "start",
+        "status": "running",
+        "initial_data": {},
+        "client_config": {},
+    }
+    mock_storage.get_job_state.return_value = job_state2
+
+    await executor2._process_job(job_id2, "msg-2")
+    mock_task_files2.cleanup.assert_not_called()

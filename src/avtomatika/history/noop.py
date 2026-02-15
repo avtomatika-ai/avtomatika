@@ -8,7 +8,7 @@ class NoOpHistoryStorage(HistoryStorageBase):
     Used when history storage is not configured.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     async def start(self) -> None:

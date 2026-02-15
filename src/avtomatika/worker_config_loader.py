@@ -9,7 +9,7 @@ from .storage.base import StorageBackend
 logger = getLogger(__name__)
 
 
-async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str):
+async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str) -> None:
     """
     Loads worker configurations from a TOML file into Redis.
     This allows for dynamic and secure management of worker tokens without

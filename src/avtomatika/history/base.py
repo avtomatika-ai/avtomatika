@@ -1,6 +1,6 @@
-import asyncio
-import contextlib
 from abc import ABC, abstractmethod
+from asyncio import CancelledError, Queue, QueueFull, Task, create_task
+from contextlib import suppress
 from logging import getLogger
 from typing import Any
 
@@ -12,21 +12,21 @@ class HistoryStorageBase(ABC):
     Implements buffered asynchronous logging to avoid blocking the main loop.
     """
 
-    def __init__(self):
-        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(maxsize=5000)
-        self._worker_task: asyncio.Task | None = None
+    def __init__(self) -> None:
+        self._queue: Queue[tuple[str, dict[str, Any]]] = Queue(maxsize=5000)
+        self._worker_task: Task | None = None
 
     async def start(self) -> None:
         """Starts the background worker for writing logs."""
         if not self._worker_task:
-            self._worker_task = asyncio.create_task(self._worker())
+            self._worker_task = create_task(self._worker())
             logger.info("HistoryStorage background worker started.")
 
     async def close(self) -> None:
         """Stops the background worker and closes resources."""
         if self._worker_task:
             self._worker_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with suppress(CancelledError):
                 await self._worker_task
             self._worker_task = None
             logger.info("HistoryStorage background worker stopped.")
@@ -40,14 +40,14 @@ class HistoryStorageBase(ABC):
         """Queues a job event for logging."""
         try:
             self._queue.put_nowait(("job", event_data))
-        except asyncio.QueueFull:
+        except QueueFull:
             logger.warning("History queue full! Dropping job event.")
 
     async def log_worker_event(self, event_data: dict[str, Any]) -> None:
         """Queues a worker event for logging."""
         try:
             self._queue.put_nowait(("worker", event_data))
-        except asyncio.QueueFull:
+        except QueueFull:
             logger.warning("History queue full! Dropping worker event.")
 
     async def _worker(self) -> None:
@@ -63,7 +63,7 @@ class HistoryStorageBase(ABC):
                     logger.error(f"Error persisting history event: {e}")
                 finally:
                     self._queue.task_done()
-            except asyncio.CancelledError:
+            except CancelledError:
                 break
 
     @abstractmethod

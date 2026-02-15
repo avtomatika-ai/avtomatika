@@ -73,7 +73,7 @@ Encapsula la lógica comercial central, separándola de la API HTTP.
 Esta es la clase central que une todos los componentes. Sus tareas principales:
 - Inicializar la aplicación web `aiohttp` y delegar la configuración de rutas a la capa API.
 - **Inicializar Servicios:** Arranca `WorkerService`, `S3Service`, etc.
-- Registrar "Blueprints" (`StateMachineBlueprint`).
+- **Registrar "Blueprints":** Admite tanto el registro manual de `StateMachineBlueprint` como la carga automática desde un directorio especificado por `BLUEPRINTS_DIR`.
 - Gestionar el ciclo de vida de los procesos en segundo plano (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
 - Proporcionar acceso a recursos compartidos a través de `aiohttp.web.AppKey`.
 
@@ -143,6 +143,11 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
   - `TRANSIENT_ERROR` (Predeterminado): Indica un problema temporal (por ejemplo, fallo de red, indisponibilidad de servicio externo). El Orquestador **reintentará** despachar la tarea varias veces antes de moverla a cuarentena.
   - `PERMANENT_ERROR`: Indica un problema permanente que no se resolverá reintentando (por ejemplo, archivo dañado, versión incompatible). La tarea se moverá inmediatamente a **cuarentena** sin reintentos.
   - `INVALID_INPUT_ERROR`: Indica un problema fundamental con los datos de entrada de la tarea (formato inválido, parámetros faltantes). El `Job` al que pertenece la tarea se moverá inmediatamente al estado **`failed`**, ya que la ejecución posterior no tiene sentido.
+
+  **Mecanismos de Expiración (Timeouts):**
+  El Orquestador admite dos tipos de tiempos de espera para las tareas:
+  - **`dispatch_timeout`** (Tiempo de espera en cola): Tiempo máximo que una tarea puede esperar a un worker libre. Si ningún worker recoge la tarea en este tiempo, se cancela.
+  - **`result_timeout`** (Plazo del resultado): Plazo absoluto para recibir el resultado desde el despacho. Si un worker recoge la tarea pero no devuelve un resultado antes de este momento, el resultado se ignora y la tarea se marca como fallida.
 
   **Niveles de Tolerancia a Fallos:**
   - **Reintento a Nivel de Tarea:** El Orquestador gestiona reintentos para `TRANSIENT_ERROR`.

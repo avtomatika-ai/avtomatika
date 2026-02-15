@@ -20,6 +20,9 @@ async def test_watcher_run():
     engine.storage.acquire_lock = AsyncMock(return_value=True)
     engine.storage.release_lock = AsyncMock(return_value=True)
     engine.storage.save_job_state = AsyncMock()  # Mock save_job_state too
+    engine.send_job_webhook = AsyncMock()  # Must be async mock now
+    engine.app.get = MagicMock(return_value=None)  # S3 Service mock
+    engine.handle_job_timeout = AsyncMock()  # Mock the delegated handler
 
     watcher = Watcher(engine)
     watcher.watch_interval_seconds = 0.1
@@ -32,12 +35,5 @@ async def test_watcher_run():
 
     engine.storage.get_timed_out_jobs.assert_called()
     engine.storage.get_job_state.assert_called_with("job-1")
-    engine.storage.save_job_state.assert_called_with(
-        "job-1",
-        {
-            "id": "job-1",
-            "status": "failed",
-            "blueprint_name": "test_bp",
-            "error_message": "Worker task timed out.",
-        },
-    )
+    # Logic is now delegated to handle_job_timeout
+    engine.handle_job_timeout.assert_called()

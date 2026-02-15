@@ -1,7 +1,7 @@
 from asyncio import Lock, PriorityQueue, Queue, QueueEmpty, wait_for
 from asyncio import TimeoutError as AsyncTimeoutError
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 
 from .base import StorageBackend
 
@@ -65,7 +65,7 @@ class MemoryStorage(StorageBackend):
     async def update_job_state_atomic(
         self,
         job_id: str,
-        update_callback: Any,
+        update_callback: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         async with self._lock:
             current_state = self._jobs.get(job_id, {})
@@ -114,7 +114,7 @@ class MemoryStorage(StorageBackend):
 
         try:
             # Type ignore because PriorityQueue.get() return type is generic
-            item = await wait_for(queue.get(), timeout=timeout)  # type: ignore
+            item = await wait_for(queue.get(), timeout=timeout)
             _, task_payload = item
             # Explicit cast for mypy
             if isinstance(task_payload, dict):
@@ -178,8 +178,8 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             return [self._workers[wid] for wid in worker_ids if wid in self._workers]
 
-    async def find_workers_for_task(self, task_type: str) -> list[str]:
-        """Finds idle workers supporting the task (O(N) for memory storage)."""
+    async def find_workers_for_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers supporting the skill (O(N) for memory storage)."""
         async with self._lock:
             now = monotonic()
             candidates = []
@@ -188,7 +188,35 @@ class MemoryStorage(StorageBackend):
                     continue
                 if info.get("status", "idle") != "idle":
                     continue
-                if task_type in info.get("supported_tasks", []):
+                if skill_name in info.get("supported_skills", []):
+                    candidates.append(worker_id)
+            return candidates
+
+    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
+        """Finds idle workers that have the specific model in hot cache."""
+        async with self._lock:
+            now = monotonic()
+            candidates = []
+            for worker_id, info in self._workers.items():
+                if self._worker_ttls.get(worker_id, 0) <= now:
+                    continue
+                if info.get("status", "idle") != "idle":
+                    continue
+                if skill_name in info.get("supported_skills", []) and model_name in info.get("hot_cache", []):
+                    candidates.append(worker_id)
+            return candidates
+
+    async def find_workers_by_hot_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers that have the specific skill marked as 'hot'."""
+        async with self._lock:
+            now = monotonic()
+            candidates = []
+            for worker_id, info in self._workers.items():
+                if self._worker_ttls.get(worker_id, 0) <= now:
+                    continue
+                if info.get("status", "idle") != "idle":
+                    continue
+                if skill_name in info.get("hot_skills", []):
                     candidates.append(worker_id)
             return candidates
 
@@ -330,6 +358,12 @@ class MemoryStorage(StorageBackend):
                 self._generic_key_ttls[key] = monotonic() + ttl
             else:
                 self._generic_key_ttls.pop(key, None)
+
+    async def increment_worker_load(self, worker_id: str) -> None:
+        async with self._lock:
+            if worker_id in self._workers:
+                worker = self._workers[worker_id]
+                worker["load"] = worker.get("load", 0) + 1
 
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         async with self._lock:

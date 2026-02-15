@@ -80,21 +80,29 @@ class ReputationCalculator:
                     continue
 
                 successful_tasks = 0
+                failed_tasks = 0
+
                 for event in task_finished_events:
                     # Extract the result from the snapshot
                     snapshot = event.get("context_snapshot", {})
                     result = snapshot.get("result", {})
-                    if result.get("status") == "success":
+                    status = result.get("status")
+
+                    if status == "success":
                         successful_tasks += 1
+                    elif status == "failure":
+                        failed_tasks += 1
+                    # "cancelled" is ignored - it's not the worker's fault
 
-                total_tasks = len(task_finished_events)
-                new_reputation = successful_tasks / total_tasks if total_tasks > 0 else 1.0
-                new_reputation = round(new_reputation, 4)
+                total_relevant = successful_tasks + failed_tasks
+                if total_relevant > 0:
+                    new_reputation = successful_tasks / total_relevant
+                    new_reputation = round(new_reputation, 4)
 
-                await self.storage.update_worker_data(
-                    worker_id,
-                    {"reputation": new_reputation},
-                )
+                    await self.storage.update_worker_data(
+                        worker_id,
+                        {"reputation": new_reputation},
+                    )
 
                 # Throttling: Small sleep to prevent DB spikes
                 await sleep(0.1)

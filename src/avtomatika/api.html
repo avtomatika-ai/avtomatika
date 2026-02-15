@@ -119,6 +119,7 @@
 
     <script>
         const BASE_URL = "";
+        const S3_ENABLED = {{S3_ENABLED}};
 
         const apiData = [
             {
@@ -179,6 +180,17 @@
                         responses: [
                             { code: '200 OK', description: 'HTML page with documentation.', body: "<!DOCTYPE html>..." }
                         ]
+                    },
+                    {
+                        id: 'get-quarantined-jobs',
+                        name: 'Get Quarantined Jobs',
+                        method: 'GET',
+                        path: '/_public/jobs/quarantined',
+                        description: 'Returns a list of IDs for all jobs that have been moved to quarantine due to repeated failures.',
+                        request: { body: null },
+                        responses: [
+                            { code: '200 OK', description: 'List of job IDs.', body: ["uuid-1", "uuid-2"] }
+                        ]
                     }
                 ]
             },
@@ -194,7 +206,14 @@
                             { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
                             { name: 'blueprint_name', type: 'string', description: 'Blueprint Name', example: 'full_showcase' }
                         ],
-                        request: { body: { "initial_data": "..." } },
+                                                request: {
+                            body: {
+                                "initial_data": { "key": "value" },
+                                "webhook_url": "https://callback.url/webhook",
+                                "dispatch_timeout": 60,
+                                "result_timeout": 300
+                            }
+                        },
                         responses: [
                             { code: '202 Accepted', description: 'Job successfully accepted for processing.', body: { "status": "accepted", "job_id": "..." } }
                         ]
@@ -276,8 +295,12 @@
                         name: 'Get List of Jobs',
                         method: 'GET',
                         path: '/api/{version}/jobs',
-                        description: 'Gets the list of jobs.',
-                        parameters: [{ name: 'version', type: 'string', description: 'API Version', example: 'v1' }],
+                        description: 'Gets the list of jobs from history.',
+                        parameters: [
+                            { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
+                            { name: 'limit', type: 'integer', description: 'Maximum number of jobs to return', example: '100' },
+                            { name: 'offset', type: 'integer', description: 'Number of jobs to skip', example: '0' }
+                        ],
                         request: { body: null },
                         responses: [
                             { code: '200 OK', description: 'Successful response.', body: "[...]" }
@@ -307,6 +330,55 @@
                         request: { body: null },
                         responses: [
                             { code: '200 OK', description: 'Successful response.', body: { "status": "worker_configs_reloaded" } }
+                        ]
+                    },
+                    {
+                        id: 'get-s3-upload-url',
+                        name: 'Get S3 Upload URL',
+                        method: 'GET',
+                        path: '/api/{version}/jobs/{job_id}/files/upload',
+                        description: 'Generates a temporary S3 presigned URL for uploading a file directly to the job\'s storage.',
+                        parameters: [
+                            { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
+                            { name: 'job_id', type: 'string', description: 'Job ID', example: 'c3d4e5f6-1234-5678-90ab-cdef12345678' },
+                            { name: 'filename', type: 'string', description: 'Name of the file to be uploaded', example: 'input.jpg' }
+                        ],
+                        request: { body: null },
+                        responses: [
+                            { code: '200 OK', description: 'Successful response.', body: { "url": "...", "expires_in": 3600, "method": "PUT" } },
+                            { code: '501 Not Implemented', description: 'S3 support is not enabled on this server.', body: { "error": "S3 support is not enabled" } }
+                        ]
+                    },
+                    {
+                        id: 'put-s3-content',
+                        name: 'Upload File (Direct Streaming)',
+                        method: 'PUT',
+                        path: '/api/{version}/jobs/{job_id}/files/content/{filename}',
+                        description: 'Uploads a file directly to S3 via Orchestrator streaming proxy. Bypasses local disk and uses minimal RAM.',
+                        parameters: [
+                            { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
+                            { name: 'job_id', type: 'string', description: 'Job ID', example: 'c3d4e5f6-1234-5678-90ab-cdef12345678' },
+                            { name: 'filename', type: 'string', description: 'Name of the file', example: 'data.bin' }
+                        ],
+                        request: { body: null },
+                        responses: [
+                            { code: '200 OK', description: 'Successful upload.', body: { "status": "uploaded", "s3_uri": "s3://..." } }
+                        ]
+                    },
+                    {
+                        id: 'get-s3-download',
+                        name: 'Download File (Stable Link)',
+                        method: 'GET',
+                        path: '/api/{version}/jobs/{job_id}/files/download/{filename}',
+                        description: 'A stable link that automatically redirects to a fresh S3 presigned URL. Useful for browser downloads.',
+                        parameters: [
+                            { name: 'version', type: 'string', description: 'API Version', example: 'v1' },
+                            { name: 'job_id', type: 'string', description: 'Job ID', example: 'c3d4e5f6-1234-5678-90ab-cdef12345678' },
+                            { name: 'filename', type: 'string', description: 'Name of the file', example: 'result.mp4' }
+                        ],
+                        request: { body: null },
+                        responses: [
+                            { code: '302 Found', description: 'Redirect to S3.', body: null }
                         ]
                     }
                 ]
@@ -342,11 +414,11 @@
                         name: 'Update Worker / Heartbeat',
                         method: 'PATCH',
                         path: '/_worker/workers/{worker_id}',
-                        description: 'Performs a partial update of a worker\'s properties and/or serves as a heartbeat. This endpoint has dual functionality:\n\n- **Full Update (with JSON body):** If a JSON body is provided (e.g., with `status`, `supported_tasks`), the orchestrator updates the worker\'s data and refreshes its TTL.\n- **Lightweight Heartbeat (empty body):** If the request body is empty, the orchestrator only refreshes the worker\'s TTL, serving as an efficient "ping" to confirm the worker is still active without sending redundant data. The data model is schema-less; the orchestrator will accept any key-value pairs in the JSON object, allowing workers to report custom data.',
+                        description: 'Performs a partial update of a worker\'s properties and/or serves as a heartbeat. This endpoint has dual functionality:\n\n- **Full Update (with JSON body):** If a JSON body is provided (e.g., with `status`, `supported_skills`), the orchestrator updates the worker\'s data and refreshes its TTL.\n- **Lightweight Heartbeat (empty body):** If the request body is empty, the orchestrator only refreshes the worker\'s TTL, serving as an efficient "ping" to confirm the worker is still active without sending redundant data. The data model is schema-less; the orchestrator will accept any key-value pairs in the JSON object, allowing workers to report custom data.',
                         parameters: [{ name: 'worker_id', type: 'string', description: 'Worker ID', example: 'worker-123' }],
-                        request: { body: { "status": "idle", "supported_tasks": ["new_skill"], "load": 0.5 } },
+                        request: { body: { "status": "idle", "supported_skills": ["new_skill"], "load": 0.5 } },
                         responses: [
-                            { code: '200 OK', description: 'Successful response (full update).', body: { "worker_id": "...", "status": "idle", "supported_tasks": ["..."], "load": 0.5 } },
+                            { code: '200 OK', description: 'Successful response (full update).', body: { "worker_id": "...", "status": "idle", "supported_skills": ["..."], "load": 0.5 } },
                             { code: '200 OK', description: 'Successful response (TTL refreshed).', body: { "status": "ttl_refreshed" } }
                         ]
                     },
@@ -437,8 +509,17 @@
                 </div>
             ` : '';
 
+            const isS3Endpoint = endpoint.id.includes('s3');
+            const s3Warning = (isS3Endpoint && !S3_ENABLED) ? `
+                <div class="bg-red-900/30 border border-red-500 text-red-200 p-4 rounded-md mb-6">
+                    <p class="font-bold">⚠️ S3 Service Disabled</p>
+                    <p class="text-sm">S3 support is not enabled on this Orchestrator instance. This endpoint will return 501 Not Implemented.</p>
+                </div>
+            ` : '';
+
             endpointContentContainer.innerHTML = `
                 <div class="content-card p-6 rounded-lg">
+                    ${s3Warning}
                     <div class="border-b border-slate-700 pb-4 mb-4">
                         <h2 class="text-2xl font-bold">${endpoint.name}</h2>
                         <div class="flex items-center mt-2">

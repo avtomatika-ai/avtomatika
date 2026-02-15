@@ -170,7 +170,7 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     async with aiohttp.ClientSession() as session:
         # 1. Register (POST)
         # Note: We do NOT send X-Worker-Token header.
-        reg_data = {"worker_id": target_worker_id, "worker_type": "tls-worker", "supported_tasks": ["t1"]}
+        reg_data = {"worker_id": target_worker_id, "worker_type": "tls-worker", "supported_skills": ["t1"]}
         async with session.post(f"{base_url}/_worker/workers/register", json=reg_data, ssl=client_ssl_ctx) as resp:
             assert resp.status == 200, f"Registration failed: {await resp.text()}"
             data = await resp.json()

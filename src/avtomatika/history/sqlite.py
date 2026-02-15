@@ -48,7 +48,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
     and converts them to the configured timezone upon retrieval.
     """
 
-    def __init__(self, db_path: str, tz_name: str = "UTC"):
+    def __init__(self, db_path: str, tz_name: str = "UTC") -> None:
         super().__init__()
         self._db_path = db_path
         self._conn: Connection | None = None

@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from asyncpg import Connection, Pool, PostgresError, create_pool  # type: ignore[import-untyped]
+from asyncpg import Connection, Pool, PostgresError, create_pool
 from orjson import dumps, loads
 
 from .base import HistoryStorageBase
@@ -45,7 +45,7 @@ CREATE_JOB_ID_INDEX_PG = "CREATE INDEX IF NOT EXISTS idx_job_id ON job_history(j
 class PostgresHistoryStorage(HistoryStorageBase, ABC):
     """Implementation of the history store based on asyncpg for PostgreSQL."""
 
-    def __init__(self, dsn: str, tz_name: str = "UTC"):
+    def __init__(self, dsn: str, tz_name: str = "UTC") -> None:
         super().__init__()
         self._dsn = dsn
         self._pool: Pool | None = None

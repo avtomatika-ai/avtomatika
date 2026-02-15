@@ -1,13 +1,13 @@
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
 from .storage.base import StorageBackend
 
-Handler = Callable[[web.Request], Awaitable[web.Response]]
+Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
-def quota_middleware_factory(storage: StorageBackend) -> Callable:
+def quota_middleware_factory(storage: StorageBackend) -> Any:
     """A factory that creates a quota-checking middleware.
     This middleware must run AFTER the client_auth_middleware.
     """

@@ -61,11 +61,15 @@ Estos puntos finales están diseñados para sistemas externos que inician y moni
     ```json
     {
       "initial_data": { ... },
-      "webhook_url": "https://callback.url/webhook"
+      "webhook_url": "https://callback.url/webhook",
+      "dispatch_timeout": 60,
+      "result_timeout": 300
     }
     ```
     *   `initial_data` (objeto, opcional): Datos iniciales para el trabajo.
     *   `webhook_url` (cadena, opcional): URL para recibir notificaciones asíncronas sobre la finalización, fallo o cuarentena del trabajo.
+    *   `dispatch_timeout` (entero, opcional): Tiempo máximo en segundos que una tarea puede esperar en la cola por un worker.
+    *   `result_timeout` (entero, opcional): Plazo absoluto en segundos para recibir el resultado desde la creación del trabajo.
 -   **Respuesta (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
 -   **Respuesta (`429 Too Many Requests`):** Si el cliente o IP excede el límite de velocidad configurado.
 
@@ -75,6 +79,29 @@ Estos puntos finales están diseñados para sistemas externos que inician y moni
 -   **Descripción:** Devuelve el estado actual completo del trabajo especificado.
 -   **Respuesta (`200 OK`):** Objeto JSON con el estado del `Job`.
 -   **Respuesta (`404 Not Found`):** Si no se encuentra un trabajo con tal ID.
+
+### Obtener URL de Subida a S3
+
+-   **Punto final:** `GET /api/v1/jobs/{job_id}/files/upload`
+-   **Descripción:** Genera una URL presignada de S3 temporal para subir un archivo directamente al almacenamiento del trabajo.
+-   **Parámetros de consulta:**
+    *   `filename` (cadena, requerido): Nombre del archivo a subir.
+    *   `expires_in` (entero, opcional): Validez del enlace en segundos. Por defecto: `3600`.
+-   **Respuesta (`200 OK`):** `{"url": "...", "expires_in": 3600, "method": "PUT"}`
+-   **Respuesta (`501 Not Implemented`):** Si el soporte de S3 no está habilitado.
+
+### Subir Archivo (Streaming Directo)
+
+-   **Punto final:** `PUT /api/v1/jobs/{job_id}/files/content/{filename}`
+-   **Descripción:** Sube un archivo directamente a S3 a través del proxy de streaming del Orquestador. Evita el disco local y utiliza una RAM mínima.
+-   **Cuerpo:** Contenido binario del archivo.
+-   **Respuesta (`200 OK`):** `{"status": "uploaded", "s3_uri": "..."}`
+
+### Descargar Archivo (Enlace Estable)
+
+-   **Punto final:** `GET /api/v1/jobs/{job_id}/files/download/{filename}`
+-   **Descripción:** Un enlace estable que redirige automáticamente a una URL presignada de S3 fresca. Útil para descargas de navegador.
+-   **Respuesta (`302 Found`):** Redirige a la URL de S3.
 
 ### Cancelar Tarea en Ejecución
 
@@ -120,7 +147,7 @@ Estos puntos finales son utilizados por los workers para registrarse, recibir ta
     ```json
     {
       "worker_id": "worker-123",
-      "supported_tasks": ["video_processing", "audio_transcription"]
+      "supported_skills": ["video_processing", "audio_transcription"]
     }
     ```
 -   **Respuesta (`200 OK`):** `{"status": "registered"}`

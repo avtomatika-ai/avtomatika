@@ -179,13 +179,19 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def find_workers_for_task(self, task_type: str) -> list[str]:
-        """Finds idle workers that support the given task.
+    async def find_workers_for_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers that support the given skill."""
+        pass
 
-        :param task_type: The type of task to find workers for.
-        :return: A list of worker IDs that are idle and support the task.
-        """
-        raise NotImplementedError
+    @abstractmethod
+    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
+        """Finds idle workers that have the specific model in hot cache."""
+        pass
+
+    @abstractmethod
+    async def find_workers_by_hot_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers that have the specific skill marked as 'hot'."""
+        pass
 
     @abstractmethod
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
@@ -314,6 +320,13 @@ class StorageBackend(ABC):
     @abstractmethod
     async def verify_worker_access_token(self, token: str) -> str | None:
         """Verifies a temporary access token and returns the associated worker_id if valid."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def increment_worker_load(self, worker_id: str) -> None:
+        """Optimistically increments the worker's load counter.
+        Used to prevent overloading the worker between heartbeats.
+        """
         raise NotImplementedError
 
     @abstractmethod

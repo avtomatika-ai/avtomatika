@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b12"
+version = "1.0b13"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,7 +21,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "rxon==1.0b2",
+    "rxon==1.0b3",
     "aiohttp~=3.12",
     "python-json-logger~=4.0",
     "graphviz~=0.21",
@@ -93,7 +93,6 @@ skip-magic-trailing-comma = false
 [tool.mypy]
 python_version = "3.11"
 packages = ["avtomatika"]
-package_path = "src"
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
 no_implicit_optional = true

@@ -13,6 +13,8 @@ from .handlers import (
     flush_db_handler,
     get_blueprint_graph_handler,
     get_dashboard_handler,
+    get_job_file_download_handler,
+    get_job_file_upload_handler,
     get_job_history_handler,
     get_job_status_handler,
     get_jobs_handler,
@@ -22,6 +24,7 @@ from .handlers import (
     metrics_handler,
     reload_worker_configs_handler,
     status_handler,
+    stream_job_file_upload_handler,
 )
 
 if TYPE_CHECKING:
@@ -88,6 +91,9 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
 def _register_common_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     app.router.add_get("/jobs/{job_id}", get_job_status_handler)
     app.router.add_post("/jobs/{job_id}/cancel", cancel_job_handler)
+    app.router.add_get("/jobs/{job_id}/files/upload", get_job_file_upload_handler)
+    app.router.add_put("/jobs/{job_id}/files/content/{filename}", stream_job_file_upload_handler)
+    app.router.add_get("/jobs/{job_id}/files/download/{filename}", get_job_file_download_handler)
     if not isinstance(engine.history_storage, NoOpHistoryStorage):
         app.router.add_get("/jobs/{job_id}/history", get_job_history_handler)
     app.router.add_get("/blueprints/{blueprint_name}/graph", get_blueprint_graph_handler)

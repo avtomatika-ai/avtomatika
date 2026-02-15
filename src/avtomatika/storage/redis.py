@@ -2,7 +2,7 @@ from asyncio import CancelledError, get_running_loop
 from logging import getLogger
 from os import getenv
 from socket import gethostname
-from typing import Any
+from typing import Any, Callable, cast
 
 from msgpack import packb, unpackb
 from redis import Redis, WatchError
@@ -35,15 +35,35 @@ class RedisStorage(StorageBackend):
     def _get_key(self, job_id: str) -> str:
         return f"{self._prefix}:{job_id}"
 
+    async def increment_worker_load(self, worker_id: str) -> None:
+        key = f"orchestrator:worker:info:{worker_id}"
+        LUA_INCR_LOAD = """
+        local raw = redis.call('GET', KEYS[1])
+        if not raw then return 0 end
+        local data = cmsgpack.unpack(raw)
+        data['load'] = (data['load'] or 0) + 1
+        -- Also set status to busy if needed, though load balancing usually handles numeric load
+        redis.call('SET', KEYS[1], cmsgpack.pack(data), 'KEEPTTL')
+        return 1
+        """
+        try:
+            await self._redis.eval(LUA_INCR_LOAD, 1, key)
+        except ResponseError as e:
+            if "unknown command" in str(e).lower():
+                # Fallback for simple increment if Lua fails or cmsgpack not available (though redis-py handles this)
+                logger.warning(f"Failed to optimistically increment load for {worker_id}: {e}")
+            else:
+                raise e
+
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Gets the full info for a worker by its ID."""
         key = f"orchestrator:worker:info:{worker_id}"
         data = await self._redis.get(key)
-        return self._unpack(data) if data else None
+        return cast(dict[str, Any], self._unpack(data)) if data else None
 
     @staticmethod
     def _pack(data: Any) -> bytes:
-        return packb(data, use_bin_type=True)
+        return cast(bytes, packb(data, use_bin_type=True))
 
     @staticmethod
     def _unpack(data: bytes) -> Any:
@@ -53,7 +73,7 @@ class RedisStorage(StorageBackend):
         """Get the job state from Redis."""
         key = self._get_key(job_id)
         data = await self._redis.get(key)
-        return self._unpack(data) if data else None
+        return cast(dict[str, Any], self._unpack(data)) if data else None
 
     async def get_priority_queue_stats(self, task_type: str) -> dict[str, Any]:
         """Gets statistics for the priority queue (Sorted Set) for a given task type."""
@@ -107,7 +127,7 @@ class RedisStorage(StorageBackend):
     async def update_job_state_atomic(
         self,
         job_id: str,
-        update_callback: Any,
+        update_callback: Callable[[dict[str, Any]], dict[str, Any]],
     ) -> dict[str, Any]:
         """Atomically update the job state in Redis using a transaction and callback."""
         key = self._get_key(job_id)
@@ -117,7 +137,9 @@ class RedisStorage(StorageBackend):
                 try:
                     await pipe.watch(key)
                     current_state_raw = await pipe.get(key)
-                    current_state: dict[str, Any] = self._unpack(current_state_raw) if current_state_raw else {}
+                    current_state: dict[str, Any] = (
+                        cast(dict[str, Any], self._unpack(current_state_raw)) if current_state_raw else {}
+                    )
                     updated_state = update_callback(current_state)
                     pipe.multi()
                     pipe.set(key, self._pack(updated_state))
@@ -135,7 +157,7 @@ class RedisStorage(StorageBackend):
         """Registers a worker in Redis and updates indexes."""
         worker_info.setdefault("reputation", 1.0)
         key = f"orchestrator:worker:info:{worker_id}"
-        tasks_key = f"orchestrator:worker:tasks:{worker_id}"
+        skills_key = f"orchestrator:worker:skills:{worker_id}"
 
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.set(key, self._pack(worker_info), ex=ttl)
@@ -146,30 +168,60 @@ class RedisStorage(StorageBackend):
             else:
                 pipe.srem("orchestrator:index:workers:idle", worker_id)
 
-            supported_tasks = worker_info.get("supported_tasks", [])
-            if supported_tasks:
-                pipe.sadd(tasks_key, *supported_tasks)
-                for task in supported_tasks:
-                    pipe.sadd(f"orchestrator:index:workers:task:{task}", worker_id)
+            supported_skills = worker_info.get("supported_skills", [])
+            if supported_skills:
+                pipe.sadd(skills_key, *supported_skills)
+                for skill in supported_skills:
+                    pipe.sadd(f"orchestrator:index:workers:skill:{skill}", worker_id)
+
+            hot_cache = worker_info.get("hot_cache", [])
+            if hot_cache:
+                hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+                pipe.delete(hot_list_key)
+                pipe.sadd(hot_list_key, *hot_cache)
+                for item in hot_cache:
+                    pipe.sadd(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
+
+            hot_skills = worker_info.get("hot_skills", [])
+            if hot_skills:
+                hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
+                pipe.delete(hot_skills_key)
+                pipe.sadd(hot_skills_key, *hot_skills)
+                for skill in hot_skills:
+                    pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
 
             await pipe.execute()
 
     async def deregister_worker(self, worker_id: str) -> None:
         """Deletes the worker key and removes it from all indexes."""
         key = f"orchestrator:worker:info:{worker_id}"
-        tasks_key = f"orchestrator:worker:tasks:{worker_id}"
+        skills_key = f"orchestrator:worker:skills:{worker_id}"
+        hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+        hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
 
-        tasks = await self._redis.smembers(tasks_key)  # type: ignore[var-annotated]
+        skills = await self._redis.smembers(skills_key)
+        hot_cache = await self._redis.smembers(hot_list_key)
+        hot_skills = await self._redis.smembers(hot_skills_key)
 
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.delete(key)
-            pipe.delete(tasks_key)
+            pipe.delete(skills_key)
+            pipe.delete(hot_list_key)
+            pipe.delete(hot_skills_key)
             pipe.srem("orchestrator:index:workers:all", worker_id)
             pipe.srem("orchestrator:index:workers:idle", worker_id)
 
-            for task in tasks:
-                task_str = task.decode("utf-8") if isinstance(task, bytes) else str(task)
-                pipe.srem(f"orchestrator:index:workers:task:{task_str}", worker_id)
+            for skill in skills:
+                skill_str = skill.decode("utf-8") if isinstance(skill, bytes) else str(skill)
+                pipe.srem(f"orchestrator:index:workers:skill:{skill_str}", worker_id)
+
+            for item in hot_cache:
+                item_str = item.decode("utf-8") if isinstance(item, bytes) else str(item)
+                pipe.srem(f"orchestrator:index:workers:hot_cache:{item_str}", worker_id)
+
+            for skill in hot_skills:
+                skill_str = skill.decode("utf-8") if isinstance(skill, bytes) else str(skill)
+                pipe.srem(f"orchestrator:index:workers:hot_skill:{skill_str}", worker_id)
 
             await pipe.execute()
 
@@ -187,7 +239,7 @@ class RedisStorage(StorageBackend):
                 if not current_state_raw:
                     return None
 
-                current_state = self._unpack(current_state_raw)
+                current_state = cast(dict[str, Any], self._unpack(current_state_raw))
                 new_state = current_state.copy()
                 new_state.update(status_update)
 
@@ -203,6 +255,36 @@ class RedisStorage(StorageBackend):
                             pipe.sadd("orchestrator:index:workers:idle", worker_id)
                         else:
                             pipe.srem("orchestrator:index:workers:idle", worker_id)
+
+                    old_hot_cache = set(current_state.get("hot_cache", []))
+                    new_hot_cache = set(new_state.get("hot_cache", []))
+
+                    if old_hot_cache != new_hot_cache:
+                        hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+                        # Clear old and set new
+                        for item in old_hot_cache:
+                            pipe.srem(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
+
+                        pipe.delete(hot_list_key)
+                        if new_hot_cache:
+                            pipe.sadd(hot_list_key, *new_hot_cache)
+                            for item in new_hot_cache:
+                                pipe.sadd(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
+
+                    old_hot_skills = set(current_state.get("hot_skills", []))
+                    new_hot_skills = set(new_state.get("hot_skills", []))
+
+                    if old_hot_skills != new_hot_skills:
+                        hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
+                        for skill in old_hot_skills:
+                            pipe.srem(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
+
+                        pipe.delete(hot_skills_key)
+                        if new_hot_skills:
+                            pipe.sadd(hot_skills_key, *new_hot_skills)
+                            for skill in new_hot_skills:
+                                pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
+
                     current_state = new_state
                 else:
                     pipe.expire(key, ttl)
@@ -212,11 +294,26 @@ class RedisStorage(StorageBackend):
             except WatchError:
                 return None
 
-    async def find_workers_for_task(self, task_type: str) -> list[str]:
-        """Finds idle workers that support the given task using set intersection."""
-        task_index = f"orchestrator:index:workers:task:{task_type}"
+    async def find_workers_for_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers that support the given skill using set intersection."""
+        skill_index = f"orchestrator:index:workers:skill:{skill_name}"
         idle_index = "orchestrator:index:workers:idle"
-        worker_ids = await self._redis.sinter(task_index, idle_index)  # type: ignore[var-annotated]
+        worker_ids = await self._redis.sinter(skill_index, idle_index)
+        return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
+
+    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
+        """Finds idle workers that have the specific model in hot cache."""
+        skill_index = f"orchestrator:index:workers:skill:{skill_name}"
+        idle_index = "orchestrator:index:workers:idle"
+        hot_index = f"orchestrator:index:workers:hot_cache:{model_name}"
+        worker_ids = await self._redis.sinter(skill_index, idle_index, hot_index)
+        return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
+
+    async def find_workers_by_hot_skill(self, skill_name: str) -> list[str]:
+        """Finds idle workers that have the specific skill marked as 'hot'."""
+        idle_index = "orchestrator:index:workers:idle"
+        hot_skill_index = f"orchestrator:index:workers:hot_skill:{skill_name}"
+        worker_ids = await self._redis.sinter(idle_index, hot_skill_index)
         return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
 
     async def enqueue_task_for_worker(self, worker_id: str, task_payload: dict[str, Any], priority: float) -> None:
@@ -227,14 +324,14 @@ class RedisStorage(StorageBackend):
         key = f"orchestrator:task_queue:{worker_id}"
         try:
             result = await self._redis.bzpopmax([key], timeout=timeout)
-            return self._unpack(result[1]) if result else None
+            return cast(dict[str, Any], self._unpack(result[1])) if result else None
         except CancelledError:
             return None
         except ResponseError as e:
             if "unknown command" in str(e).lower() or "wrong number of arguments" in str(e).lower():
                 res = await self._redis.zpopmax(key)
                 if res:
-                    return self._unpack(res[0][0])
+                    return cast(dict[str, Any], self._unpack(res[0][0]))
             raise e
 
     async def refresh_worker_ttl(self, worker_id: str, ttl: int) -> bool:
@@ -249,7 +346,7 @@ class RedisStorage(StorageBackend):
                 raw = await pipe.get(key)
                 if not raw:
                     return None
-                data = self._unpack(raw)
+                data = cast(dict[str, Any], self._unpack(raw))
                 data.update(update_data)
                 pipe.multi()
                 pipe.set(key, self._pack(data))
@@ -259,22 +356,22 @@ class RedisStorage(StorageBackend):
                 return await self.update_worker_data(worker_id, update_data)
 
     async def get_available_workers(self) -> list[dict[str, Any]]:
-        worker_keys = [key async for key in self._redis.scan_iter("orchestrator:worker:info:*")]  # type: ignore
+        worker_keys = [key async for key in self._redis.scan_iter("orchestrator:worker:info:*")]
         if not worker_keys:
             return []
         data_list = await self._redis.mget(worker_keys)
-        return [self._unpack(data) for data in data_list if data]
+        return [cast(dict[str, Any], self._unpack(data)) for data in data_list if data]
 
     async def get_workers(self, worker_ids: list[str]) -> list[dict[str, Any]]:
         if not worker_ids:
             return []
         keys = [f"orchestrator:worker:info:{wid}" for wid in worker_ids]
         data_list = await self._redis.mget(keys)
-        return [self._unpack(data) for data in data_list if data]
+        return [cast(dict[str, Any], self._unpack(data)) for data in data_list if data]
 
     async def get_active_worker_ids(self) -> list[str]:
-        worker_ids = await self._redis.smembers("orchestrator:index:workers:all")  # type: ignore
-        return [wid.decode("utf-8") if isinstance(wid, bytes) else wid for wid in worker_ids]
+        worker_ids = await self._redis.smembers("orchestrator:index:workers:all")
+        return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
 
     async def cleanup_expired_workers(self) -> None:
         """
@@ -282,11 +379,11 @@ class RedisStorage(StorageBackend):
         Also re-enqueues orphaned tasks to the global queue if necessary.
         """
         # 1. Get all known workers from the index
-        all_worker_ids = await self._redis.smembers("orchestrator:index:workers:all")  # type: ignore
+        all_worker_ids = await self._redis.smembers("orchestrator:index:workers:all")
         if not all_worker_ids:
             return
 
-        worker_ids_str = [wid.decode("utf-8") if isinstance(wid, bytes) else wid for wid in all_worker_ids]
+        worker_ids_str = [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in all_worker_ids]
 
         # 2. Check which ones still have an info key
         pipe = self._redis.pipeline()
@@ -302,25 +399,39 @@ class RedisStorage(StorageBackend):
         logger.info(f"Found {len(dead_ids)} expired workers. Cleaning up.")
 
         for wid in dead_ids:
-            tasks_key = f"orchestrator:worker:tasks:{wid}"
+            skills_key = f"orchestrator:worker:skills:{wid}"
             queue_key = f"orchestrator:task_queue:{wid}"
+            hot_list_key = f"orchestrator:worker:hot_models:{wid}"
+            hot_skills_key = f"orchestrator:worker:hot_skills:{wid}"
 
-            # Get supported tasks to clean up task-specific indexes
-            tasks = await self._redis.smembers(tasks_key)  # type: ignore[var-annotated]
+            # Get supported skills and hot models to clean up indexes
+            skills = await self._redis.smembers(skills_key)
+            hot_models = await self._redis.smembers(hot_list_key)
+            hot_skills = await self._redis.smembers(hot_skills_key)
 
             # Check for orphaned tasks in the worker's private queue
             orphaned_tasks_raw = await self._redis.zrange(queue_key, 0, -1)
 
             async with self._redis.pipeline(transaction=True) as p:
                 # Clean up indexes
-                p.delete(tasks_key)
+                p.delete(skills_key)
                 p.delete(queue_key)  # Delete the private queue
+                p.delete(hot_list_key)
+                p.delete(hot_skills_key)
                 p.srem("orchestrator:index:workers:all", wid)
                 p.srem("orchestrator:index:workers:idle", wid)
 
-                for t in tasks:
-                    t_str = t.decode() if isinstance(t, bytes) else str(t)
-                    p.srem(f"orchestrator:index:workers:task:{t_str}", wid)
+                for s in skills:
+                    s_str = s.decode() if isinstance(s, bytes) else str(s)
+                    p.srem(f"orchestrator:index:workers:skill:{s_str}", wid)
+
+                for m in hot_models:
+                    m_str = m.decode() if isinstance(m, bytes) else str(m)
+                    p.srem(f"orchestrator:index:workers:hot_cache:{m_str}", wid)
+
+                for hs in hot_skills:
+                    hs_str = hs.decode() if isinstance(hs, bytes) else str(hs)
+                    p.srem(f"orchestrator:index:workers:hot_skill:{hs_str}", wid)
 
                 await p.execute()
 
@@ -361,12 +472,12 @@ class RedisStorage(StorageBackend):
                 logger.warning("Redis does not support LUA scripts. Falling back to non-atomic get_timed_out_jobs.")
                 ids = await self._redis.zrangebyscore("orchestrator:watched_jobs", 0, now, start=0, num=limit)
                 if ids:
-                    await self._redis.zrem("orchestrator:watched_jobs", *ids)  # type: ignore
+                    await self._redis.zrem("orchestrator:watched_jobs", *ids)
             else:
                 raise e
 
         if ids:
-            return [i.decode("utf-8") if isinstance(i, bytes) else i for i in ids]
+            return [i.decode("utf-8") if isinstance(i, bytes) else str(i) for i in ids]
         return []
 
     async def enqueue_job(self, job_id: str) -> None:
@@ -406,7 +517,7 @@ class RedisStorage(StorageBackend):
         await self._redis.xack(self._stream_key, self._group_name, message_id)
 
     async def quarantine_job(self, job_id: str) -> None:
-        await self._redis.lpush("orchestrator:quarantine_queue", job_id)  # type: ignore
+        await self._redis.lpush("orchestrator:quarantine_queue", job_id)
 
     async def get_quarantined_jobs(self) -> list[str]:
         jobs = await self._redis.lrange("orchestrator:quarantine_queue", 0, -1)
@@ -417,7 +528,7 @@ class RedisStorage(StorageBackend):
             pipe.incr(key)
             pipe.expire(key, ttl)
             results = await pipe.execute()
-            return results[0]
+            return cast(int, results[0])
 
     async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         await self._redis.hset(
@@ -425,7 +536,7 @@ class RedisStorage(StorageBackend):
         )
 
     async def get_client_config(self, token: str) -> dict[str, Any] | None:
-        raw = await self._redis.hgetall(f"orchestrator:client_config:{token}")  # type: ignore
+        raw = await self._redis.hgetall(f"orchestrator:client_config:{token}")
         if not raw:
             return None
         return {k.decode("utf-8"): self._unpack(v) for k, v in raw.items()}
@@ -452,13 +563,13 @@ class RedisStorage(StorageBackend):
                     return True
                 return False
             raise
-        return bool(res)
+        return cast(bool, res)
 
-    async def flush_all(self):
+    async def flush_all(self) -> None:
         await self._redis.flushdb()
 
     async def get_job_queue_length(self) -> int:
-        return await self._redis.xlen(self._stream_key)
+        return cast(int, await self._redis.xlen(self._stream_key))
 
     async def get_active_worker_count(self) -> int:
         c = 0
@@ -467,7 +578,7 @@ class RedisStorage(StorageBackend):
         return c
 
     async def set_nx_ttl(self, key: str, value: str, ttl: int) -> bool:
-        return bool(await self._redis.set(key, value, nx=True, ex=ttl))
+        return cast(bool, await self._redis.set(key, value, nx=True, ex=ttl))
 
     async def get_str(self, key: str) -> str | None:
         val = await self._redis.get(key)
@@ -476,7 +587,7 @@ class RedisStorage(StorageBackend):
     async def set_str(self, key: str, value: str, ttl: int | None = None) -> None:
         await self._redis.set(key, value, ex=ttl)
 
-    async def set_worker_token(self, worker_id: str, token: str):
+    async def set_worker_token(self, worker_id: str, token: str) -> None:
         await self._redis.set(f"orchestrator:worker:token:{worker_id}", token)
 
     async def get_worker_token(self, worker_id: str) -> str | None:
@@ -491,12 +602,12 @@ class RedisStorage(StorageBackend):
         return worker_id.decode("utf-8") if worker_id else None
 
     async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
-        return bool(await self._redis.set(f"orchestrator:lock:{key}", holder_id, nx=True, ex=ttl))
+        return cast(bool, await self._redis.set(f"orchestrator:lock:{key}", holder_id, nx=True, ex=ttl))
 
     async def release_lock(self, key: str, holder_id: str) -> bool:
         LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
         try:
-            return bool(await self._redis.eval(LUA, 1, f"orchestrator:lock:{key}", holder_id))
+            return cast(bool, await self._redis.eval(LUA, 1, f"orchestrator:lock:{key}", holder_id))
         except ResponseError as e:
             if "unknown command" in str(e):
                 cur = await self._redis.get(f"orchestrator:lock:{key}")
@@ -508,13 +619,13 @@ class RedisStorage(StorageBackend):
 
     async def ping(self) -> bool:
         try:
-            return await self._redis.ping()
+            return cast(bool, await self._redis.ping())
         except Exception:
             return False
 
     async def reindex_workers(self) -> None:
         """Scan existing worker keys and rebuild indexes."""
-        async for key in self._redis.scan_iter("orchestrator:worker:info:*"):  # type: ignore
+        async for key in self._redis.scan_iter("orchestrator:worker:info:*"):
             worker_id = key.decode("utf-8").split(":")[-1]
             raw = await self._redis.get(key)
             if raw:
