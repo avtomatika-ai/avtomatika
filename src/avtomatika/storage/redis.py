@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import CancelledError, get_running_loop
 from logging import getLogger
 from os import getenv
@@ -41,7 +48,7 @@ class RedisStorage(StorageBackend):
         local raw = redis.call('GET', KEYS[1])
         if not raw then return 0 end
         local data = cmsgpack.unpack(raw)
-        data['load'] = (data['load'] or 0) + 1
+        data['_internal_load'] = (data['_internal_load'] or 0) + 1
         -- Also set status to busy if needed, though load balancing usually handles numeric load
         redis.call('SET', KEYS[1], cmsgpack.pack(data), 'KEEPTTL')
         return 1
@@ -140,11 +147,16 @@ class RedisStorage(StorageBackend):
                     current_state: dict[str, Any] = (
                         cast(dict[str, Any], self._unpack(current_state_raw)) if current_state_raw else {}
                     )
-                    updated_state = update_callback(current_state)
+                    from inspect import iscoroutinefunction
+
+                    if iscoroutinefunction(update_callback):
+                        updated_state = await update_callback(current_state)
+                    else:
+                        updated_state = update_callback(current_state)
                     pipe.multi()
                     pipe.set(key, self._pack(updated_state))
                     await pipe.execute()
-                    return updated_state
+                    return cast(dict[str, Any], updated_state)
                 except WatchError:
                     continue
 
@@ -170,13 +182,26 @@ class RedisStorage(StorageBackend):
 
             supported_skills = worker_info.get("supported_skills", [])
             if supported_skills:
-                pipe.sadd(skills_key, *supported_skills)
+                skill_names_to_index = []
                 for skill in supported_skills:
-                    pipe.sadd(f"orchestrator:index:workers:skill:{skill}", worker_id)
+                    name = skill.get("name")
+                    skill_type = skill.get("type")
 
+                    if name:
+                        skill_names_to_index.append(name)
+                        pipe.sadd(f"orchestrator:index:workers:skill:{name}", worker_id)
+
+                    if skill_type and skill_type != name:
+                        skill_names_to_index.append(skill_type)
+                        pipe.sadd(f"orchestrator:index:workers:skill:{skill_type}", worker_id)
+                if skill_names_to_index:
+                    pipe.delete(skills_key)
+                    pipe.sadd(skills_key, *skill_names_to_index)
+
+            # Hot cache refers to loaded artifacts
             hot_cache = worker_info.get("hot_cache", [])
             if hot_cache:
-                hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+                hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
                 pipe.delete(hot_list_key)
                 pipe.sadd(hot_list_key, *hot_cache)
                 for item in hot_cache:
@@ -186,9 +211,24 @@ class RedisStorage(StorageBackend):
             if hot_skills:
                 hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
                 pipe.delete(hot_skills_key)
-                pipe.sadd(hot_skills_key, *hot_skills)
+
+                hot_skill_names = []
                 for skill in hot_skills:
-                    pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
+                    if isinstance(skill, dict):
+                        name = skill.get("name")
+                        skill_type = skill.get("type")
+                        if name:
+                            hot_skill_names.append(name)
+                            pipe.sadd(f"orchestrator:index:workers:hot_skill:{name}", worker_id)
+                        if skill_type and skill_type != name:
+                            hot_skill_names.append(skill_type)
+                            pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill_type}", worker_id)
+                    else:
+                        hot_skill_names.append(str(skill))
+                        pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
+
+                if hot_skill_names:
+                    pipe.sadd(hot_skills_key, *hot_skill_names)
 
             await pipe.execute()
 
@@ -196,7 +236,7 @@ class RedisStorage(StorageBackend):
         """Deletes the worker key and removes it from all indexes."""
         key = f"orchestrator:worker:info:{worker_id}"
         skills_key = f"orchestrator:worker:skills:{worker_id}"
-        hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+        hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
         hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
 
         skills = await self._redis.smembers(skills_key)
@@ -245,8 +285,32 @@ class RedisStorage(StorageBackend):
 
                 pipe.multi()
 
-                if new_state != current_state:
+                # Optimization: skills indexing is expensive
+                has_new_skills = "supported_skills" in status_update
+
+                if new_state != current_state or has_new_skills:
                     pipe.set(key, self._pack(new_state), ex=ttl)
+
+                    if has_new_skills:
+                        # Re-run registration-like indexing for skills
+                        # (Logic similar to register_worker)
+                        skills_key = f"orchestrator:worker:skills:{worker_id}"
+                        supported_skills = status_update.get("supported_skills", [])
+                        skill_names_to_index = []
+                        for skill in supported_skills:
+                            name = skill.get("name")
+                            skill_type = skill.get("type")
+
+                            if name:
+                                skill_names_to_index.append(name)
+                                pipe.sadd(f"orchestrator:index:workers:skill:{name}", worker_id)
+                                if skill_type and skill_type != name:
+                                    skill_names_to_index.append(skill_type)
+                                    pipe.sadd(f"orchestrator:index:workers:skill:{skill_type}", worker_id)
+                        if skill_names_to_index:
+                            pipe.delete(skills_key)
+                            pipe.sadd(skills_key, *skill_names_to_index)
+
                     old_status = current_state.get("status", "idle")
                     new_status = new_state.get("status", "idle")
 
@@ -260,7 +324,7 @@ class RedisStorage(StorageBackend):
                     new_hot_cache = set(new_state.get("hot_cache", []))
 
                     if old_hot_cache != new_hot_cache:
-                        hot_list_key = f"orchestrator:worker:hot_models:{worker_id}"
+                        hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
                         # Clear old and set new
                         for item in old_hot_cache:
                             pipe.srem(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
@@ -271,23 +335,40 @@ class RedisStorage(StorageBackend):
                             for item in new_hot_cache:
                                 pipe.sadd(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
 
-                    old_hot_skills = set(current_state.get("hot_skills", []))
-                    new_hot_skills = set(new_state.get("hot_skills", []))
+                    new_hot_skills = status_update.get("hot_skills", [])
+                    new_hot_skill_names = set()
+                    new_hot_skill_data_to_index = []
 
-                    if old_hot_skills != new_hot_skills:
+                    for skill in new_hot_skills:
+                        name = skill["name"]
+                        skill_type = skill.get("type")
+                        new_hot_skill_names.add(name)
+                        new_hot_skill_data_to_index.append((name, skill_type))
+
+                    # Safely extract names from current state
+                    old_hot_skill_names = set()
+                    for s in current_state.get("hot_skills", []):
+                        old_hot_skill_names.add(s["name"])
+
+                    if old_hot_skill_names != new_hot_skill_names:
                         hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
-                        for skill in old_hot_skills:
-                            pipe.srem(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
+
+                        # Remove old indexes
+                        for skill_name in old_hot_skill_names:
+                            pipe.srem(f"orchestrator:index:workers:hot_skill:{skill_name}", worker_id)
 
                         pipe.delete(hot_skills_key)
-                        if new_hot_skills:
-                            pipe.sadd(hot_skills_key, *new_hot_skills)
-                            for skill in new_hot_skills:
-                                pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill}", worker_id)
 
-                    current_state = new_state
-                else:
-                    pipe.expire(key, ttl)
+                        if new_hot_skill_names:
+                            pipe.sadd(hot_skills_key, *new_hot_skill_names)
+                            for name, skill_type in new_hot_skill_data_to_index:
+                                pipe.sadd(f"orchestrator:index:workers:hot_skill:{name}", worker_id)
+                                if skill_type and skill_type != name:
+                                    pipe.sadd(f"orchestrator:index:workers:hot_skill:{skill_type}", worker_id)
+
+                    # Update current state with the new objects
+                    current_state.update(status_update)
+                    pipe.set(key, self._pack(current_state), ex=ttl)
 
                 await pipe.execute()
                 return current_state
@@ -301,11 +382,11 @@ class RedisStorage(StorageBackend):
         worker_ids = await self._redis.sinter(skill_index, idle_index)
         return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
 
-    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
-        """Finds idle workers that have the specific model in hot cache."""
+    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
+        """Finds idle workers that have the specific resource (e.g. model, artifact) in hot cache."""
         skill_index = f"orchestrator:index:workers:skill:{skill_name}"
         idle_index = "orchestrator:index:workers:idle"
-        hot_index = f"orchestrator:index:workers:hot_cache:{model_name}"
+        hot_index = f"orchestrator:index:workers:hot_cache:{resource_id}"
         worker_ids = await self._redis.sinter(skill_index, idle_index, hot_index)
         return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
 
@@ -401,12 +482,12 @@ class RedisStorage(StorageBackend):
         for wid in dead_ids:
             skills_key = f"orchestrator:worker:skills:{wid}"
             queue_key = f"orchestrator:task_queue:{wid}"
-            hot_list_key = f"orchestrator:worker:hot_models:{wid}"
+            hot_list_key = f"orchestrator:worker:hot_artifacts:{wid}"
             hot_skills_key = f"orchestrator:worker:hot_skills:{wid}"
 
-            # Get supported skills and hot models to clean up indexes
+            # Get supported skills and hot artifacts to clean up indexes
             skills = await self._redis.smembers(skills_key)
-            hot_models = await self._redis.smembers(hot_list_key)
+            hot_artifacts = await self._redis.smembers(hot_list_key)
             hot_skills = await self._redis.smembers(hot_skills_key)
 
             # Check for orphaned tasks in the worker's private queue
@@ -425,7 +506,7 @@ class RedisStorage(StorageBackend):
                     s_str = s.decode() if isinstance(s, bytes) else str(s)
                     p.srem(f"orchestrator:index:workers:skill:{s_str}", wid)
 
-                for m in hot_models:
+                for m in hot_artifacts:
                     m_str = m.decode() if isinstance(m, bytes) else str(m)
                     p.srem(f"orchestrator:index:workers:hot_cache:{m_str}", wid)
 
@@ -530,6 +611,9 @@ class RedisStorage(StorageBackend):
             results = await pipe.execute()
             return cast(int, results[0])
 
+    async def increment_key(self, key: str) -> int:
+        return cast(int, await self._redis.incr(key))
+
     async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         await self._redis.hset(
             f"orchestrator:client_config:{token}", mapping={k: self._pack(v) for k, v in config.items()}
@@ -622,6 +706,15 @@ class RedisStorage(StorageBackend):
             return cast(bool, await self._redis.ping())
         except Exception:
             return False
+
+    async def save_blueprint_contract(self, name: str, contract: dict[str, Any]) -> None:
+        key = f"orchestrator:blueprint:contract:{name}"
+        await self._redis.set(key, self._pack(contract))
+
+    async def get_blueprint_contract(self, name: str) -> dict[str, Any] | None:
+        key = f"orchestrator:blueprint:contract:{name}"
+        data = await self._redis.get(key)
+        return cast(dict[str, Any], self._unpack(data)) if data else None
 
     async def reindex_workers(self) -> None:
         """Scan existing worker keys and rebuild indexes."""

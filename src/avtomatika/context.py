@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from logging import getLogger
 from typing import Any
 
@@ -20,6 +27,7 @@ class ActionFactory:
         self._task_to_dispatch_val: dict[str, Any] | None = None
         self._sub_blueprint_to_run_val: dict[str, Any] | None = None
         self._parallel_tasks_to_dispatch_val: dict[str, Any] | None = None
+        self._pending_events: list[tuple[str, dict[str, Any]]] = []
 
     def _check_for_existing_action(self) -> None:
         """
@@ -55,6 +63,15 @@ class ActionFactory:
     def parallel_tasks_to_dispatch(self) -> dict[str, Any] | None:
         return self._parallel_tasks_to_dispatch_val
 
+    @property
+    def pending_events(self) -> list[tuple[str, dict[str, Any]]]:
+        return self._pending_events
+
+    def send_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Emits a generic event from the blueprint logic."""
+        logger.debug(f"Job {self._job_id}: Ghost emitting event '{event_type}'")
+        self._pending_events.append((event_type, payload))
+
     def dispatch_parallel(self, tasks: list[dict[str, Any]], aggregate_into: str) -> None:
         """
         Dispatches multiple tasks for parallel execution.
@@ -79,6 +96,7 @@ class ActionFactory:
         task_type: str,
         params: dict[str, Any],
         transitions: dict[str, str],
+        event_transitions: dict[str, str] | None = None,
         dispatch_strategy: str = "default",
         resource_requirements: dict[str, Any] | None = None,
         timeout_seconds: int | None = None,
@@ -86,10 +104,15 @@ class ActionFactory:
         result_timeout_seconds: int | None = None,
         max_cost: float | None = None,
         priority: float = 0.0,
+        resource_hint: str | None = None,
     ) -> None:
         """Dispatches a task to a worker for execution."""
         self._check_for_existing_action()
         logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}'")
+
+        # HLN: If resource_hint is provided, inject it into params for the Dispatcher
+        if resource_hint:
+            params["resource_hint"] = resource_hint
 
         # Priority: explicit param > job default
         final_dispatch_timeout = (
@@ -103,6 +126,7 @@ class ActionFactory:
             "type": task_type,
             "params": params,
             "transitions": transitions,
+            "event_transitions": event_transitions or {},
             "dispatch_strategy": dispatch_strategy,
             "resource_requirements": resource_requirements,
             "timeout_seconds": timeout_seconds,

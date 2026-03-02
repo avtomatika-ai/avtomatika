@@ -165,6 +165,11 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Interval for updating worker TTL (used for health checks). | `60` |
 | `JOB_MAX_RETRIES` | Maximum number of retries for transient task failures. | `3` |
 | `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
+| `STRICT_EVENT_VALIDATION` | If `true`, Orchestrator will reject worker events not declared in their schemas. | `true` |
+| `REPUTATION_MIN_THRESHOLD` | Minimum reputation score for a worker to be considered for dispatching. | `0.3` |
+| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Reputation penalty for data contract violation. | `0.2` |
+| `REPUTATION_PENALTY_TASK_FAILURE` | Reputation penalty for critical or permanent task failure. | `0.05` |
+| `REPUTATION_REWARD_SUCCESS` | Reputation reward for each successfully completed task. | `0.001` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
 | `RATE_LIMITING_ENABLED` | Enable rate limiting middleware. | `true` |

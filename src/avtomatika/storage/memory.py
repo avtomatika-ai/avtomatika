@@ -1,7 +1,14 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import Lock, PriorityQueue, Queue, QueueEmpty, wait_for
 from asyncio import TimeoutError as AsyncTimeoutError
 from time import monotonic
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .base import StorageBackend
 
@@ -69,9 +76,14 @@ class MemoryStorage(StorageBackend):
     ) -> dict[str, Any]:
         async with self._lock:
             current_state = self._jobs.get(job_id, {})
-            updated_state = update_callback(current_state)
+            from inspect import iscoroutinefunction
+
+            if iscoroutinefunction(update_callback):
+                updated_state = await update_callback(current_state)
+            else:
+                updated_state = update_callback(current_state)
             self._jobs[job_id] = updated_state
-            return updated_state
+            return cast(dict[str, Any], updated_state)
 
     async def register_worker(
         self,
@@ -188,12 +200,18 @@ class MemoryStorage(StorageBackend):
                     continue
                 if info.get("status", "idle") != "idle":
                     continue
-                if skill_name in info.get("supported_skills", []):
-                    candidates.append(worker_id)
+
+                supported = info.get("supported_skills", [])
+                for skill in supported:
+                    name = getattr(skill, "name", skill.get("name"))
+                    skill_type = getattr(skill, "type", skill.get("type"))
+                    if skill_name in (name, skill_type):
+                        candidates.append(worker_id)
+                        break
             return candidates
 
-    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
-        """Finds idle workers that have the specific model in hot cache."""
+    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
+        """Finds idle workers that have the specific resource (e.g. model, artifact) in hot cache."""
         async with self._lock:
             now = monotonic()
             candidates = []
@@ -202,7 +220,17 @@ class MemoryStorage(StorageBackend):
                     continue
                 if info.get("status", "idle") != "idle":
                     continue
-                if skill_name in info.get("supported_skills", []) and model_name in info.get("hot_cache", []):
+
+                supported = info.get("supported_skills", [])
+                skill_matches = False
+                for skill in supported:
+                    name = getattr(skill, "name", skill.get("name"))
+                    skill_type = getattr(skill, "type", skill.get("type"))
+                    if skill_name in (name, skill_type):
+                        skill_matches = True
+                        break
+
+                if skill_matches and resource_id in info.get("hot_cache", []):
                     candidates.append(worker_id)
             return candidates
 
@@ -216,8 +244,14 @@ class MemoryStorage(StorageBackend):
                     continue
                 if info.get("status", "idle") != "idle":
                     continue
-                if skill_name in info.get("hot_skills", []):
-                    candidates.append(worker_id)
+
+                hot_skills = info.get("hot_skills", [])
+                for skill in hot_skills:
+                    name = getattr(skill, "name", skill.get("name"))
+                    skill_type = getattr(skill, "type", skill.get("type"))
+                    if skill_name in (name, skill_type):
+                        candidates.append(worker_id)
+                        break
             return candidates
 
     async def add_job_to_watch(self, job_id: str, timeout_at: float) -> None:
@@ -283,6 +317,15 @@ class MemoryStorage(StorageBackend):
             self._generic_keys[key] += 1
             self._generic_key_ttls[key] = now + ttl
             return int(self._generic_keys[key])
+
+    async def increment_key(self, key: str) -> int:
+        async with self._lock:
+            val = self._generic_keys.get(key, 0)
+            if not isinstance(val, int):
+                val = 0
+            val += 1
+            self._generic_keys[key] = val
+            return val
 
     async def save_client_config(self, token: str, config: dict[str, Any]) -> None:
         async with self._lock:
@@ -363,7 +406,8 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             if worker_id in self._workers:
                 worker = self._workers[worker_id]
-                worker["load"] = worker.get("load", 0) + 1
+                # Internal counter for dispatcher, not related to RXON Heartbeat usage
+                worker["_internal_load"] = worker.get("_internal_load", 0) + 1
 
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         async with self._lock:
@@ -428,3 +472,11 @@ class MemoryStorage(StorageBackend):
 
     async def ping(self) -> bool:
         return True
+
+    async def save_blueprint_contract(self, name: str, contract: dict[str, Any]) -> None:
+        async with self._lock:
+            self._generic_keys[f"blueprint:contract:{name}"] = contract
+
+    async def get_blueprint_contract(self, name: str) -> dict[str, Any] | None:
+        async with self._lock:
+            return self._generic_keys.get(f"blueprint:contract:{name}")

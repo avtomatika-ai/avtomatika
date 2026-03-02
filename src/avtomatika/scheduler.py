@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import CancelledError, sleep
 from datetime import datetime
 from logging import getLogger
@@ -112,6 +119,19 @@ class Scheduler:
 
     async def _trigger_job(self, job: ScheduledJobConfig) -> None:
         try:
+            # CONTRACT VALIDATION: Check scheduled job input
+            contract = self.engine.blueprint_contracts.get(job.blueprint, {})
+            input_schema = contract.get("input_schema")
+            if input_schema:
+                from rxon.schema import validate_data
+
+                is_valid, error_msg = validate_data(job.input_data, input_schema)
+                if not is_valid:
+                    logger.error(
+                        f"Scheduled job '{job.name}' skipped: input validation failed "
+                        f"for blueprint '{job.blueprint}'. Error: {error_msg}"
+                    )
+                    return
             await self.engine.create_background_job(
                 blueprint_name=job.blueprint,
                 initial_data=job.input_data,

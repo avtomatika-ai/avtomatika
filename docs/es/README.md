@@ -2,9 +2,9 @@
 
 # Avtomatika Orchestrator
 
-[![Licencia: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Licencia: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![Versión de PyPI](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
-[![Estilo de Código: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 Avtomatika es un motor potente y basado en estados para gestionar flujos de trabajo asíncronos complejos en Python. Proporciona un marco robusto para construir aplicaciones escalables y resilientes al separar la lógica del proceso de la lógica de ejecución.
 
@@ -225,17 +225,25 @@ async def publish_handler_old_style(context):
 
 Avtomatika está diseñada para entornos de alta carga con miles de workers concurrentes.
 
-*   **Despachador O(1)**: Utiliza intersecciones avanzadas de conjuntos de Redis para encontrar workers adecuados al instante.
+*   **Smart Dispatching (Despacho Inteligente)**: Enrutamiento de alto rendimiento utilizando Redis.
+    *   **Deep Schema Matching**: Prioriza a los workers cuyo `input_schema` coincide con los parámetros de la tarea, asegurando la compatibilidad antes del despacho.
+    *   **Hot Cache & Skill Awareness**: Prioriza a los workers que ya tienen modelos de IA específicos cargados en memoria.
+    *   **Load Balancing**: Emplea incrementos de carga optimistas para prevenir la sobrecarga de los workers.
+*   **Reputación Autoregulada**:
+    *   **Sistema de Penalizaciones**: Reducción inmediata de reputación por violaciones de contrato (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) o fallos críticos.
+    *   **Bucle de Recuperación**: Pequeñas recompensas de reputación por cada tarea completada con éxito (`REPUTATION_REWARD_SUCCESS`), fomentando la calidad constante.
+    *   **Trusted Guard**: Ignora automáticamente a los holones con reputación por debajo de `REPUTATION_MIN_THRESHOLD`.
 *   **Seguridad de Confianza Cero**:
     *   **mTLS (TLS Mutuo)**: Autenticación mutua entre el Orquestador y los Workers mediante certificados.
-    *   **STS (Servicio de Tokens de Seguridad)**: Mecanismo de rotación de tokens con tokens de acceso de corta duración.
-    *   **Extracción de Identidad**: Asigna automáticamente el Nombre Común (CN) del certificado al ID del Worker.
-*   **Integridad de Datos**:
-    *   **Validación de Extremo a Extremo**: Verificación automática del tamaño del archivo y ETag (hash) durante las transferencias S3.
-    *   **Pista de Auditoría**: Los metadatos de los archivos se registran en el historial para una trazabilidad completa.
-*   **Capa de Protocolo**: Construido sobre `rxon`, un contrato estricto que define las interacciones, asegurando la compatibilidad futura y permitiendo la evolución del transporte (por ejemplo, a gRPC).
+    *   **STS (Servicio de Tokens de Seguridad)**: Mecanismo de rotación de tokens.
+    *   **Cadena de Identidad (Identity Chain)**: Rastreo transparente de la ruta de los eventos burbujeados a través de todos los niveles de la holarquía.
+*   **Arquitectura basada en Contratos**:
+    *   **Validación de API**: Validación estricta de `initial_data` contra los contratos de los Blueprints antes de la creación del trabajo.
+    *   **Validación de Resultados**: Verificación automática de los resultados de los workers contra su `output_schema` declarado.
+    *   **Catálogo de Red**: Mercado agregado en tiempo real de todas las habilidades y contratos únicos disponibles en la red.
+*   **Capa de Protocolo (`rxon`)**: Todas las interacciones se basan en un contrato estricto que garantiza la compatibilidad y la posibilidad de cambiar de transporte.
 *   **E/S No Bloqueante**:
-    *   **Webhooks**: Enviados a través de una cola de fondo limitada.
+    *   **Webhooks**: Enviados a través de una cola de fondo limitada, con soporte para retransisión de eventos de los workers.
     *   **Streaming S3**: Uso de memoria constante independientemente del tamaño del archivo.
 
 ## Recetario de Blueprints: Características Clave

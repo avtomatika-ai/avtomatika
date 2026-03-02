@@ -133,9 +133,22 @@ Estos puntos finales están diseñados para sistemas externos que inician y moni
 -   **Descripción:** Devuelve estadísticas agregadas sobre el estado del sistema.
 -   **Respuesta (`200 OK`):** Objeto JSON con estadísticas.
 
+### Catálogo de Habilidades (Marketplace)
+
+-   **Punto final:** `GET /api/v1/workers/catalog`
+-   **Descripción:** Devuelve un catálogo agregado de todas las habilidades únicas disponibles en la red, con sus contratos completos (esquemas, estados, precios).
+-   **Respuesta (`200 OK`):** Objeto JSON donde las claves son nombres de habilidades.
+
 ---
 
 ## 3. Puntos Finales Internos para Workers (`/_worker`)
+...
+### Emitir Evento Genérico (Bottom-Up)
+
+-   **Punto final:** `POST /_worker/events`
+-   **Descripción:** Permite a un worker enviar cualquier señal (evento) al Orquestador.
+-   **Cuerpo de la Solicitud:** `WorkerEventPayload` (incluyendo `origin_worker_id` y `bubbling_chain`).
+-   **Respuesta (`200 OK`):** `{"status": "event_accepted"}`
 
 Estos puntos finales son utilizados por los workers para registrarse, recibir tareas y enviar resultados. Requiere encabezado `X-Worker-Token`.
 

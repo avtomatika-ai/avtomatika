@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 import asyncio
 from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,9 +18,9 @@ from avtomatika.watcher import Watcher
 
 @pytest.mark.asyncio
 async def test_dispatch_timeout():
-    """Проверка таймаута ожидания в очереди (dispatch timeout)."""
+    """Verify dispatch timeout for jobs waiting in queue."""
     engine = MagicMock()
-    # Имитируем протухшую задачу в очереди (picked_up is None)
+    # Mock an expired job in the queue (picked_up is None)
     job_id = "expired-in-queue"
     engine.storage.get_timed_out_jobs = AsyncMock(return_value=[job_id])
     engine.storage.get_job_state = AsyncMock(
@@ -21,35 +28,35 @@ async def test_dispatch_timeout():
             "id": job_id,
             "status": JOB_STATUS_WAITING_FOR_WORKER,
             "blueprint_name": "test_bp",
-            "dispatch_deadline": monotonic() - 10,  # Дедлайн в прошлом
-            "task_picked_up_at": None,  # Воркер не забирал
+            "dispatch_deadline": monotonic() - 10,  # Deadline in the past
+            "task_picked_up_at": None,  # Worker never picked it up
         }
     )
     engine.storage.acquire_lock = AsyncMock(return_value=True)
     engine.storage.release_lock = AsyncMock(return_value=True)
     engine.storage.save_job_state = AsyncMock()
     engine.send_job_webhook = AsyncMock()
-    engine.app.get = MagicMock(return_value=None)  # Без S3
+    engine.app.get = MagicMock(return_value=None)  # Without S3
     engine.handle_job_timeout = AsyncMock()
 
     watcher = Watcher(engine)
     watcher.watch_interval_seconds = 0.01
 
-    # Один цикл вочера
+    # Run watcher for one cycle
     task = asyncio.create_task(watcher.run())
     await asyncio.sleep(0.05)
     watcher.stop()
     await task
 
-    # Проверяем, что был вызван метод обработки таймаута
+    # Verify that the timeout handler was called
     engine.handle_job_timeout.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_result_deadline_timeout():
-    """Проверка абсолютного дедлайна результата (result timeout)."""
+    """Verify result deadline timeout for tasks being executed."""
     engine = MagicMock()
-    # Задача взята воркером, но дедлайн результата прошел
+    # Task was picked up by a worker, but result deadline passed
     job_id = "expired-during-execution"
     engine.storage.get_timed_out_jobs = AsyncMock(return_value=[job_id])
     engine.storage.get_job_state = AsyncMock(
@@ -58,7 +65,7 @@ async def test_result_deadline_timeout():
             "status": JOB_STATUS_WAITING_FOR_WORKER,
             "blueprint_name": "test_bp",
             "result_deadline": monotonic() - 5,
-            "task_picked_up_at": monotonic() - 10,  # Взята 10 сек назад
+            "task_picked_up_at": monotonic() - 10,  # Picked up 10s ago
         }
     )
     engine.storage.acquire_lock = AsyncMock(return_value=True)
@@ -81,16 +88,18 @@ async def test_result_deadline_timeout():
 
 @pytest.mark.asyncio
 async def test_late_result_handling():
-    """Проверка отклонения результата, если задача уже протухла."""
+    """Verify that late results are rejected if job is already marked failed."""
     storage = MagicMock()
     history = MagicMock()
     config = MagicMock()
     engine = MagicMock()
+    # Mock _from_dict to return the data itself for testing
+    engine._from_dict.side_effect = lambda cls, data: data
 
     service = WorkerService(storage, history, config, engine)
 
     job_id = "late-job"
-    # Задача уже в статусе failed (например, отменена вочером)
+    # Job is already in failed status (e.g. cancelled by Watcher)
     storage.get_job_state = AsyncMock(
         return_value={
             "id": job_id,
@@ -109,7 +118,7 @@ async def test_late_result_handling():
 
     response = await service.process_task_result(result_payload, "worker-1")
 
-    # Проверяем, что ответ содержит код LATE_RESULT
+    # Verify that the response contains LATE_RESULT code
     assert isinstance(response, dict)
     assert response["status"] == "ignored"
     # Reason code for late/timeout
@@ -117,13 +126,13 @@ async def test_late_result_handling():
 
     assert response["reason"] == IGNORED_REASON_LATE
 
-    # Проверяем, что состояние НЕ обновлялось (save_job_state не вызывался)
+    # Verify that state was NOT updated (save_job_state not called)
     storage.save_job_state.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_s3_cleanup_on_timeout():
-    """Проверка вызова очистки S3 при таймауте."""
+    """Verify S3 cleanup is called on timeout."""
     from avtomatika.engine import OrchestratorEngine
 
     mock_storage = AsyncMock()
@@ -197,7 +206,7 @@ async def test_s3_cleanup_on_timeout():
 
 @pytest.mark.asyncio
 async def test_retry_logic_respects_deadlines():
-    """Проверка, что логика ретраев учитывает существующие дедлайны."""
+    """Verify that retry logic respects existing deadlines."""
     from avtomatika.engine import OrchestratorEngine
 
     storage = MagicMock()
@@ -231,40 +240,40 @@ async def test_retry_logic_respects_deadlines():
 
         await engine.handle_task_failure(job_state, "task-1", "error")
 
-        # Проверяем, что таймаут в вочере установлен именно на дедлайн диспатча (30 сек),
-        # а не на дефолтные 60 сек из таска.
+        # Verify that watcher timeout is set specifically to the dispatch deadline (30s)
+        # instead of the default 60s from the task.
         storage.add_job_to_watch.assert_called_with(job_id, dispatch_deadline)
 
 
 @pytest.mark.asyncio
 async def test_action_factory_default_timeouts():
-    """Проверка использования таймаутов по умолчанию в ActionFactory."""
+    """Verify default timeouts in ActionFactory."""
     from avtomatika.context import ActionFactory
 
-    # Задаем дефолтные значения уровня Job
+    # Set default values for the Job
     factory = ActionFactory(job_id="job-1", default_dispatch_timeout=15, default_result_timeout=45)
 
-    # Вызываем диспатч БЕЗ явных таймаутов
+    # Call dispatch WITHOUT explicit timeouts
     factory.dispatch_task(task_type="test", params={}, transitions={"success": "next"})
 
     task_info = factory.task_to_dispatch
     assert task_info["dispatch_timeout_seconds"] == 15
     assert task_info["result_timeout_seconds"] == 45
 
-    # Проверяем, что явный таймаут имеет приоритет
+    # Verify that explicit timeout takes precedence
     factory2 = ActionFactory(job_id="job-2", default_dispatch_timeout=15)
     factory2.dispatch_task(
         task_type="test",
         params={},
         transitions={"success": "next"},
-        dispatch_timeout_seconds=5,  # Явный
+        dispatch_timeout_seconds=5,  # Explicit
     )
     assert factory2.task_to_dispatch["dispatch_timeout_seconds"] == 5
 
 
 @pytest.mark.asyncio
 async def test_parallel_dispatch_timeouts():
-    """Проверка, что параллельные ветки получают правильные дедлайны в Watcher."""
+    """Verify parallel branches get correct deadlines in Watcher."""
     from avtomatika.executor import JobExecutor
 
     engine = MagicMock()
@@ -290,11 +299,11 @@ async def test_parallel_dispatch_timeouts():
 
         await executor._handle_parallel_dispatch(job_state, parallel_info, 0)
 
-        # Проверяем, что для каждой ветки вызван add_job_to_watch с правильным временем
-        # Ветка 1: now + 20 = 120
-        # Ветка 2: now + 50 = 150
+        # Verify each branch called add_job_to_watch with correct time
+        # Branch 1: now + 20 = 120
+        # Branch 2: now + 50 = 150
         calls = storage.add_job_to_watch.call_args_list
-        # calls[0] это (f"{job_id}:{branch_id}", timeout_at)
+        # calls[0] is (f"{job_id}:{branch_id}", timeout_at)
         timeouts = [call[0][1] for call in calls]
         assert 120.0 in timeouts
         assert 150.0 in timeouts
@@ -302,7 +311,7 @@ async def test_parallel_dispatch_timeouts():
 
 @pytest.mark.asyncio
 async def test_reputation_impact_on_execution_timeout():
-    """Проверка, что Watcher пишет в историю провал воркера при таймауте выполнения."""
+    """Verify Watcher logs task failure for reputation impact on timeout."""
     from avtomatika.engine import OrchestratorEngine
 
     mock_storage = AsyncMock()
@@ -331,7 +340,7 @@ async def test_reputation_impact_on_execution_timeout():
             "status": JOB_STATUS_WAITING_FOR_WORKER,
             "blueprint_name": "test_bp",
             "current_state": "processing",
-            "task_picked_up_at": 100.0,  # Был взят
+            "task_picked_up_at": 100.0,  # Was picked up
             "task_worker_id": worker_id,
             "current_task_id": "task-1",
         }
@@ -347,7 +356,7 @@ async def test_reputation_impact_on_execution_timeout():
     watcher.stop()
     await task
 
-    # Проверяем, что в историю ушло событие task_finished со статусом failure
+    # Verify task_finished event with failure status was logged to history
     history_calls = engine.history_storage.log_job_event.call_args_list
     task_failure_logged = any(
         call[0][0].get("event_type") == "task_finished"
@@ -360,7 +369,7 @@ async def test_reputation_impact_on_execution_timeout():
 
 @pytest.mark.asyncio
 async def test_sub_blueprint_timeout_propagation():
-    """Проверка передачи таймаутов в дочерние блупринты."""
+    """Verify timeout propagation to child blueprints."""
     from avtomatika.executor import JobExecutor
 
     engine = MagicMock()
@@ -378,8 +387,8 @@ async def test_sub_blueprint_timeout_propagation():
 
     await executor._handle_run_blueprint(parent_job, sub_info, 0)
 
-    # Проверяем состояние созданного дочернего джоба
-    # Второе сохранение в save_job_state (первое для ребенка, второе обновление родителя)
+    # Verify created child job state
+    # Second call to save_job_state (first for child, second for parent update)
     child_state = storage.save_job_state.call_args_list[0][0][1]
     assert child_state["blueprint_name"] == "child_bp"
     assert child_state["dispatch_timeout"] == 33

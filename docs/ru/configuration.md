@@ -167,6 +167,11 @@ input_data = { compression = "max" }
 | `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Интервал обновления TTL воркера (используется для Health Check). | `60` |
 | `JOB_MAX_RETRIES` | Максимальное количество попыток повторного выполнения задачи. | `3` |
 | `WATCHER_INTERVAL_SECONDS` | Интервал проверки "зависших" задач процессом Watcher. | `20` |
+| `STRICT_EVENT_VALIDATION` | Если `true`, Оркестратор будет отвергать события воркеров, не описанные в их схемах. | `true` |
+| `REPUTATION_MIN_THRESHOLD` | Минимальный порог репутации для допуска воркера к задачам. | `0.3` |
+| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Штраф к репутации за нарушение контракта данных. | `0.2` |
+| `REPUTATION_PENALTY_TASK_FAILURE` | Штраф к репутации за критический/перманентный сбой задачи. | `0.05` |
+| `REPUTATION_REWARD_SUCCESS` | Бонус к репутации за каждое успешное выполнение задачи. | `0.001` |
 | `RATE_LIMITING_ENABLED` | Включить ограничение частоты запросов (Rate Limiting). | `true` |
 | `RATE_LIMIT_LIMIT` | Лимит по умолчанию для общих API запросов (за период). | `100` |
 | `RATE_LIMIT_PERIOD` | Период ограничения в секундах. | `60` |

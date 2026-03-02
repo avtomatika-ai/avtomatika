@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 import pytest
 
 try:
@@ -35,7 +42,7 @@ class TestRedisStorage(StorageTestSuite):
         info = {
             "worker_id": worker_id,
             "status": "idle",
-            "supported_skills": ["task_a"],
+            "supported_skills": [{"name": "task_a"}],
         }
         await storage.register_worker(worker_id, info, ttl)
 

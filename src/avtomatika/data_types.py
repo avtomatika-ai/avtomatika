@@ -1,6 +1,13 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from rxon.models import InstalledModel, Resources
+from rxon.models import InstalledArtifact, Resources
 
 if TYPE_CHECKING:
     from .context import ActionFactory
@@ -34,10 +41,10 @@ class WorkerInfo(NamedTuple):
     """Complete information about the worker, transmitted upon registration."""
 
     worker_id: str
-    address: str
-    dynamic_token: str
     worker_type: str
-    supported_skills: list[str]
+    supported_skills: list[Any]  # list[SkillInfo]
     resources: Resources
     installed_software: dict[str, str]
-    installed_models: list[InstalledModel]
+    installed_artifacts: list[InstalledArtifact]
+    capabilities: Any  # WorkerCapabilities
+    skills_hash: str | None = None

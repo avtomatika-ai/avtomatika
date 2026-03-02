@@ -1,21 +1,31 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from hashlib import sha256
 from logging import getLogger
 from secrets import token_urlsafe
 from time import monotonic
 from typing import Any, Optional
 
-from rxon.models import TokenResponse
+from rxon.models import TokenResponse, WorkerEventPayload
+from rxon.schema import validate_data
 from rxon.validators import validate_identifier
 
 from ..app_keys import S3_SERVICE_KEY
 from ..config import Config
 from ..constants import (
+    ERROR_CODE_CONTRACT_VIOLATION,
     ERROR_CODE_DEPENDENCY,
     ERROR_CODE_INTEGRITY_MISMATCH,
     ERROR_CODE_INVALID_INPUT,
     ERROR_CODE_PERMANENT,
     ERROR_CODE_SECURITY,
     ERROR_CODE_TRANSIENT,
+    EVENT_TYPE_PROGRESS,
     IGNORED_REASON_CANCELLED,
     IGNORED_REASON_LATE,
     IGNORED_REASON_NOT_FOUND,
@@ -25,6 +35,7 @@ from ..constants import (
     JOB_STATUS_QUARANTINED,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_PARALLEL,
+    JOB_STATUS_WAITING_FOR_WORKER,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_FAILURE,
     TASK_STATUS_SUCCESS,
@@ -51,11 +62,23 @@ class WorkerService:
     async def register_worker(self, worker_data: dict[str, Any]) -> None:
         """
         Registers a new worker.
-        :param worker_data: Raw dictionary from request (to be validated/converted to Model later)
+        :param worker_data: Raw dictionary from request (validated against WorkerRegistration)
         """
+        from rxon.models import WorkerRegistration
+        from rxon.utils import to_dict
+
+        # HLN Contract Validation: Ensure worker meets the protocol registration requirements
+        try:
+            validated_reg = self.engine._from_dict(WorkerRegistration, worker_data)
+            # Re-serialize to dict to ensure standard structure and types in storage
+            worker_data = to_dict(validated_reg)
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.error(f"Worker registration failed validation: {e}")
+            raise ValueError(f"Invalid WorkerRegistration payload: {e}") from e
+
         worker_id = worker_data.get("worker_id")
-        if not worker_id:
-            raise ValueError("Missing required field: worker_id")
+        if not isinstance(worker_id, str):
+            raise ValueError("Missing or invalid worker_id in registration data")
 
         validate_identifier(worker_id, "worker_id")
 
@@ -128,8 +151,19 @@ class WorkerService:
     async def process_task_result(self, result_payload: dict[str, Any], authenticated_worker_id: str) -> dict[str, Any]:
         """
         Processes a task result submitted by a worker.
-        Returns a standardized dictionary response.
         """
+        from rxon.models import TaskResult
+        from rxon.utils import to_dict
+
+        # HLN Contract Validation: Ensure result matches protocol TaskResult
+        try:
+            validated_res = self.engine._from_dict(TaskResult, result_payload)
+            # Normalize to dict for storage consistency
+            result_payload = to_dict(validated_res)
+        except (AttributeError, TypeError, ValueError) as e:
+            logger.error(f"Task result failed protocol validation: {e}")
+            raise ValueError(f"Invalid TaskResult payload: {e}") from e
+
         payload_worker_id = result_payload.get("worker_id")
 
         if payload_worker_id and payload_worker_id != authenticated_worker_id:
@@ -204,6 +238,46 @@ class WorkerService:
         result_status = result_payload.get("status", TASK_STATUS_SUCCESS)
         worker_data_content = result_payload.get("data")
 
+        # HLN Marketplace Enrichment: Find the exact skill definition used
+        skill_snapshot = None
+        if authenticated_worker_id:
+            try:
+                worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+                if worker_info:
+                    task_type = job_state.get("current_task_info", {}).get("type")
+                    # Search for the matching skill in the worker's supported_skills
+                    # Every skill is strictly a dict (SkillInfo)
+                    for skill in worker_info.get("supported_skills", []):
+                        if skill.get("name") == task_type or skill.get("type") == task_type:
+                            skill_snapshot = skill
+                            break
+            except Exception as e:
+                logger.warning(f"Failed to fetch skill snapshot for validation (job {job_id}): {e}")
+
+        # CONTRACT VALIDATION: Check if result matches skill's output_schema
+        if result_status == TASK_STATUS_SUCCESS and skill_snapshot:
+            output_schema = skill_snapshot.get("output_schema")
+            if output_schema:
+                is_valid, error_msg = validate_data(worker_data_content, output_schema)
+                if not is_valid:
+                    full_error = f"Contract violation: result data does not match output_schema. {error_msg}"
+                    logger.error(f"Worker {authenticated_worker_id} violated contract for job {job_id}: {full_error}")
+
+                    # HLN SELF-REGULATION: Penalize reputation for contract violation
+                    penalty = self.config.REPUTATION_PENALTY_CONTRACT_VIOLATION
+                    worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+                    if worker_info:
+                        new_rep = max(0.0, worker_info.get("reputation", 1.0) - penalty)
+                        await self.storage.update_worker_data(authenticated_worker_id, {"reputation": new_rep})
+                        logger.warning(
+                            f"Worker {authenticated_worker_id} reputation decreased by {penalty} "
+                            f"to {new_rep:.2f} due to contract violation."
+                        )
+                    # Transform success into failure due to contract violation
+                    result_status = TASK_STATUS_FAILURE
+                    result_payload["status"] = TASK_STATUS_FAILURE
+                    result_payload["error"] = {"code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
+
         if current_status == JOB_STATUS_WAITING_FOR_PARALLEL:
             await self.storage.remove_job_from_watch(f"{job_id}:{task_id}")
 
@@ -244,7 +318,11 @@ class WorkerService:
                 "event_type": "task_finished",
                 "duration_ms": duration_ms,
                 "worker_id": authenticated_worker_id,
-                "context_snapshot": {**job_state, "result": result_payload},
+                "context_snapshot": {
+                    **job_state,
+                    "result": result_payload,
+                    "skill_snapshot": skill_snapshot,  # Financial/Contract info
+                },
             },
         )
 
@@ -285,6 +363,17 @@ class WorkerService:
 
             job_state["current_state"] = next_state
             job_state["status"] = JOB_STATUS_RUNNING
+
+            # HLN SELF-REGULATION: Reward worker for successful task completion
+            reward = self.config.REPUTATION_REWARD_SUCCESS
+            if authenticated_worker_id and reward > 0:
+                worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+                if worker_info:
+                    new_rep = min(1.0, worker_info.get("reputation", 1.0) + reward)
+                    await self.storage.update_worker_data(authenticated_worker_id, {"reputation": new_rep})
+                    # Log silently or at debug level to avoid spamming for every success
+                    logger.debug(f"Worker {authenticated_worker_id} reputation increased to {new_rep:.4f}")
+
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.enqueue_job(job_id)
             return {"status": "accepted", "transition": "success_transition"}
@@ -326,7 +415,25 @@ class WorkerService:
         job_id = job_state["id"]
         logger.warning(f"Task {task_id} for job {job_id} failed with error type '{error_type}'.")
 
-        if error_type in (ERROR_CODE_PERMANENT, ERROR_CODE_SECURITY, ERROR_CODE_DEPENDENCY):
+        if error_type in (
+            ERROR_CODE_PERMANENT,
+            ERROR_CODE_SECURITY,
+            ERROR_CODE_DEPENDENCY,
+            ERROR_CODE_CONTRACT_VIOLATION,
+        ):
+            # HLN SELF-REGULATION: Immediate penalty for critical/permanent failures
+            penalty = self.config.REPUTATION_PENALTY_TASK_FAILURE
+            if error_type == ERROR_CODE_CONTRACT_VIOLATION:
+                penalty = self.config.REPUTATION_PENALTY_CONTRACT_VIOLATION
+
+            worker_id = job_state.get("task_worker_id")
+            if worker_id:
+                worker_info = await self.storage.get_worker_info(worker_id)
+                if worker_info:
+                    new_rep = max(0.0, worker_info.get("reputation", 1.0) - penalty)
+                    await self.storage.update_worker_data(worker_id, {"reputation": new_rep})
+                    logger.warning(f"Worker {worker_id} reputation decreased by {penalty} due to {error_type}.")
+
             job_state["status"] = JOB_STATUS_QUARANTINED
             job_state["error_message"] = f"Task failed with permanent error ({error_type}): {error_message}"
             await self.storage.save_job_state(job_id, job_state)
@@ -343,6 +450,145 @@ class WorkerService:
         else:
             await self.engine.handle_task_failure(job_state, task_id, error_message)
 
+    async def process_worker_event(self, authenticated_worker_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Processes a generic worker event with Identity Chain verification."""
+        event = self.engine._from_dict(WorkerEventPayload, payload)
+        if not event:
+            return {"status": "error", "message": "Invalid event payload"}
+
+        # HLN IDENTITY CHECK: Immediate sender must be who they say they are
+        if event.worker_id != authenticated_worker_id:
+            logger.critical(
+                f"SPOOFING DETECTED: Worker {authenticated_worker_id} tried to send event as {event.worker_id}"
+            )
+            raise PermissionError("Immediate sender ID mismatch")
+
+        # HLN Contract Validation for Events
+        events_schema = None
+
+        if authenticated_worker_id == "ghost":
+            # Event from internal blueprint handler
+            job_state = await self.storage.get_job_state(event.target_job_id or event.target_task_id)
+            if job_state:
+                contract = self.engine.blueprint_contracts.get(job_state["blueprint_name"], {})
+                events_schema = contract.get("events_schema")
+        else:
+            # Event from external worker
+            worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+            if worker_info and event.target_task_id:
+                # Events are usually scoped to a skill/task if target_task_id is present
+                job_state = await self.storage.get_job_state(event.target_job_id or event.target_task_id)
+                if job_state:
+                    task_type = job_state.get("current_task_info", {}).get("type")
+                    for skill in worker_info.get("supported_skills", []):
+                        if skill.get("name") == task_type or skill.get("type") == task_type:
+                            events_schema = skill.get("events_schema")
+                            break
+
+        if events_schema:
+            if event.event_type in events_schema:
+                is_valid, error_msg = validate_data(event.payload, events_schema[event.event_type])
+                if not is_valid:
+                    full_error = f"Contract violation for event '{event.event_type}': {error_msg}"
+                    logger.error(f"Sender {authenticated_worker_id} violated event contract: {full_error}")
+                    return {"status": "error", "code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
+            elif event.event_type != EVENT_TYPE_PROGRESS:
+                # Check if we should enforce strict validation
+                if self.config.STRICT_EVENT_VALIDATION:
+                    full_error = f"Contract violation: event type '{event.event_type}' is not declared in schema."
+                    logger.error(f"Sender {authenticated_worker_id} violated contract: {full_error}")
+                    return {"status": "error", "code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
+                else:
+                    logger.warning(
+                        f"Sender {authenticated_worker_id} emitted undeclared event "
+                        f"'{event.event_type}'. Allowed by config."
+                    )
+
+        # HLN System Events: Progress
+        if event.event_type == EVENT_TYPE_PROGRESS:
+            # ... (existing progress logic) ...
+            target_id = event.target_job_id or event.target_task_id
+            if target_id:
+                progress = event.payload.get("progress", 0.0)
+                message = event.payload.get("message", "")
+
+                async def _update_progress(state: dict[str, Any]) -> dict[str, Any]:
+                    state["progress"] = progress
+                    state["progress_message"] = message
+                    return state
+
+                try:
+                    await self.storage.update_job_state_atomic(target_id, _update_progress)
+                except Exception as e:
+                    logger.warning(f"Failed to update progress for job {target_id}: {e}")
+
+        # HLN REACTIVE TRANSITIONS: Check if event triggers a state change
+        if event.target_job_id:
+            job_state = await self.storage.get_job_state(event.target_job_id)
+            if job_state and job_state.get("status") == JOB_STATUS_WAITING_FOR_WORKER:
+                event_transitions = job_state.get("current_task_event_transitions", {})
+                if next_state := event_transitions.get(event.event_type):
+                    logger.info(
+                        f"Event '{event.event_type}' triggered transition "
+                        f"for job {event.target_job_id} to '{next_state}'"
+                    )
+
+                    # Merge event payload into history
+                    if "state_history" not in job_state:
+                        job_state["state_history"] = {}
+                    job_state["state_history"].update(event.payload)
+
+                    # Prevent late results from original task
+                    job_state["current_task_id"] = f"superseded_by_event:{event.event_id}"
+
+                    job_state["current_state"] = next_state
+                    job_state["status"] = JOB_STATUS_RUNNING
+
+                    await self.storage.save_job_state(event.target_job_id, job_state)
+                    await self.storage.remove_job_from_watch(event.target_job_id)
+                    await self.storage.enqueue_job(event.target_job_id)
+
+        # Log to history
+        await self.history_storage.log_job_event(
+            {
+                "job_id": event.target_job_id or "system",
+                "state": "running",
+                "event_type": f"worker_event:{event.event_type}",
+                "worker_id": event.origin_worker_id,  # Log the REAL creator
+                "context_snapshot": {
+                    "event_id": event.event_id,
+                    "payload": event.payload,
+                    "priority": event.priority,
+                    "bubbling_chain": event.bubbling_chain,
+                    "sender_id": authenticated_worker_id,
+                },
+            }
+        )
+
+        # HLN EVENT BUBBLING: Notify subscribers (like Matryoshka bridge)
+        if self.engine.on_worker_event:
+            from asyncio import create_task
+
+            for callback in self.engine.on_worker_event:
+                create_task(callback(authenticated_worker_id, event))
+
+        # HLN WEBHOOK BUBBLING: Send event to client if webhook_url is set
+        if event.target_job_id:
+            job_state = await self.storage.get_job_state(event.target_job_id)
+            if job_state and job_state.get("webhook_url"):
+                from ..utils.webhook_sender import WebhookPayload
+
+                webhook_payload = WebhookPayload(
+                    event=f"worker_event:{event.event_type}",
+                    job_id=event.target_job_id,
+                    status=job_state.get("status", "running"),
+                    result=event.payload,
+                    error=None,
+                )
+                await self.engine.webhook_sender.send(job_state["webhook_url"], webhook_payload)
+
+        return {"status": "event_accepted"}
+
     async def issue_access_token(self, worker_id: str) -> TokenResponse:
         """Generates and stores a temporary access token."""
         raw_token = token_urlsafe(32)
@@ -358,11 +604,28 @@ class WorkerService:
         self, worker_id: str, update_data: Optional[dict[str, Any]]
     ) -> Optional[dict[str, Any]]:
         """Updates worker TTL and status, and checks for tasks that should be cancelled."""
+        from rxon.constants import HB_RESP_CANCEL_TASKS, HB_RESP_REQUIRE_FULL_SYNC
+
         ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
         response_data: dict[str, Any] = {"status": "ok"}
 
         if update_data:
+            # HLN Optimization: Traffic reduction
+            new_hash = update_data.get("skills_hash")
+            current_worker = await self.storage.get_worker_info(worker_id)
+
+            # If hash is provided and matches, we don't need to re-register skills
+            if current_worker and new_hash and current_worker.get("skills_hash") == new_hash:
+                # SELF-HEALING: Check if storage actually has the skills
+                if not current_worker.get("supported_skills"):
+                    logger.warning(f"Worker {worker_id} hash match, but skills missing in storage. Forcing Full Sync.")
+                    response_data[HB_RESP_REQUIRE_FULL_SYNC] = True
+
+                # Remove skills from update to keep it lightweight
+                update_data.pop("supported_skills", None)
+
             updated_worker = await self.storage.update_worker_status(worker_id, update_data, ttl)
+
             if updated_worker:
                 await self.history_storage.log_worker_event(
                     {
@@ -389,15 +652,14 @@ class WorkerService:
 
                         status = job_state.get("status")
                         # If the job is in a terminal state or cancelled, tell the worker to stop
-                        if status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED:
+                        if (status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED) and job_state.get(
+                            "task_worker_id"
+                        ) == worker_id:
                             # Verification: check if THIS worker is still the one assigned
-                            if job_state.get("task_worker_id") != worker_id:
-                                cancel_task_ids.append(task_id)
-                            else:
-                                cancel_task_ids.append(task_id)
+                            cancel_task_ids.append(task_id)
 
                     if cancel_task_ids:
-                        response_data["cancel_task_ids"] = cancel_task_ids
+                        response_data[HB_RESP_CANCEL_TASKS] = cancel_task_ids
 
             return response_data
         else:

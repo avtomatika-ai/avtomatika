@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -184,8 +191,8 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
-    async def find_hot_workers(self, skill_name: str, model_name: str) -> list[str]:
-        """Finds idle workers that have the specific model in hot cache."""
+    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
+        """Finds idle workers that have the specific resource (e.g., model, artifact) in hot cache."""
         pass
 
     @abstractmethod
@@ -257,6 +264,11 @@ class StorageBackend(ABC):
         :param ttl: The time-to-live for the key in seconds.
         :return: The new value of the key after the increment.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def increment_key(self, key: str) -> int:
+        """Atomically increments the value of a key without TTL."""
         raise NotImplementedError
 
     @abstractmethod
@@ -389,4 +401,14 @@ class StorageBackend(ABC):
 
         :return: True if storage is accessible, False otherwise.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def save_blueprint_contract(self, name: str, contract: dict[str, Any]) -> None:
+        """Saves the inferred interface contract of a blueprint."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_blueprint_contract(self, name: str) -> dict[str, Any] | None:
+        """Retrieves the interface contract of a blueprint."""
         raise NotImplementedError

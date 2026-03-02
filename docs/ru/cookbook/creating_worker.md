@@ -24,8 +24,8 @@ from avtomatika_worker.typing import TRANSIENT_ERROR
 # Укажите уникальный тип вашего воркера.
 worker = Worker(worker_type="inventory-checker")
 
-# 2. Определите обработчики задач с помощью декоратора @worker.task
-@worker.task("check_inventory")
+# 2. Определите обработчики задач с помощью декоратора @worker.skill
+@worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
     """
     Эта функция будет вызвана, когда Оркестратор отправит
@@ -59,7 +59,7 @@ async def check_inventory_handler(params: dict, **kwargs) -> dict:
     }
 
 # Пример обработчика для долгой задачи с кооперативной отменой
-@worker.task("long_running_task")
+@worker.skill("long_running_task")
 async def long_task_handler(params: dict, **kwargs) -> dict:
     task_id = kwargs["task_id"]
     print(f"Запуск долгой задачи {task_id}...")

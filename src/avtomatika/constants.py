@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 """
 Centralized constants for the Avtomatika protocol.
 (Legacy wrapper, pointing to rxon.constants)
@@ -11,6 +18,7 @@ from rxon.constants import (
     ENDPOINT_TASK_RESULT,
     ENDPOINT_WORKER_HEARTBEAT,
     ENDPOINT_WORKER_REGISTER,
+    ERROR_CODE_CONTRACT_VIOLATION,
     ERROR_CODE_DEPENDENCY,
     ERROR_CODE_INTEGRITY_MISMATCH,
     ERROR_CODE_INTERNAL,
@@ -21,6 +29,7 @@ from rxon.constants import (
     ERROR_CODE_SECURITY,
     ERROR_CODE_TIMEOUT,
     ERROR_CODE_TRANSIENT,
+    EVENT_TYPE_PROGRESS,
     IGNORED_REASON_CANCELLED,
     IGNORED_REASON_LATE,
     IGNORED_REASON_MISMATCH,
@@ -36,7 +45,6 @@ from rxon.constants import (
     JOB_STATUS_WAITING_FOR_HUMAN,
     JOB_STATUS_WAITING_FOR_PARALLEL,
     JOB_STATUS_WAITING_FOR_WORKER,
-    MSG_TYPE_PROGRESS,
     PROTOCOL_VERSION,
     PROTOCOL_VERSION_HEADER,
     STS_TOKEN_ENDPOINT,
@@ -62,6 +70,7 @@ __all__ = [
     "ERROR_CODE_LATE_RESULT",
     "ERROR_CODE_PERMANENT",
     "ERROR_CODE_RESOURCE_EXHAUSTED",
+    "ERROR_CODE_CONTRACT_VIOLATION",
     "ERROR_CODE_SECURITY",
     "ERROR_CODE_TIMEOUT",
     "ERROR_CODE_TRANSIENT",
@@ -80,7 +89,7 @@ __all__ = [
     "JOB_STATUS_WAITING_FOR_HUMAN",
     "JOB_STATUS_WAITING_FOR_PARALLEL",
     "JOB_STATUS_WAITING_FOR_WORKER",
-    "MSG_TYPE_PROGRESS",
+    "EVENT_TYPE_PROGRESS",
     "PROTOCOL_VERSION",
     "PROTOCOL_VERSION_HEADER",
     "STS_TOKEN_ENDPOINT",

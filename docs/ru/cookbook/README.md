@@ -405,7 +405,7 @@ async def show_result(context, actions):
 
 ```python
 # my_worker.py
-@worker.task("long_video_processing")
+@worker.skill("long_video_processing")
 async def process_video(params: dict, task_id: str, job_id: str) -> dict:
     total_frames = 1000
     for frame in range(total_frames):
@@ -486,7 +486,7 @@ curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel \
 Воркер должен периодически вызывать `worker.send_progress()`.
 ```python
 # Внутри вашего файла воркера (my_worker.py)
-@worker.task("train_model")
+@worker.skill("train_model")
 async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
     for epoch in range(10):
         # ... логика обучения ...
@@ -583,7 +583,7 @@ SDK для Воркеров имеет встроенную поддержку S
 import os
 from pathlib import Path
 
-@worker.task("process_video_from_s3")
+@worker.skill("process_video_from_s3")
 async def process_video(params: dict, **kwargs) -> dict:
     # SDK уже скачал файл и передал нам локальный путь
     local_video_path = Path(params["video_path"])
@@ -633,7 +633,7 @@ curl -X POST ... -d '{"s3_uri": "s3://my-bucket/raw_videos/movie.mp4"}'
 #### **Шаг 1: Код в Воркере**
 ```python
 # my_api_worker.py
-@worker.task("fetch_external_data")
+@worker.skill("fetch_external_data")
 async def fetch_data(params: dict, **kwargs) -> dict:
     api_key = params.get("api_key")
     if not api_key:
@@ -1011,7 +1011,7 @@ async def rejection_handler(context, actions):
 **Решение:** Метод `dispatch_task` в `ActionFactory` принимает параметр `resource_requirements`, который позволяет указывать минимальные требования к ресурсам воркера. Диспетчер автоматически отфильтрует воркеры, которые не соответствуют этим требованиям.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import StateMachineBlueprint
 
 gpu_intensive_pipeline = StateMachineBlueprint(
     name="gpu_intensive_flow",
@@ -1024,14 +1024,15 @@ async def start_gpu_task(context, actions):
     actions.dispatch_task(
         task_type="video_montage",
         params=context.initial_data,
-        # Диспетчер будет искать воркер, у которого в поле `gpu_info.model`
-        # содержится строка "NVIDIA T4", а также есть нужная модель
+        # Диспетчер будет искать воркер, у которого в списке устройств (devices)
+        # содержится подходящий GPU, а также есть нужный артефакт
         resource_requirements={
-            "gpu": {
-                "model": "NVIDIA T4",
-                "vram_gb": 16
+            "resources": {
+                "devices": [
+                    {"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}
+                ]
             },
-            "installed_models": [
+            "installed_artifacts": [
                 "stable-diffusion-1.5"
             ]
         },

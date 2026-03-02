@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from os import getenv
 from socket import gethostname
 
@@ -58,9 +65,19 @@ class Config:
         self.WATCHER_INTERVAL_SECONDS: int = int(
             getenv("WATCHER_INTERVAL_SECONDS", 20),
         )
+        self.STRICT_EVENT_VALIDATION: bool = getenv("STRICT_EVENT_VALIDATION", "true").lower() == "true"
         self.EXECUTOR_MAX_CONCURRENT_JOBS: int = int(
             getenv("EXECUTOR_MAX_CONCURRENT_JOBS", 100),
         )
+
+        # Reputation settings
+        self.REPUTATION_PENALTY_CONTRACT_VIOLATION: float = float(
+            getenv("REPUTATION_PENALTY_CONTRACT_VIOLATION", "0.2")
+        )
+        self.REPUTATION_PENALTY_TASK_FAILURE: float = float(getenv("REPUTATION_PENALTY_TASK_FAILURE", "0.05"))
+        self.REPUTATION_REWARD_SUCCESS: float = float(getenv("REPUTATION_REWARD_SUCCESS", "0.001"))
+        self.REPUTATION_MIN_THRESHOLD: float = float(getenv("REPUTATION_MIN_THRESHOLD", "0.3"))
+
         self.REDIS_STREAM_BLOCK_MS: int = int(getenv("REDIS_STREAM_BLOCK_MS", 5000))
 
         # History storage settings

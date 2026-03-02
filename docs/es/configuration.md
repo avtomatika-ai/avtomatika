@@ -165,6 +165,11 @@ Además de los archivos de configuración, el Orquestador se configura a través
 | `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Intervalo para actualizar el TTL del worker (usado para comprobaciones de salud). | `60` |
 | `JOB_MAX_RETRIES` | Número máximo de reintentos para fallos de tareas transitorios. | `3` |
 | `WATCHER_INTERVAL_SECONDS` | Intervalo para que el proceso Watcher en segundo plano verifique trabajos con tiempo de espera agotado. | `20` |
+| `STRICT_EVENT_VALIDATION` | Si es `true`, el Orquestador rechazará eventos de workers no declarados en sus esquemas. | `true` |
+| `REPUTATION_MIN_THRESHOLD` | Umbral mínimo de reputación para considerar a un worker para el despacho. | `0.3` |
+| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Penalización de reputación por violación de contrato de datos. | `0.2` |
+| `REPUTATION_PENALTY_TASK_FAILURE` | Penalización de reputación por fallo crítico o permanente de tarea. | `0.05` |
+| `REPUTATION_REWARD_SUCCESS` | Recompensa de reputación por cada tarea completada con éxito. | `0.001` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Número máximo de trabajos concurrentes (manejadores) procesados por el Orquestador. | `100` |
 | `HISTORY_DATABASE_URI` | URI para almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` (Deshabilitado) |
 | `RATE_LIMITING_ENABLED` | Habilitar middleware de limitación de velocidad. | `true` |

@@ -24,8 +24,8 @@ from avtomatika_worker.typing import TRANSIENT_ERROR
 # Specify unique type for your worker.
 worker = Worker(worker_type="inventory-checker")
 
-# 2. Define task handlers using @worker.task decorator
-@worker.task("check_inventory")
+# 2. Define task handlers using @worker.skill decorator
+@worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
     """
     This function called when Orchestrator sends "check_inventory" task.
@@ -58,7 +58,7 @@ async def check_inventory_handler(params: dict, **kwargs) -> dict:
     }
 
 # Example handler for long task with cooperative cancellation
-@worker.task("long_running_task")
+@worker.skill("long_running_task")
 async def long_task_handler(params: dict, **kwargs) -> dict:
     task_id = kwargs["task_id"]
     print(f"Starting long task {task_id}...")

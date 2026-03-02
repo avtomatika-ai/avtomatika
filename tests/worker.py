@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 import asyncio
 import os
 import uuid
@@ -19,7 +26,7 @@ async def register_with_avtomatika(app):
     worker_payload = {
         "worker_id": WORKER_ID,
         "worker_type": "e2e_test_worker",
-        "supported_skills": ["error_task"],
+        "supported_skills": [{"name": "error_task"}],
         "status": "idle",
     }
     headers = {AUTH_HEADER_WORKER: WORKER_TOKEN}

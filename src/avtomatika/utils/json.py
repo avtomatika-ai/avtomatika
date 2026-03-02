@@ -5,14 +5,12 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from contextlib import suppress
+from typing import Any
 
-from .base import StorageBackend
-from .memory import MemoryStorage
+from aiohttp import web
+from rxon.utils import json_dumps
 
-__all__ = ["StorageBackend", "MemoryStorage"]
 
-with suppress(ImportError):
-    from .redis import RedisStorage  # noqa: F401
-
-    __all__.append("RedisStorage")
+def json_response(data: Any, **kwargs: Any) -> web.Response:
+    """Standardized JSON response for Avtomatika API."""
+    return web.json_response(data, dumps=json_dumps, **kwargs)

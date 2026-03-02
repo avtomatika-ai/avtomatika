@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,6 +26,7 @@ async def test_reputation_calculation_logic(mock_engine):
 
     # 1. Configure mocks
     mock_engine.storage.get_active_worker_ids = AsyncMock(return_value=["worker-1"])
+    mock_engine.storage.get_worker_info = AsyncMock(return_value={"worker_id": "worker-1", "reputation": 1.0})
 
     # History: 3 successful tasks, 1 failed
     mock_history = [
@@ -47,10 +55,10 @@ async def test_reputation_calculation_logic(mock_engine):
     await calculator.calculate_all_reputations()
 
     # 3. Check the result
-    # Expected reputation = 3 / 4 = 0.75
+    # Expected reputation = (0.75 * 0.7) + (1.0 * 0.3) = 0.825
     mock_engine.storage.update_worker_data.assert_called_once_with(
         "worker-1",
-        {"reputation": 0.75},
+        {"reputation": 0.825},
     )
 
 

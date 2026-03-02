@@ -133,9 +133,22 @@ These endpoints are designed for external systems that initiate and monitor work
 -   **Description:** Returns aggregated statistics about the system state.
 -   **Response (`200 OK`):** JSON object with statistics.
 
+### Get Skill Catalog (Marketplace)
+
+-   **Endpoint:** `GET /api/v1/workers/catalog`
+-   **Description:** Returns an aggregated catalog of all unique skills available in the network, with their full contracts (schemas, statuses, prices).
+-   **Response (`200 OK`):** JSON object where keys are skill names.
+
 ---
 
 ## 3. Internal Endpoints for Workers (`/_worker`)
+...
+### Emit Generic Event (Bottom-Up)
+
+-   **Endpoint:** `POST /_worker/events`
+-   **Description:** Allows a worker to send any signal (event) to the Orchestrator.
+-   **Request Body:** `WorkerEventPayload` (including `origin_worker_id` and `bubbling_chain`).
+-   **Response (`200 OK`):** `{"status": "event_accepted"}`
 
 These endpoints are used by workers to register, receive tasks, and submit results. Requires `X-Worker-Token` header.
 

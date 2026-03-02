@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,11 +15,14 @@ GPU_WORKER = {
     "worker_id": "gpu-worker-01",
     "address": "http://gpu-worker",
     "dynamic_token": "gpu-secret",
-    "supported_skills": ["image_generation", "video_montage"],
+    "supported_skills": [
+        {"name": "image_generation", "type": "image_generation"},
+        {"name": "video_montage", "type": "video_montage"},
+    ],
     "resources": {
-        "gpu_info": {"model": "NVIDIA T4", "vram_gb": 16},
+        "devices": [{"type": "gpu", "model": "NVIDIA T4", "properties": {"memory_gb": 16}}],
     },
-    "installed_models": [
+    "installed_artifacts": [
         {"name": "stable-diffusion-1.5", "version": "1.0"},
     ],
 }
@@ -21,9 +31,9 @@ CPU_WORKER = {
     "worker_id": "cpu-worker-01",
     "address": "http://cpu-worker",
     "dynamic_token": "cpu-secret",
-    "supported_skills": ["text_analysis"],
-    "resources": {"gpu_info": None},
-    "installed_models": [],
+    "supported_skills": [{"name": "text_analysis", "type": "text_analysis"}],
+    "resources": {"devices": None},
+    "installed_artifacts": [],
 }
 
 
@@ -67,7 +77,7 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
     """Tests that the dispatcher gets workers, selects one, and queues a task for it."""
     mock_worker = {
         "worker_id": "worker-123",
-        "supported_skills": ["test_task"],
+        "supported_skills": [{"name": "test_task"}],
     }
     mock_storage.find_workers_for_skill.return_value = ["worker-123"]
     mock_storage.get_workers.return_value = [mock_worker]
@@ -112,7 +122,7 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
     """Tests that the dispatcher correctly passes the priority to the storage."""
     mock_worker = {
         "worker_id": "worker-123",
-        "supported_skills": ["test_task"],
+        "supported_skills": [{"name": "test_task"}],
     }
     mock_storage.find_workers_for_skill.return_value = ["worker-123"]
     mock_storage.get_workers.return_value = [mock_worker]
@@ -128,17 +138,36 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
 
 
 class TestDispatcherFiltering:
-    def test_is_worker_compliant_gpu_success(self, dispatcher):
-        requirements = {"gpu_info": {"model": "NVIDIA T4", "vram_gb": 16}}
-        assert dispatcher._is_worker_compliant(GPU_WORKER, requirements) is True
+    def test_check_worker_compliance_gpu_success(self, dispatcher):
+        requirements = {"resources": {"devices": [{"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}]}}
+        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        assert is_compliant is True
 
-    def test_is_worker_compliant_gpu_fail_model(self, dispatcher):
-        requirements = {"gpu_info": {"model": "RTX 3090"}}
-        assert dispatcher._is_worker_compliant(GPU_WORKER, requirements) is False
+    def test_check_worker_compliance_gpu_fail_model(self, dispatcher):
+        requirements = {"resources": {"devices": [{"type": "gpu", "model": "RTX 3090"}]}}
+        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        assert is_compliant is False
 
-    def test_is_worker_compliant_model_success(self, dispatcher):
-        requirements = {"installed_models": ["stable-diffusion-1.5"]}
-        assert dispatcher._is_worker_compliant(GPU_WORKER, requirements) is True
+    def test_check_worker_compliance_model_success(self, dispatcher):
+        requirements = {"installed_artifacts": ["stable-diffusion-1.5"]}
+        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        assert is_compliant is True
+
+    def test_check_worker_compliance_artifact_properties_success(self, dispatcher):
+        worker = {
+            "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "int8"}}]
+        }
+        requirements = {"installed_artifacts": [{"name": "test-model", "properties": {"quantization": "int8"}}]}
+        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements)
+        assert is_compliant is True
+
+    def test_check_worker_compliance_artifact_properties_failure(self, dispatcher):
+        worker = {
+            "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "fp16"}}]
+        }
+        requirements = {"installed_artifacts": [{"name": "test-model", "properties": {"quantization": "int8"}}]}
+        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements)
+        assert is_compliant is False
 
     @pytest.mark.asyncio
     async def test_dispatch_filters_by_gpu_from_action_factory(
@@ -159,7 +188,7 @@ class TestDispatcherFiltering:
             task_type="image_generation",
             params={},
             transitions={"success": "finished"},
-            resource_requirements={"gpu_info": {"model": "NVIDIA T4"}},
+            resource_requirements={"resources": {"devices": [{"type": "gpu", "model": "NVIDIA T4"}]}},
         )
         task_info = actions.task_to_dispatch
 
@@ -186,7 +215,7 @@ class TestDispatcherFiltering:
         task_info = {
             "type": "image_generation",
             "resource_requirements": {
-                "gpu_info": {"model": "A100"},
+                "resources": {"devices": [{"type": "gpu", "model": "A100"}]},
             },  # No worker has this
         }
 
@@ -202,13 +231,13 @@ class TestDispatcherFiltering:
         """Tests that filtering by `max_cost` works correctly."""
         cheapest_worker = {
             "worker_id": "worker-cheap",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.01,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.01}},
         }
         expensive_worker = {
             "worker_id": "worker-expensive",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.05,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.05}},
         }
         workers = [expensive_worker, cheapest_worker]
         mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
@@ -237,13 +266,13 @@ class TestDispatcherStrategies:
         """Tests that with the 'cheapest' strategy, the cheapest worker is selected."""
         cheapest_worker = {
             "worker_id": "worker-cheap",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.01,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.01}},
         }
         expensive_worker = {
             "worker_id": "worker-expensive",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.05,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.05}},
         }
         workers = [expensive_worker, cheapest_worker]
         mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
@@ -269,15 +298,15 @@ class TestDispatcherStrategies:
         # Cheap, but with a bad reputation. Score = 0.02 / 0.5 = 0.04
         worker_A = {
             "worker_id": "worker-A",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.02,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.02}},
             "reputation": 0.5,
         }
         # Expensive, but with a perfect reputation. Score = 0.03 / 1.0 = 0.03
         worker_B = {
             "worker_id": "worker-B",
-            "supported_skills": ["test_task"],
-            "cost_per_second": 0.03,
+            "supported_skills": [{"name": "test_task"}],
+            "capabilities": {"cost_per_skill": {"test_task": 0.03}},
             "reputation": 1.0,
         }
         workers = [worker_A, worker_B]

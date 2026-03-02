@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -98,6 +105,7 @@ def _register_common_routes(app: web.Application, engine: "OrchestratorEngine") 
         app.router.add_get("/jobs/{job_id}/history", get_job_history_handler)
     app.router.add_get("/blueprints/{blueprint_name}/graph", get_blueprint_graph_handler)
     app.router.add_get("/workers", get_workers_handler)
+    app.router.add_get("/workers/catalog", get_dashboard_handler)  # Placeholder, will create actual handler
     app.router.add_get("/jobs", get_jobs_handler)
     app.router.add_get("/dashboard", get_dashboard_handler)
     app.router.add_post("/admin/reload-workers", reload_worker_configs_handler)

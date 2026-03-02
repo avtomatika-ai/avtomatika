@@ -1,4 +1,11 @@
-from asyncio import CancelledError, Task, create_task, sleep
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
+from asyncio import CancelledError, Task, create_task, gather, sleep
 from logging import getLogger
 from time import monotonic
 from types import SimpleNamespace
@@ -201,6 +208,26 @@ class JobExecutor:
 
                     await handler(**params_to_inject)
 
+                    # HLN GHOST SIGNALING: Process events emitted by the blueprint
+                    if action_factory.pending_events:
+                        for event_type, payload in action_factory.pending_events:
+                            # Blueprints (Ghosts) emit events through their shell
+                            event_data = {
+                                "event_id": str(uuid4()),
+                                "worker_id": "ghost",  # Internal identity
+                                "origin_worker_id": "ghost",
+                                "event_type": event_type,
+                                "payload": payload,
+                                "bubbling_chain": [],
+                                "target_job_id": job_id,
+                                "trace_context": tracing_context,
+                                "timestamp": monotonic(),
+                            }
+                            if self.engine.worker_service:
+                                await self.engine.worker_service.process_worker_event("ghost", event_data)
+                            else:
+                                logger.error("WorkerService not initialized. Event dropped.")
+
                     duration_ms = int((monotonic() - start_time) * 1000)
 
                     if action_factory.next_state:
@@ -260,7 +287,28 @@ class JobExecutor:
         )
 
         job_state["status"] = status
+
+        # CONTRACT VALIDATION: Check final output against blueprint's output_schema
+        if status == JOB_STATUS_FINISHED:
+            contract = self.engine.blueprint_contracts.get(job_state["blueprint_name"], {})
+            output_schema = contract.get("output_schema")
+            if output_schema:
+                from rxon.schema import validate_data
+
+                is_valid, error_msg = validate_data(job_state.get("state_history"), output_schema)
+                if not is_valid:
+                    status = JOB_STATUS_FAILED
+                    job_state["status"] = JOB_STATUS_FAILED
+                    job_state["error_message"] = (
+                        f"Blueprint contract violation: final state_history does not match output_schema. {error_msg}"
+                    )
+                    logger.error(f"Job {job_id} violated its own contract: {job_state['error_message']}")
+
         await self.storage.save_job_state(job_id, job_state)
+
+        # HLN Bridge: Notify subscribers about job completion
+        if self.engine.on_job_finished:
+            await gather(*[cb(job_id, status, job_state) for cb in self.engine.on_job_finished], return_exceptions=True)
 
         # Clean up S3 files if service is available and auto-cleanup is enabled
         s3_service = self.engine.app.get(S3_SERVICE_KEY)
@@ -349,6 +397,7 @@ class JobExecutor:
             job_state["task_dispatched_at"] = now
             job_state["current_task_info"] = task_info
             job_state["current_task_transitions"] = task_info.get("transitions", {})
+            job_state["current_task_event_transitions"] = task_info.get("event_transitions", {})
 
             # Store deadlines for WorkerService and Watcher
             job_state["dispatch_deadline"] = dispatch_deadline
@@ -366,6 +415,21 @@ class JobExecutor:
         duration_ms: int,
     ) -> None:
         parent_job_id = parent_job_state["id"]
+        blueprint_name = sub_blueprint_info["blueprint_name"]
+        initial_data = sub_blueprint_info["initial_data"]
+
+        # CONTRACT VALIDATION: Check child blueprint input contract
+        contract = self.engine.blueprint_contracts.get(blueprint_name, {})
+        input_schema = contract.get("input_schema")
+        if input_schema:
+            from rxon.schema import validate_data
+
+            is_valid, error_msg = validate_data(initial_data, input_schema)
+            if not is_valid:
+                error = ValueError(f"Sub-blueprint '{blueprint_name}' input validation failed: {error_msg}")
+                await self._handle_failure(parent_job_state, error, duration_ms)
+                return
+
         child_job_id = str(uuid4())
 
         await self.history_storage.log_job_event(

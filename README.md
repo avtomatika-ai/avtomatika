@@ -2,9 +2,9 @@
 
 # Avtomatika Orchestrator
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![PyPI Version](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
-[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 Avtomatika is a powerful, state-driven engine for managing complex asynchronous workflows in Python. It provides a robust framework for building scalable and resilient applications by separating process logic from execution logic.
 
@@ -225,9 +225,21 @@ async def publish_handler_old_style(context):
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
 *   **Smart Dispatching**: High-performance routing using Redis Set intersections.
-    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded in memory (based on `model_name` param) or have everything ready for a specific skill.
+    *   **Deep Schema Matching**: Prioritizes workers whose `input_schema` matches the specific task parameters, ensuring compatibility before dispatch.
+    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded in memory.
     *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
-*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands (like task cancellations) directly in response to worker heartbeats, ensuring reliability even without persistent connections.
+*   **Self-Regulating Reputation**:
+    *   **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
+    *   **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
+    *   **Trusted Guard**: Configurable `REPUTATION_MIN_THRESHOLD` to automatically ignore unreliable holons.
+*   **Contract-First Architecture**:
+    *   **API Validation**: Strict validation of job `initial_data` against blueprint contracts before job creation.
+    *   **Result Validation**: Automatic verification of worker results against their declared `output_schema`.
+    *   **Ghost Signaling**: Blueprints can emit custom events via `actions.send_event()`, following the same strict validation rules.
+*   **Network Visibility**:
+    *   **Skill Catalog**: Aggregated real-time marketplace of all unique skills and contracts available in the grid.
+    *   **Global Registry**: Contracts are stored in Redis for cluster-wide consistency.
+*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands directly in response to optimized heartbeats.
 *   **Zero Trust Security**:
     *   **mTLS (Mutual TLS)**: Mutual authentication between Orchestrator and Workers using certificates.
     *   **STS (Security Token Service)**: Token rotation mechanism with short-lived access tokens.

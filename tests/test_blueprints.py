@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from src.avtomatika.blueprint import StateMachineBlueprint
 
 error_flow_bp = StateMachineBlueprint(name="error_flow", api_endpoint="/jobs/error_flow", api_version="v1")

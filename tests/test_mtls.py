@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 import ssl
 import subprocess
 
@@ -170,7 +177,15 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     async with aiohttp.ClientSession() as session:
         # 1. Register (POST)
         # Note: We do NOT send X-Worker-Token header.
-        reg_data = {"worker_id": target_worker_id, "worker_type": "tls-worker", "supported_skills": ["t1"]}
+        reg_data = {
+            "worker_id": target_worker_id,
+            "worker_type": "tls-worker",
+            "supported_skills": [{"name": "t1"}],
+            "resources": {"max_concurrent_tasks": 1, "cpu_cores": 1, "ram_gb": 1.0},
+            "installed_software": {},
+            "installed_artifacts": [],
+            "capabilities": {"hostname": "h", "ip_address": "127.0.0.1", "cost_per_skill": {}},
+        }
         async with session.post(f"{base_url}/_worker/workers/register", json=reg_data, ssl=client_ssl_ctx) as resp:
             assert resp.status == 200, f"Registration failed: {await resp.text()}"
             data = await resp.json()

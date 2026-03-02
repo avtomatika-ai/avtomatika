@@ -1,3 +1,25 @@
+<!--
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+-->
+
+
+<!--
+
+-->
+
+
+<!--
+
+-->
+
+
+<!--
+
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -291,6 +313,18 @@
                         ]
                     },
                     {
+                        id: 'get-worker-catalog',
+                        name: 'Get Skill Catalog (Marketplace)',
+                        method: 'GET',
+                        path: '/api/{version}/workers/catalog',
+                        description: 'Returns an aggregated catalog of all unique skills currently available in the network, along with their full interface contracts (Schemas, Statuses, Prices).',
+                        parameters: [{ name: 'version', type: 'string', description: 'API Version', example: 'v1' }],
+                        request: { body: null },
+                        responses: [
+                            { code: '200 OK', description: 'Aggregated skill catalog.', body: { "image_resize": { "contract": { "input_schema": { "..." }, "output_statuses": ["success", "failure"] }, "providers_count": 5 } } }
+                        ]
+                    },
+                    {
                         id: 'get-jobs',
                         name: 'Get List of Jobs',
                         method: 'GET',
@@ -416,9 +450,9 @@
                         path: '/_worker/workers/{worker_id}',
                         description: 'Performs a partial update of a worker\'s properties and/or serves as a heartbeat. This endpoint has dual functionality:\n\n- **Full Update (with JSON body):** If a JSON body is provided (e.g., with `status`, `supported_skills`), the orchestrator updates the worker\'s data and refreshes its TTL.\n- **Lightweight Heartbeat (empty body):** If the request body is empty, the orchestrator only refreshes the worker\'s TTL, serving as an efficient "ping" to confirm the worker is still active without sending redundant data. The data model is schema-less; the orchestrator will accept any key-value pairs in the JSON object, allowing workers to report custom data.',
                         parameters: [{ name: 'worker_id', type: 'string', description: 'Worker ID', example: 'worker-123' }],
-                        request: { body: { "status": "idle", "supported_skills": ["new_skill"], "load": 0.5 } },
+                        request: { body: { "status": "idle", "supported_skills": [{"name": "new_skill"}], "load": 0.5 } },
                         responses: [
-                            { code: '200 OK', description: 'Successful response (full update).', body: { "worker_id": "...", "status": "idle", "supported_skills": ["..."], "load": 0.5 } },
+                            { code: '200 OK', description: 'Successful response (full update).', body: { "worker_id": "...", "status": "idle", "supported_skills": [{"name": "..."}], "load": 0.5 } },
                             { code: '200 OK', description: 'Successful response (TTL refreshed).', body: { "status": "ttl_refreshed" } }
                         ]
                     },
@@ -517,6 +551,43 @@
                 </div>
             ` : '';
 
+            const schemasHtml = (endpoint.input_schema || endpoint.output_schema) ? `
+                <div class="mb-6">
+                    <h3 class="text-xl font-semibold mb-3">Data Contracts (Schemas)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        ${endpoint.input_schema ? `
+                            <div>
+                                <h4 class="text-sm font-medium text-slate-400 mb-2">Input Schema (initial_data)</h4>
+                                <div class="code-block p-4 rounded-md overflow-x-auto">
+                                    <pre class="font-mono text-xs leading-loose"><code>${JSON.stringify(endpoint.input_schema, null, 2)}</code></pre>
+                                </div>
+                            </div>
+                        ` : ''}
+                        ${endpoint.output_schema ? `
+                            <div>
+                                <h4 class="text-sm font-medium text-slate-400 mb-2">Output Schema (result)</h4>
+                                <div class="code-block p-4 rounded-md overflow-x-auto">
+                                    <pre class="font-mono text-xs leading-loose"><code>${JSON.stringify(endpoint.output_schema, null, 2)}</code></pre>
+                                </div>
+                            </div>
+                        ` : ''}
+                    </div>
+                    ${endpoint.events_schema ? `
+                        <div class="mt-4">
+                            <h4 class="text-sm font-medium text-slate-400 mb-2">Events / Signals (Outgoing)</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                ${Object.entries(endpoint.events_schema).map(([eventName, eventSchema]) => `
+                                    <div class="code-block p-4 rounded-md">
+                                        <div class="text-cyan-400 font-bold mb-1">${eventName}</div>
+                                        <pre class="font-mono text-xs leading-loose"><code>${JSON.stringify(eventSchema, null, 2)}</code></pre>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                </div>
+            ` : '';
+
             endpointContentContainer.innerHTML = `
                 <div class="content-card p-6 rounded-lg">
                     ${s3Warning}
@@ -528,6 +599,8 @@
                         </div>
                         <p class="mt-3 text-sm text-slate-400 leading-relaxed">${endpoint.description}</p>
                     </div>
+
+                    ${schemasHtml}
 
                     <div class="border-b border-slate-700 pb-4 mb-6">
                         <h3 class="text-xl font-semibold mb-4">Interactive Test</h3>

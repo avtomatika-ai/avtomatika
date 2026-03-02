@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from importlib import resources
 from logging import getLogger
 from typing import Any, Callable
@@ -20,17 +27,10 @@ from ..constants import (
     JOB_STATUS_WAITING_FOR_HUMAN,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
+from ..utils.json import json_response
 from ..worker_config_loader import load_worker_configs_to_redis
 
 logger = getLogger(__name__)
-
-
-def json_dumps(obj: Any) -> str:
-    return dumps(obj).decode("utf-8")
-
-
-def json_response(data: Any, **kwargs: Any) -> web.Response:
-    return web.json_response(data, dumps=json_dumps, **kwargs)
 
 
 async def status_handler(_request: web.Request) -> web.Response:
@@ -47,14 +47,6 @@ def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[we
         try:
             request_body = await request.json(loads=loads)
             initial_data = request_body.get("initial_data", {})
-            # Backward compatibility
-            if (
-                "initial_data" not in request_body
-                and request_body
-                and not any(k in request_body for k in ("webhook_url", "dispatch_timeout"))
-            ):
-                initial_data = request_body
-
             webhook_url = request_body.get("webhook_url")
             dispatch_timeout = request_body.get("dispatch_timeout")
             result_timeout = request_body.get("result_timeout")
@@ -62,6 +54,19 @@ def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[we
             return json_response({"error": "Invalid JSON body"}, status=400)
 
         client_config = request["client_config"]
+
+        # CONTRACT VALIDATION: Validate initial_data against blueprint's input_schema
+        contract = engine.blueprint_contracts.get(blueprint.name, {})
+        input_schema = contract.get("input_schema")
+        if input_schema:
+            from rxon.schema import validate_data
+
+            is_valid, error_msg = validate_data(initial_data, input_schema)
+            if not is_valid:
+                return json_response(
+                    {"error": f"Input validation failed for blueprint '{blueprint.name}': {error_msg}"}, status=400
+                )
+
         carrier = {str(k): v for k, v in request.headers.items()}
 
         job_id = str(uuid4())
@@ -149,6 +154,47 @@ async def get_workers_handler(request: web.Request) -> web.Response:
     engine = request.app[ENGINE_KEY]
     workers = await engine.storage.get_available_workers()
     return json_response(workers)
+
+
+async def get_worker_catalog_handler(request: web.Request) -> web.Response:
+    """Aggregates all unique skills and their contracts from online workers."""
+    engine = request.app[ENGINE_KEY]
+    workers = await engine.storage.get_available_workers()
+
+    catalog = {}
+    for worker in workers:
+        for skill in worker.get("supported_skills", []):
+            skill_name = skill.get("name")
+            if not skill_name:
+                continue
+
+            # If skill already in catalog, we might want to merge or track multiple versions
+            # For now, we take the most detailed contract or just the first one found
+            if skill_name not in catalog:
+                # Add pricing info from this worker if available
+                skill_info = skill.copy()
+                capabilities = worker.get("capabilities", {})
+                cost_map = capabilities.get("cost_per_skill", {})
+                if skill_name in cost_map:
+                    skill_info["base_price"] = cost_map[skill_name]
+
+                catalog[skill_name] = {
+                    "contract": skill_info,
+                    "providers_count": 1,
+                    "worker_types": {worker.get("worker_type", "unknown")},
+                    "total_reputation": worker.get("reputation", 1.0),
+                }
+            else:
+                catalog[skill_name]["providers_count"] += 1
+                catalog[skill_name]["worker_types"].add(worker.get("worker_type", "unknown"))
+                catalog[skill_name]["total_reputation"] += worker.get("reputation", 1.0)
+
+    # Final calculations
+    for item in catalog.values():
+        item["worker_types"] = list(item["worker_types"])
+        item["average_reputation"] = round(item.pop("total_reputation") / item["providers_count"], 4)
+
+    return json_response(catalog)
 
 
 async def get_jobs_handler(request: web.Request) -> web.Response:
@@ -329,6 +375,8 @@ async def docs_handler(request: web.Request) -> web.Response:
         endpoint_path = bp.api_endpoint if bp.api_endpoint.startswith("/") else f"/{bp.api_endpoint}"
         full_path = f"/api{version_prefix}{endpoint_path}"
 
+        contract = engine.blueprint_contracts.get(bp.name, {})
+
         blueprint_endpoints.append(
             {
                 "id": f"post-create-{bp.name.replace('_', '-')}",
@@ -336,7 +384,7 @@ async def docs_handler(request: web.Request) -> web.Response:
                 "method": "POST",
                 "path": full_path,
                 "description": f"Creates and starts a new instance (Job) of the `{bp.name}` blueprint.",
-                "request": {"body": {"initial_data": {}}},
+                "request": {"body": {"initial_data": contract.get("input_schema") or {}}},
                 "responses": [
                     {
                         "code": "202 Accepted",
@@ -344,6 +392,9 @@ async def docs_handler(request: web.Request) -> web.Response:
                         "body": {"status": "accepted", "job_id": "..."},
                     }
                 ],
+                "input_schema": contract.get("input_schema"),
+                "output_schema": contract.get("output_schema"),
+                "events_schema": contract.get("events_schema"),
             }
         )
 

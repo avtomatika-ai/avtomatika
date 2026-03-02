@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +21,8 @@ async def test_register_worker_invalid_id():
     config = Config()
     engine = MagicMock()
     engine.app = {}  # Mock app dictionary for S3 service lookup
+    # Mock _from_dict to return the data itself for testing
+    engine._from_dict.side_effect = lambda cls, data: data
 
     service = WorkerService(storage, history, config, engine)
 
@@ -34,6 +43,8 @@ async def test_register_worker_valid_id():
     config = Config()
     engine = MagicMock()
     engine.app = {}
+    # Mock _from_dict to return the data itself for testing
+    engine._from_dict.side_effect = lambda cls, data: data
 
     service = WorkerService(storage, history, config, engine)
 

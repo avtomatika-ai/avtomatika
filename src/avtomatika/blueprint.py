@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from logging import getLogger
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
@@ -148,6 +155,7 @@ class StateMachineBlueprint:
         self.start_state: str | None = None
         self.end_states: set[str] = set()
         self._handler_params: dict[Callable, tuple[str, ...]] = {}
+        self.events_schema: dict[str, dict[str, Any]] = {}
 
     def add_data_store(self, name: str, initial_data: dict[str, Any]) -> None:
         """Adds a named data store to the blueprint."""
@@ -165,6 +173,17 @@ class StateMachineBlueprint:
             if state in self.aggregator_handlers:
                 raise ValueError(f"Aggregator for state '{state}' is already registered.")
             self.aggregator_handlers[state] = func
+            return func
+
+        return decorator
+
+    def event(self, name: str, schema: Any) -> Callable:
+        """Decorator or method to register an event schema for the blueprint."""
+        from rxon.schema import extract_json_schema
+
+        self.events_schema[name] = extract_json_schema(schema) or {}
+
+        def decorator(func: Callable) -> Callable:
             return func
 
         return decorator

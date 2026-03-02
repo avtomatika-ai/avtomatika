@@ -56,16 +56,17 @@ graph TD
 **Ubicación:** `src/avtomatika/protocol/`
 
 Esta capa define el contrato estricto para la interacción del sistema, asegurando que la lógica comercial esté desacoplada de los detalles de transporte.
--   **Modelos:** Estructuras de datos (`WorkerRegistration`, `TaskResult`) definidas como `NamedTuple` (preparadas para el futuro para Pydantic/Protobuf).
--   **Seguridad**: Primitivas de seguridad independientes del transporte (fábricas SSLContext, Extracción de Identidad).
--   **Constantes**: Códigos de estado y tipos de error compartidos.
+-   **Modelos:** Estructuras de datos (`WorkerRegistration`, `TaskResult`) definidas como `NamedTuple`.
+-   **Esquemas y Contratos:** El módulo `rxon.schema` proporciona mecanismos para la extracción automática de esquemas JSON a partir de tipos Python y su validación.
+-   **Eventos Genéricos**: Modelo único `WorkerEventPayload` para todo tipo de señales (progreso, alertas, registros).
+-   **Seguridad**: Cadena de identidad (Zero Trust) para rastrear la ruta de los eventos a través de la holarquía.
 
 ### 0.1 Capa de Servicio
 **Ubicación:** `src/avtomatika/services/`
 
 Encapsula la lógica comercial central, separándola de la API HTTP.
--   **`WorkerService`**: Gestiona el ciclo de vida del worker, registro, despacho de tareas, procesamiento de resultados y emisión de tokens STS.
--   **Manejadores de API**: Ahora actúan como envolturas delgadas que analizan las solicitudes HTTP y delegan a los Servicios.
+-   **`WorkerService`**: Gestiona el ciclo de vida del worker, registro, despacho de tareas, procesamiento de resultados, emisión de tokens STS y **validación de eventos de contrato**.
+-   **Registro Global de Contratos**: El Orquestador guarda los esquemas de todos los Blueprints en Redis, asegurando la sincronización de contratos en todo el clúster.
 
 ### 1. `OrchestratorEngine`
 **Ubicación:** `src/avtomatika/engine.py`
@@ -110,6 +111,10 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
   **Transiciones Asíncronas con `dispatch_task`**
 
   Una de las capacidades clave es gestionar un proceso que depende del resultado de una tarea asíncrona realizada por un worker. Esto se implementa utilizando el parámetro `transitions` en el método `dispatch_task`.
+
+  **Transiciones Impulsadas por Eventos (Event-Driven Transitions)**
+
+  El sistema admite transiciones de estado basadas en eventos intermedios del trabajador, sin esperar el resultado final de la tarea. Esto se implementa a través del parámetro `event_transitions` en el método `dispatch_task`. Si un trabajador emite un evento enumerado en este diccionario, el Orquestador transiciona inmediatamente el trabajo al nuevo estado, y el resultado final de la tarea original será ignorado.
 
   ```python
   # Ejemplo de manejador
@@ -252,16 +257,11 @@ Este mecanismo permite desacoplar la lógica del proceso comercial de implementa
 **Ubicación:** `src/avtomatika/dispatcher.py`
 
 Responsable de asignar tareas al worker más adecuado.
-- **Búsqueda de Worker O(1):** Utiliza intersecciones de **Conjuntos de Redis** (`SINTER`) para encontrar instantáneamente workers inactivos capaces de realizar un tipo de tarea específico. Esto reemplaza el escaneo O(N) y garantiza un rendimiento de tiempo constante incluso con miles de workers.
-- **Filtrado:**
-    1. **Estado y Tipo de Tarea:** Manejado instantáneamente a través de la indexación de Redis.
-    2. **Requisitos de Recursos:** Filtra los candidatos resultantes por especificaciones de hardware (modelo de GPU, VRAM, modelos ML instalados).
-- **Estrategias:** Aplica uno de los siguientes algoritmos de selección al grupo final de candidatos:
-    - `default`: Prefiere workers "calientes" (con modelos requeridos en memoria), luego selecciona el más barato.
-    - `round_robin`: Distribuye la carga secuencialmente.
-    - `least_connections`: Selecciona el worker con el menor recuento de tareas activas.
-    - `cheapest`: Selecciona el worker con el menor `cost_per_second`.
-    - `best_value`: Selecciona el worker con la mejor relación precio/calidad usando su **reputación**.
+- **Búsqueda de Worker O(1):** Utiliza intersecciones de **Conjuntos de Redis** (`SINTER`) para encontrar instantáneamente workers inactivos capaces de realizar un tipo de tarea específico. Esto garantiza un rendimiento de tiempo constante incluso con miles de workers.
+- **Deep Schema Matching (Verificación Profunda de Contratos):** El Orquestador valida los parámetros de la tarea contra el `input_schema` del worker utilizando la utilidad `validate_data`. La tarea se asigna solo a quien garantiza entender el formato de datos.
+- **Status Matching:** Verificación de compatibilidad de las salidas lógicas (estados) del worker con las transiciones esperadas por el Blueprint. Esto evita bloqueos lógicos en el flujo de trabajo.
+- **Filtrado de Recursos:** Aplica comprobaciones adicionales de hardware (GPU, modelos ML) a la lista de candidatos.
+- **Estrategias:** Aplica algoritmos de selección: `default`, `round_robin` (utiliza un contador a nivel de clúster en Redis), `least_connections`, `cheapest`, `best_value` (basado en reputación).
 - **Encolado:** Coloca la tarea en la cola de prioridad del worker en el Almacenamiento.
 
 ### 4.1. Interacción con el Worker (Modelo Pull)
@@ -309,11 +309,10 @@ Un proceso en segundo plano que vigila las tareas "atascadas" o que han superado
 ### 6. `ReputationCalculator`
 **Ubicación:** `src/avtomatika/reputation.py`
 
-Este proceso en segundo plano es responsable de analizar el rendimiento del worker y calcular su puntuación de reputación.
-- **Análisis de Historial:** Consulta periódicamente `HistoryStorage` para tareas completadas por cada worker.
-- **Cálculo:** Calcula una puntuación (0 a 1) basada en la relación éxito/fallo.
-- **Actualización de Estado:** Guarda la nueva reputación en `StorageBackend`.
-- **Throttling:** Utiliza un retraso aleatorio y limita las consultas a la base de datos para evitar picos de carga.
+Este componente es responsable de analizar el rendimiento de los workers y gestionar la confianza en la red.
+- **Autorregulación Instantánea:** A diferencia del recálculo en segundo plano, el sistema aplica ahora penalizaciones inmediatas (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) por violaciones de esquemas и recompensas (`REPUTATION_REWARD_SUCCESS`) por ejecuciones exitosas. Esto crea una economía de confianza dinámica en tiempo real.
+- **Umbral de Admisión:** El parámetro configurable `REPUTATION_MIN_THRESHOLD` permite desconectar automáticamente nodos inestables o de baja calidad de la red.
+- **Calibración de Fondo:** Recálculo periódico (cada hora) basado en el historial de 30 días para una evaluación a largo plazo basada en análisis estadístico.
 
 ### 7. `HealthChecker`
 **Ubicación:** `src/avtomatika/health_checker.py`

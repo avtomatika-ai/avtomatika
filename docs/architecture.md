@@ -56,16 +56,17 @@ graph TD
 **Location:** `src/avtomatika/protocol/`
 
 This layer defines the strict contract for system interaction, ensuring that business logic is decoupled from transport details.
--   **Models:** Data structures (`WorkerRegistration`, `TaskResult`) defined as `NamedTuple` (future-proof for Pydantic/Protobuf).
--   **Security**: Transport-agnostic security primitives (SSLContext factories, Identity Extraction).
--   **Constants**: Shared status codes and error types.
+-   **Models:** Data structures (`WorkerRegistration`, `TaskResult`) defined as `NamedTuple`.
+-   **Schemas & Contracts:** The `rxon.schema` module provides mechanisms for automatic JSON Schema extraction from Python types and their validation.
+-   **Generic Events**: A single `WorkerEventPayload` model for all signal types (progress, alerts, logs).
+-   **Security**: Identity Chain (Zero Trust) for tracking event paths through the holarchy.
 
 ### 0.1 Service Layer
 **Location:** `src/avtomatika/services/`
 
 Encapsulates core business logic, separating it from the HTTP API.
--   **`WorkerService`**: Manages worker lifecycle, registration, task dispatching, result processing, and STS token issuance.
--   **API Handlers**: Now act as thin wrappers that parse HTTP requests and delegate to Services.
+-   **`WorkerService`**: Manages worker lifecycle, registration, task dispatching, result processing, STS token issuance, and **contract event validation**.
+-   **Global Contract Registry**: Orchestrator saves schemas of all Blueprints in Redis, ensuring contract synchronization across the entire cluster.
 
 ### 1. `OrchestratorEngine`
 **Location:** `src/avtomatika/engine.py`
@@ -110,6 +111,10 @@ This is the main background process responsible for executing jobs.
   **Asynchronous Transitions with `dispatch_task`**
 
   One of the key capabilities is managing a process that depends on the result of an asynchronous task performed by a worker. This is implemented using the `transitions` parameter in the `dispatch_task` method.
+
+  **Event-Driven Transitions**
+
+  The system supports state transitions based on intermediate worker events, without waiting for the final task result. This is implemented via the `event_transitions` parameter in the `dispatch_task` method. If a worker emits an event listed in this dictionary, the Orchestrator immediately transitions the job to the new state, and the final result of the original task will be ignored.
 
   ```python
   # Example handler
@@ -257,10 +262,10 @@ Responsible for assigning tasks to the most suitable worker.
     1. **Status & Task Type:** Handled instantly via Redis indexing.
     2. **Resource Requirements:** Filters the resulting candidates by hardware specs (GPU model, VRAM, installed ML models).
 - **Strategies:** Applies one of the following selection algorithms to the final candidate pool:
-    - `default`: Prefers "warm" workers (with required models in memory), then selects the cheapest.
-    - `round_robin`: Distributes load sequentially.
+    - `default`: Prefers "warm" workers (with required models in memory), then selects the one with the highest reputation among the cheapest.
+    - `round_robin`: Distributes load sequentially using a **cluster-wide counter in Redis**.
     - `least_connections`: Selects worker with the lowest active task count.
-    - `cheapest`: Selects worker with the lowest `cost_per_second`.
+    - `cheapest`: Selects worker with the lowest cost for the specific skill.
     - `best_value`: Selects worker with the best price/quality ratio using its **reputation**.
 - **Enqueuing:** Places the task in the worker's priority queue in Storage.
 

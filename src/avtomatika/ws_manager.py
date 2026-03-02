@@ -1,10 +1,16 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import Lock
 from logging import getLogger
 from typing import Any
 
 from aiohttp import web
 
-from .constants import MSG_TYPE_PROGRESS
 from .storage.base import StorageBackend
 
 logger = getLogger(__name__)
@@ -51,22 +57,11 @@ class WebSocketManager:
                 return False
 
     async def handle_message(self, worker_id: str, message: dict[str, Any]) -> None:
-        """Handles an incoming message from a worker."""
-        event_type = message.get("event")
-        if event_type == MSG_TYPE_PROGRESS:
-            job_id = message.get("job_id")
-            progress = message.get("progress", 0)
-            msg_text = message.get("message", "")
-            logger.info(
-                f"Received progress update from worker {worker_id} for job {job_id}: {progress * 100:.0f}% - {msg_text}"
-            )
-            if job_id:
-                try:
-                    await self.storage.update_job_state(job_id, {"progress": progress, "progress_message": msg_text})
-                except Exception as e:
-                    logger.error(f"Failed to update progress for job {job_id}: {e}")
-        else:
-            logger.debug(f"Received unhandled event from worker {worker_id}: {event_type}")
+        """Handles an incoming message from a worker.
+        Now just logs the event as most logic has moved to generic events.
+        """
+        event_type = message.get("event_type")
+        logger.debug(f"Received WebSocket message from worker {worker_id}: {event_type}")
 
     async def close_all(self) -> None:
         """Closes all active WebSocket connections."""

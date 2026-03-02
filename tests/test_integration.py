@@ -1,7 +1,15 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 import asyncio
 import hashlib
 import json
 import os
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -292,35 +300,54 @@ async def test_client_config_in_context(aiohttp_client, app):
     assert final_state["state_history"]["test_output"] == "premium:en"
 
 
+def make_valid_worker_payload(worker_id: str, **kwargs) -> dict[str, Any]:
+    payload = {
+        "worker_id": worker_id,
+        "worker_type": "test-worker",
+        "supported_skills": [{"name": "test"}],
+        "resources": {
+            "max_concurrent_tasks": 10,
+            "cpu_cores": 4,
+            "ram_gb": 8.0,
+        },
+        "installed_software": {"python": "3.11"},
+        "installed_artifacts": [],
+        "capabilities": {
+            "hostname": "test-host",
+            "ip_address": "127.0.0.1",
+            "cost_per_skill": {},
+        },
+    }
+    payload.update(kwargs)
+    return payload
+
+
 @pytest.mark.asyncio
 async def test_worker_registration_with_full_data(aiohttp_client, app):
     client = await aiohttp_client(app)
     storage: RedisStorage = app[STORAGE_KEY]
     await storage.flush_all()
 
-    worker_payload = {
-        "worker_id": "video-worker-gpu-01",
-        "worker_type": "gpu_worker",
-        "supported_skills": [
-            "ai_text_from_idea",
-            "ai_images_from_script",
-            "video_montage",
+    worker_payload = make_valid_worker_payload(
+        "video-worker-gpu-01",
+        worker_type="gpu_worker",
+        supported_skills=[
+            {"name": "ai_text_from_idea"},
+            {"name": "ai_images_from_script"},
+            {"name": "video_montage"},
         ],
-        "resources": {
+        resources={
             "max_concurrent_tasks": 1,
-            "gpu_info": {"model": "NVIDIA T4", "vram_gb": 16},
             "cpu_cores": 8,
+            "ram_gb": 32.0,
+            "devices": [{"type": "gpu", "model": "NVIDIA T4", "properties": {"memory_gb": 16}}],
         },
-        "installed_software": {"ffmpeg": "5.1", "cuda": "11.8"},
-        "installed_models": [
+        installed_software={"ffmpeg": "5.1", "cuda": "11.8"},
+        installed_artifacts=[
             {"name": "stable-diffusion-1.5", "version": "1.0"},
             {"name": "whisper-large-v3", "version": "3.0"},
         ],
-        "multi_orchestrator_info": {
-            "mode": "FAILOVER",
-            "orchestrators": ["http://localhost:8080"],
-        },
-    }
+    )
 
     headers = {AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     resp = await client.post(
@@ -337,10 +364,9 @@ async def test_worker_registration_with_full_data(aiohttp_client, app):
     stored_data = workers[0]
 
     assert stored_data["worker_id"] == worker_payload["worker_id"]
-    assert stored_data["supported_skills"] == worker_payload["supported_skills"]
-    assert stored_data["resources"]["gpu_info"]["model"] == worker_payload["resources"]["gpu_info"]["model"]
-    assert len(stored_data["installed_models"]) == 2
-    assert stored_data["multi_orchestrator_info"]["mode"] == "FAILOVER"
+    assert len(stored_data["supported_skills"]) == 3
+    assert stored_data["resources"]["devices"][0]["model"] == "NVIDIA T4"
+    assert len(stored_data["installed_artifacts"]) == 2
 
 
 @pytest.mark.asyncio
@@ -350,11 +376,7 @@ async def test_empty_heartbeat_refreshes_ttl(aiohttp_client, app):
     await storage.flush_all()
     worker_id = "worker-for-ttl-test"
 
-    worker_payload = {
-        "worker_id": worker_id,
-        "worker_type": "test",
-        "supported_skills": ["test"],
-    }
+    worker_payload = make_valid_worker_payload(worker_id)
     headers = {AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     resp = await client.post(
         "/_worker/workers/register",
@@ -467,7 +489,7 @@ async def test_task_cancellation_via_websocket_mocked(aiohttp_client, app):
         {
             "worker_id": worker_id,
             "worker_type": "ws_worker",
-            "supported_skills": ["any_task"],
+            "supported_skills": [{"name": "any_task"}],
             "capabilities": {"websockets": True},
         },
         ttl=60,
@@ -513,7 +535,7 @@ async def test_worker_individual_token_auth(aiohttp_client, app):
     await storage.set_worker_token(worker_id, hashed_individual_token)
 
     headers = {AUTH_HEADER_WORKER: individual_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
+    payload = make_valid_worker_payload(worker_id)
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -533,7 +555,7 @@ async def test_worker_individual_token_auth_failure(aiohttp_client, app):
     await storage.set_worker_token(worker_id, correct_token)
 
     headers = {AUTH_HEADER_WORKER: wrong_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
+    payload = make_valid_worker_payload(worker_id)
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -554,7 +576,7 @@ async def test_worker_global_token_fallback(aiohttp_client, app):
     worker_id = "worker-using-global-token"
 
     headers = {AUTH_HEADER_WORKER: global_token}
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
+    payload = make_valid_worker_payload(worker_id)
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
@@ -569,7 +591,7 @@ async def test_worker_no_token_failure(aiohttp_client, app):
     await storage.flush_all()
 
     worker_id = "worker-with-no-token"
-    payload = {"worker_id": worker_id, "worker_type": "test", "supported_skills": ["test"]}
+    payload = make_valid_worker_payload(worker_id)
 
     resp = await client.post("/_worker/workers/register", json=payload)  # No headers
 
@@ -590,12 +612,13 @@ async def test_progress_update_handling(aiohttp_client, app):
         f"/_worker/ws/{worker_id}", headers={AUTH_HEADER_WORKER: app[ENGINE_KEY].config.GLOBAL_WORKER_TOKEN}
     ) as ws:
         progress_payload = {
-            "type": "event",
-            "event": "progress_update",
-            "task_id": "task-123",
-            "job_id": job_id,
-            "progress": 0.75,
-            "message": "Almost there!",
+            "event_id": "evt-123",
+            "worker_id": worker_id,
+            "origin_worker_id": worker_id,
+            "event_type": "progress",
+            "payload": {"progress": 0.75, "message": "Almost there!"},
+            "bubbling_chain": [],
+            "target_job_id": job_id,
         }
         await ws.send_json(progress_payload)
 

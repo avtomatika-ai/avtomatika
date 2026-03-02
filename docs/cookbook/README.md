@@ -407,7 +407,7 @@ Worker must periodically call `worker.check_for_cancellation`.
 
 ```python
 # my_worker.py
-@worker.task("long_video_processing")
+@worker.skill("long_video_processing")
 async def process_video(params: dict, task_id: str, job_id: str) -> dict:
     total_frames = 1000
     for frame in range(total_frames):
@@ -488,7 +488,7 @@ Like cancellation, this feature works via WebSocket. Worker can send progress ev
 Worker must periodically call `worker.send_progress()`.
 ```python
 # Inside your worker file (my_worker.py)
-@worker.task("train_model")
+@worker.skill("train_model")
 async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
     for epoch in range(10):
         # ... training logic ...
@@ -600,7 +600,7 @@ Worker doesn't need to know about S3. It just works with local files.
 import os
 from pathlib import Path
 
-@worker.task("process_video_from_s3")
+@worker.skill("process_video_from_s3")
 async def process_video(params: dict, **kwargs) -> dict:
     # SDK already downloaded file and passed local path
     local_video_path = Path(params["video_path"])
@@ -650,7 +650,7 @@ Orchestrator defaults to retrying any failed task (`TRANSIENT_ERROR`). However, 
 #### **Step 1: Code in Worker**
 ```python
 # my_api_worker.py
-@worker.task("fetch_external_data")
+@worker.skill("fetch_external_data")
 async def fetch_data(params: dict, **kwargs) -> dict:
     api_key = params.get("api_key")
     if not api_key:
@@ -1011,7 +1011,7 @@ Using `is_start` and `is_end` this way makes your pipelines more structured, rel
 **Solution:** `dispatch_task` method in `ActionFactory` accepts `resource_requirements` parameter, allowing specification of minimum worker resource requirements. Dispatcher automatically filters out workers not meeting these requirements.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import StateMachineBlueprint
 
 gpu_intensive_pipeline = StateMachineBlueprint(
     name="gpu_intensive_flow",
@@ -1024,14 +1024,15 @@ async def start_gpu_task(context, actions):
     actions.dispatch_task(
         task_type="video_montage",
         params=context.initial_data,
-        # Dispatcher looks for worker whose `gpu_info.model` contains "NVIDIA T4"
-        # and has required model installed
+        # Dispatcher looks for worker whose devices list contains a GPU
+        # matching the requirements and has required model installed
         resource_requirements={
-            "gpu": {
-                "model": "NVIDIA T4",
-                "vram_gb": 16
+            "resources": {
+                "devices": [
+                    {"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}
+                ]
             },
-            "installed_models": [
+            "installed_artifacts": [
                 "stable-diffusion-1.5"
             ]
         },

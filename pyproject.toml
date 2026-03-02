@@ -1,27 +1,33 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b13"
+version = "1.0b14"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "Dmitrii Gagarin", email = "madgagarin@gmail.com"},
+    {name = "Dmitrii Gagarin aka madgagarin", email = "madgagarin@gmail.com"},
 ]
 keywords = ["orchestrator", "state-machine", "workflow", "distributed", "ai", "llm", "rxon", "hln"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Typing :: Typed",
 ]
 dependencies = [
-    "rxon==1.0b3",
+    "rxon==1.0b5",
     "aiohttp~=3.12",
     "python-json-logger~=4.0",
     "graphviz~=0.21",
@@ -32,8 +38,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-redis = ["redis~=7.1"]
-s3 = ["obstore>=0.2", "aiofiles~=25.1"]
+redis = ["redis~=7.2"]
+s3 = ["obstore~=0.9", "aiofiles~=25.1"]
 history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
 telemetry = [
     "opentelemetry-api~=1.39",
@@ -44,13 +50,13 @@ telemetry = [
 test = [
     "pytest~=9.0",
     "pytest-asyncio~=1.1",
-    "fakeredis~=2.33",
+    "fakeredis~=2.34",
     "pytest-aiohttp~=1.1",
     "pytest-mock~=3.14",
     "aioresponses~=0.7",
     "backports.zstd~=1.2",
     "opentelemetry-instrumentation-aiohttp-client",
-    "obstore>=0.2",
+    "obstore~=0.9",
     "aiofiles~=25.1",
 ]
 all = [
@@ -70,9 +76,15 @@ all = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.exclude-package-data]
+"*" = ["tests*", "advanced_architecture_proposals.md"]
+
 [tool.pytest.ini_options]
 markers = [
     "e2e: marks tests as end-to-end tests",
+]
+filterwarnings = [
+    "ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited:RuntimeWarning",
 ]
 
 [tool.ruff]

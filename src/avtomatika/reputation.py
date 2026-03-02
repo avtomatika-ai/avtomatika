@@ -1,3 +1,10 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import CancelledError, sleep
 from logging import getLogger
 from typing import TYPE_CHECKING
@@ -81,23 +88,43 @@ class ReputationCalculator:
 
                 successful_tasks = 0
                 failed_tasks = 0
+                contract_violations = 0
 
                 for event in task_finished_events:
                     # Extract the result from the snapshot
                     snapshot = event.get("context_snapshot", {})
                     result = snapshot.get("result", {})
                     status = result.get("status")
+                    error = result.get("error", {})
+                    error_code = error.get("code") if isinstance(error, dict) else None
 
                     if status == "success":
                         successful_tasks += 1
                     elif status == "failure":
-                        failed_tasks += 1
-                    # "cancelled" is ignored - it's not the worker's fault
+                        if error_code == "CONTRACT_VIOLATION_ERROR":
+                            contract_violations += 1
+                        else:
+                            failed_tasks += 1
 
-                total_relevant = successful_tasks + failed_tasks
-                if total_relevant > 0:
-                    new_reputation = successful_tasks / total_relevant
-                    new_reputation = round(new_reputation, 4)
+                # HLN REPUTATION FORMULA: Violations are much more costly than simple failures
+                # Penalty weight: 10x
+                total_weight = successful_tasks + failed_tasks + (contract_violations * 10)
+
+                if total_weight > 0:
+                    # Statistical score from history
+                    statistical_score = successful_tasks / total_weight
+
+                    # Get current operative reputation from Redis
+                    worker_info = await self.storage.get_worker_info(worker_id)
+                    try:
+                        current_reputation = float(worker_info.get("reputation", 1.0)) if worker_info else 1.0
+                    except (TypeError, ValueError):
+                        current_reputation = 1.0
+
+                    # HLN SMOOTHING: 70% history, 30% current operative state
+                    # This ensures penalties aren't instantly forgotten
+                    new_reputation = (statistical_score * 0.7) + (current_reputation * 0.3)
+                    new_reputation = round(min(1.0, new_reputation), 4)
 
                     await self.storage.update_worker_data(
                         worker_id,

@@ -1,12 +1,19 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import create_task, gather, get_running_loop, wait_for
+from dataclasses import fields, is_dataclass
 from logging import getLogger
 from time import monotonic
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional, cast
 from uuid import uuid4
 
 from aiohttp import ClientSession, web
-from orjson import dumps
 
 from . import metrics
 from .api.routes import setup_routes
@@ -63,14 +70,6 @@ metrics.init_metrics()
 logger = getLogger(__name__)
 
 
-def json_dumps(obj: Any) -> str:
-    return dumps(obj).decode("utf-8")
-
-
-def json_response(data: Any, **kwargs: Any) -> web.Response:
-    return web.json_response(data, dumps=json_dumps, **kwargs)
-
-
 class OrchestratorEngine:
     def __init__(self, storage: StorageBackend, config: Config):
         setup_logging(config.LOG_LEVEL, config.LOG_FORMAT, config.TZ)
@@ -78,8 +77,13 @@ class OrchestratorEngine:
         self.storage = storage
         self.config = config
         self.blueprints: dict[str, StateMachineBlueprint] = {}
+        self.blueprint_contracts: dict[str, dict[str, Any]] = {}
         self.history_storage: HistoryStorageBase = NoOpHistoryStorage()
         self.ws_manager = WebSocketManager(self.storage)
+
+        # HLN Subscriptions: Callbacks for internal signaling (bubbling)
+        self.on_worker_event: list[Callable[[str, Any], Awaitable[None]]] = []
+        self.on_job_finished: list[Callable[[str, str, dict[str, Any]], Awaitable[None]]] = []
 
         middlewares = [compression_middleware]
         if config.RATE_LIMITING_ENABLED:
@@ -118,6 +122,24 @@ class OrchestratorEngine:
             )
         blueprint.validate()
         self.blueprints[blueprint.name] = blueprint
+
+        # HLN Shell-Stacking: Orchestrator REST API acts as a Web Shell for the logic
+        from rxon.schema import extract_skill_contract
+
+        from .utils.schema import orchestrator_extract_json_schema
+
+        contract = extract_skill_contract(blueprint, extractor=orchestrator_extract_json_schema)
+        self.blueprint_contracts[blueprint.name] = contract
+
+        # Save to shared storage for cluster-wide matching if loop is running
+        try:
+            from asyncio import create_task, get_running_loop
+
+            get_running_loop()
+            create_task(self.storage.save_blueprint_contract(blueprint.name, contract))
+        except RuntimeError:
+            # Loop not running yet, contracts will be synced in on_startup
+            pass
 
     def setup(self) -> None:
         if self._setup_done:
@@ -233,6 +255,9 @@ class OrchestratorEngine:
         elif message_type == "heartbeat":
             return await self.worker_service.update_worker_heartbeat(auth_worker_id, payload)
 
+        elif message_type == "event":
+            return await self.worker_service.process_worker_event(auth_worker_id, payload)
+
         elif message_type == "sts_token":
             if cert_identity is None:
                 raise web.HTTPForbidden(text="Unauthorized: mTLS certificate required to issue access token.")
@@ -248,7 +273,8 @@ class OrchestratorEngine:
                     if msg.type == WSMsgType.TEXT:
                         try:
                             data = msg.json()
-                            await self.ws_manager.handle_message(auth_worker_id, data)
+                            # HLN UNIFICATION: WebSocket messages are generic events
+                            await self.worker_service.process_worker_event(auth_worker_id, data)
                         except Exception as e:
                             logger.error(f"Error processing WebSocket message from {auth_worker_id}: {e}")
                     elif msg.type == WSMsgType.ERROR:
@@ -256,6 +282,28 @@ class OrchestratorEngine:
             finally:
                 await self.ws_manager.unregister(auth_worker_id)
             return None
+
+    @staticmethod
+    def _from_dict(cls: type, data: Any) -> Any:
+        if not data:
+            return None
+        if isinstance(data, cls):
+            return data
+        if not isinstance(data, dict):
+            return data
+
+        if hasattr(cls, "_fields"):
+            # NamedTuple support
+            fields_list = cast(Any, cls)._fields
+            filtered_data = {k: v for k, v in data.items() if k in fields_list}
+            return cls(**filtered_data)
+        elif is_dataclass(cls):
+            # Dataclass support
+            known_field_names = {f.name for f in fields(cls)}
+            filtered_data = {k: v for k, v in data.items() if k in known_field_names}
+            return cls(**filtered_data)
+
+        return data
 
     async def on_startup(self, app: web.Application) -> None:
         if not await self.storage.ping():
@@ -274,6 +322,10 @@ class OrchestratorEngine:
             )
         await self._setup_history_storage()
         await self.history_storage.start()
+
+        # HLN Sync: Ensure all registered blueprint contracts are in storage
+        for bp_name, contract in self.blueprint_contracts.items():
+            await self.storage.save_blueprint_contract(bp_name, contract)
 
         if self.config.CLIENTS_CONFIG_PATH:
             from os.path import exists

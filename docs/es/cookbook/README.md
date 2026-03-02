@@ -407,7 +407,7 @@ El Worker debe llamar periódicamente a `worker.check_for_cancellation`.
 
 ```python
 # my_worker.py
-@worker.task("long_video_processing")
+@worker.skill("long_video_processing")
 async def process_video(params: dict, task_id: str, job_id: str) -> dict:
     total_frames = 1000
     for frame in range(total_frames):
@@ -488,7 +488,7 @@ Al igual que la cancelación, esta característica funciona vía WebSocket. El W
 El Worker debe llamar periódicamente a `worker.send_progress()`.
 ```python
 # Dentro de tu archivo de worker (my_worker.py)
-@worker.task("train_model")
+@worker.skill("train_model")
 async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
     for epoch in range(10):
         # ... lógica de entrenamiento ...
@@ -600,7 +600,7 @@ El Worker no necesita saber sobre S3. Simplemente trabaja con archivos locales.
 import os
 from pathlib import Path
 
-@worker.task("process_video_from_s3")
+@worker.skill("process_video_from_s3")
 async def process_video(params: dict, **kwargs) -> dict:
     # El SDK ya descargó el archivo y pasó la ruta local
     local_video_path = Path(params["video_path"])
@@ -650,7 +650,7 @@ El Orquestador por defecto reintenta cualquier tarea fallida (`TRANSIENT_ERROR`)
 #### **Paso 1: Código en Worker**
 ```python
 # my_api_worker.py
-@worker.task("fetch_external_data")
+@worker.skill("fetch_external_data")
 async def fetch_data(params: dict, **kwargs) -> dict:
     api_key = params.get("api_key")
     if not api_key:
@@ -1011,7 +1011,7 @@ Usar `is_start` e `is_end` de esta manera hace que tus pipelines sean más estru
 **Solución:** El método `dispatch_task` en `ActionFactory` acepta el parámetro `resource_requirements`, permitiendo especificar los requisitos mínimos de recursos del worker. El Despachador filtra automáticamente a los workers que no cumplen con estos requisitos.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import StateMachineBlueprint
 
 gpu_intensive_pipeline = StateMachineBlueprint(
     name="gpu_intensive_flow",
@@ -1024,14 +1024,15 @@ async def start_gpu_task(context, actions):
     actions.dispatch_task(
         task_type="video_montage",
         params=context.initial_data,
-        # El despachador busca un worker cuyo `gpu_info.model` contenga "NVIDIA T4"
-        # y tenga el modelo requerido instalado
+        # El despachador busca un worker cuya lista de dispositivos (devices)
+        # contenga un dispositivo compatible y tenga los artefactos requeridos
         resource_requirements={
-            "gpu": {
-                "model": "NVIDIA T4",
-                "vram_gb": 16
+            "resources": {
+                "devices": [
+                    {"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}
+                ]
             },
-            "installed_models": [
+            "installed_artifacts": [
                 "stable-diffusion-1.5"
             ]
         },

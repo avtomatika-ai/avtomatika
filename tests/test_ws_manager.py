@@ -1,9 +1,15 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+#
+# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+
+
 from logging import getLogger
 from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
-from rxon.constants import MSG_TYPE_PROGRESS
 
 from avtomatika.ws_manager import WebSocketManager
 
@@ -62,21 +68,6 @@ async def test_ws_manager_send_command_fails(manager):
 
     assert result is False
     ws.send_json.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_handle_message_progress(manager, storage):
-    """Tests that progress messages update the storage."""
-    worker_id = "worker-1"
-    job_id = "job-1"
-    progress = 0.5
-    message = "Processing..."
-
-    msg_payload = {"event": MSG_TYPE_PROGRESS, "job_id": job_id, "progress": progress, "message": message}
-
-    await manager.handle_message(worker_id, msg_payload)
-
-    storage.update_job_state.assert_called_once_with(job_id, {"progress": progress, "progress_message": message})
 
 
 @pytest.mark.asyncio
