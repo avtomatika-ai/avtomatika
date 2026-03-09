@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b15"
+version = "1.0b16"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,9 +42,9 @@ redis = ["redis~=7.2"]
 s3 = ["obstore~=0.9", "aiofiles~=25.1"]
 history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
 telemetry = [
-    "opentelemetry-api~=1.39",
-    "opentelemetry-sdk~=1.39",
-    "opentelemetry-exporter-otlp~=1.39",
+    "opentelemetry-api~=1.40",
+    "opentelemetry-sdk~=1.40",
+    "opentelemetry-exporter-otlp~=1.40",
     "opentelemetry-instrumentation-aiohttp-client~=0.59b0",
 ]
 test = [

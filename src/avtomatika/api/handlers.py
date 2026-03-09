@@ -11,7 +11,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from aiohttp import web
-from aioprometheus import render
+from aioprometheus import REGISTRY, render
 from orjson import OPT_INDENT_2, dumps, loads
 
 from .. import metrics
@@ -38,7 +38,8 @@ async def status_handler(_request: web.Request) -> web.Response:
 
 
 async def metrics_handler(_request: web.Request) -> web.Response:
-    return web.Response(body=render(), content_type="text/plain")
+    content, _ = render(REGISTRY, _request.headers.getall("Accept", []))
+    return web.Response(body=content, content_type="text/plain")
 
 
 def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[web.Request], Any]:

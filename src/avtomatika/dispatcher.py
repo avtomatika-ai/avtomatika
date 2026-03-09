@@ -283,7 +283,7 @@ class Dispatcher:
             raise ValueError("Task info must include a 'type'")
 
         dispatch_strategy = task_info.get("dispatch_strategy", "default")
-        resource_requirements = task_info.get("resource_requirements", {}).copy()
+        resource_requirements = (task_info.get("resource_requirements") or {}).copy()
         if "params" not in resource_requirements:
             resource_requirements["params"] = task_info.get("params", {})
         if "transitions" not in resource_requirements:
