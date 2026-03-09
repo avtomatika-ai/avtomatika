@@ -226,6 +226,7 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
             "retry_count": 0,
             "status": "running",
             "tracing_context": ANY,
+            "aggregation_results": ANY,
         },
     )
     # 3. Check that the job was re-enqueued for the next state
@@ -293,6 +294,7 @@ async def test_process_job_handler_backward_compatibility(job_executor):
             "retry_count": 0,
             "status": "running",
             "tracing_context": ANY,
+            "aggregation_results": ANY,
         },
     )
     job_executor.storage.enqueue_job.assert_called_with(job_id)
@@ -367,6 +369,7 @@ async def test_di_name_collision_precedence(job_executor, mocker):
             "retry_count": 0,
             "status": "running",
             "tracing_context": ANY,
+            "aggregation_results": ANY,
         },
     )
     job_executor.storage.ack_job.assert_called_with("msg-123")
@@ -437,3 +440,65 @@ async def test_di_missing_argument_fails_job(job_executor, caplog):
     assert f"Error executing handler for job {job_id}. Attempt 1/1." in caplog.text
     job_executor.storage.enqueue_job.assert_called_with(job_id)  # Job is re-enqueued for retry
     job_executor.storage.ack_job.assert_called_with("msg-123")
+
+
+@pytest.mark.asyncio
+async def test_process_job_handles_none_fields_gracefully(job_executor):
+    """
+    Tests that JobExecutor can handle job_state fields being None (null in Redis).
+    This verifies the 'or {}' fixes in executor.py.
+    """
+    bp = StateMachineBlueprint(name="none-fields-test-bp")
+
+    @bp.handler_for("start", is_start=True)
+    async def start_handler(state_history, aggregation_results, webhook_url, actions):
+        # Verify that these are empty dicts, not None
+        assert state_history == {}
+        assert aggregation_results == {}
+        # Verify webhook_url is None as expected (it doesn't have 'or {}')
+        assert webhook_url is None
+        actions.transition_to("end")
+
+    @bp.handler_for("end", is_end=True)
+    async def end_handler():
+        pass
+
+    bp.validate()
+    job_executor.engine.blueprints["none-fields-test-bp"] = bp
+
+    job_id = "test-job-none-fields"
+    # Fields explicitly set to None (simulating null in storage)
+    job_state = {
+        "id": job_id,
+        "blueprint_name": "none-fields-test-bp",
+        "current_state": "start",
+        "initial_data": {},
+        "state_history": None,
+        "aggregation_results": None,
+        "tracing_context": None,
+        "client_config": {},
+    }
+    job_executor.storage.get_job_state.return_value = job_state
+    job_executor.storage.ack_job = AsyncMock()
+
+    # Run the job processor
+    await job_executor._process_job(job_id, "msg-123")
+
+    # If we reached here without TypeError, the test passed
+    job_executor.storage.ack_job.assert_called_with("msg-123")
+    # Verify it transitioned to 'end'
+    job_executor.storage.save_job_state.assert_called_with(
+        job_id,
+        {
+            "id": job_id,
+            "blueprint_name": "none-fields-test-bp",
+            "current_state": "end",
+            "initial_data": {},
+            "state_history": {},  # Saved back as empty dict
+            "aggregation_results": {},
+            "tracing_context": ANY,
+            "client_config": {},
+            "retry_count": 0,
+            "status": "running",
+        },
+    )

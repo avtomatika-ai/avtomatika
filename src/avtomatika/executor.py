@@ -123,7 +123,7 @@ class JobExecutor:
             )
 
             parent_context = TraceContextTextMapPropagator().extract(
-                carrier=job_state.get("tracing_context", {}),
+                carrier=job_state.get("tracing_context", {}) or {},
             )
 
             with tracer.start_as_current_span(
@@ -168,12 +168,13 @@ class JobExecutor:
                     job_id=job_id,
                     current_state=job_state["current_state"],
                     initial_data=job_state["initial_data"],
-                    state_history=job_state.get("state_history", {}),
+                    state_history=job_state.get("state_history", {}) or {},
                     client=client_config,
                     actions=action_factory,
                     data_stores=SimpleNamespace(**blueprint.data_stores),
-                    tracing_context=tracing_context,
-                    aggregation_results=job_state.get("aggregation_results"),
+                    tracing_context=tracing_context or {},
+                    aggregation_results=job_state.get("aggregation_results", {}) or {},
+                    webhook_url=job_state.get("webhook_url"),
                     task_files=task_files,
                 )
 
@@ -207,6 +208,10 @@ class JobExecutor:
                                 params_to_inject[param_name] = context.initial_data[param_name]
 
                     await handler(**params_to_inject)
+
+                    # Sync context state back to job_state for persistence
+                    job_state["state_history"] = context.state_history
+                    job_state["aggregation_results"] = context.aggregation_results
 
                     # HLN GHOST SIGNALING: Process events emitted by the blueprint
                     if action_factory.pending_events:

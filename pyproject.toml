@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b14"
+version = "1.0b15"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
