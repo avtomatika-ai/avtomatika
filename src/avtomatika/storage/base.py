@@ -156,6 +156,11 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_worker_queue_length(self, worker_id: str) -> int:
+        """Returns the number of tasks in the worker's private queue."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_available_workers(self) -> list[dict[str, Any]]:
         """Get a list of all active (not expired) workers.
 

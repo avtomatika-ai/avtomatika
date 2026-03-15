@@ -224,10 +224,13 @@ async def publish_handler_old_style(context):
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **Smart Dispatching**: High-performance routing using Redis Set intersections.
-    *   **Deep Schema Matching**: Prioritizes workers whose `input_schema` matches the specific task parameters, ensuring compatibility before dispatch.
-    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded in memory.
-    *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
+*   **High Performance Architecture**:
+    *   **Smart Dispatching**: High-performance routing using Redis Set intersections.
+        *   **Deep Schema Matching**: Prioritizes workers whose `input_schema` matches the specific task parameters.
+        *   **Overflow Strategy**: Automatically spills load to more expensive workers if the cheaper ones are saturated (`queue_length > SOFT_LIMIT`).
+        *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
+        *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues, ensuring maximum throughput.
+        *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
 *   **Self-Regulating Reputation**:
     *   **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
     *   **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
@@ -304,7 +307,7 @@ Run multiple tasks simultaneously and gather their results.
 @my_blueprint.handler_for("process_files")
 async def fan_out_handler(initial_data, actions):
     tasks_to_dispatch = [
-        {"task_type": "file_analysis", "params": {"file": file}})
+        {"task_type": "file_analysis", "params": {"file": file}}
         for file in initial_data.get("files", [])
     ]
     # Use dispatch_parallel to send all tasks at once.

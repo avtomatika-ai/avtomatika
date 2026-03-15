@@ -5,7 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from asyncio import Lock, PriorityQueue, Queue, QueueEmpty, wait_for
+from asyncio import CancelledError, Lock, PriorityQueue, Queue, QueueEmpty, wait_for
 from asyncio import TimeoutError as AsyncTimeoutError
 from time import monotonic
 from typing import Any, Callable, cast
@@ -33,6 +33,7 @@ class MemoryStorage(StorageBackend):
         self._generic_keys: dict[str, Any] = {}
         self._generic_key_ttls: dict[str, float] = {}
         self._locks: dict[str, tuple[str, float]] = {}
+        self._queue_counter = 0
 
         self._lock = Lock()
 
@@ -110,7 +111,8 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             if worker_id not in self._worker_task_queues:
                 self._worker_task_queues[worker_id] = PriorityQueue()
-        await self._worker_task_queues[worker_id].put((-priority, task_payload))
+            self._queue_counter += 1
+            await self._worker_task_queues[worker_id].put((-priority, self._queue_counter, task_payload))
 
     async def dequeue_task_for_worker(
         self,
@@ -125,15 +127,51 @@ class MemoryStorage(StorageBackend):
             queue = self._worker_task_queues[worker_id]
 
         try:
-            # Type ignore because PriorityQueue.get() return type is generic
             item = await wait_for(queue.get(), timeout=timeout)
-            _, task_payload = item
-            # Explicit cast for mypy
+            _, _, task_payload = item
             if isinstance(task_payload, dict):
                 return task_payload
-            return None  # Should not happen if data integrity is kept
-        except AsyncTimeoutError:
             return None
+        except (AsyncTimeoutError, CancelledError):
+            async with self._lock:
+                worker_info = self._workers.get(worker_id)
+                if not worker_info:
+                    return None
+                skills = worker_info.get("supported_skills", [])
+                for skill in skills:
+                    skill_name = skill.get("name") or skill.get("type")
+                    if not skill_name:
+                        continue
+                    best_worker_id = None
+                    max_len = 0
+                    for wid, q in self._worker_task_queues.items():
+                        if wid == worker_id:
+                            continue
+                        other_info = self._workers.get(wid)
+                        if not other_info:
+                            continue
+                        other_skills = other_info.get("supported_skills", [])
+                        supports_skill = False
+                        for os in other_skills:
+                            if (os.get("name") or os.get("type")) == skill_name:
+                                supports_skill = True
+                                break
+                        if supports_skill and q.qsize() > max_len:
+                            max_len = q.qsize()
+                            best_worker_id = wid
+                    if best_worker_id:
+                        try:
+                            stolen_item = self._worker_task_queues[best_worker_id].get_nowait()
+                            _, _, task_payload = stolen_item
+                            return cast(dict[str, Any], task_payload)
+                        except QueueEmpty:
+                            continue
+            return None
+
+    async def get_worker_queue_length(self, worker_id: str) -> int:
+        async with self._lock:
+            queue = self._worker_task_queues.get(worker_id)
+            return queue.qsize() if queue else 0
 
     async def refresh_worker_ttl(self, worker_id: str, ttl: int) -> bool:
         async with self._lock:
@@ -246,7 +284,7 @@ class MemoryStorage(StorageBackend):
                     continue
 
                 hot_skills = info.get("hot_skills", [])
-                for skill in hot_skills:
+                for skill in hot_skills or []:
                     name = getattr(skill, "name", skill.get("name"))
                     skill_type = getattr(skill, "type", skill.get("type"))
                     if skill_name in (name, skill_type):

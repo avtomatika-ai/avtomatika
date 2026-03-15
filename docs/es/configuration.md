@@ -170,8 +170,11 @@ Además de los archivos de configuración, el Orquestador se configura a través
 | `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Penalización de reputación por violación de contrato de datos. | `0.2` |
 | `REPUTATION_PENALTY_TASK_FAILURE` | Penalización de reputación por fallo crítico o permanente de tarea. | `0.05` |
 | `REPUTATION_REWARD_SUCCESS` | Recompensa de reputación por cada tarea completada con éxito. | `0.001` |
-| `EXECUTOR_MAX_CONCURRENT_JOBS` | Número máximo de trabajos concurrentes (manejadores) procesados por el Orquestador. | `100` |
-| `HISTORY_DATABASE_URI` | URI para almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` (Deshabilitado) |
+| `EXECUTOR_MAX_CONCURRENT_JOBS` | Número máximo de trabajos (manejadores) concurrentes procesados por el Orquestador. | `100` |
+| `DISPATCHER_SOFT_LIMIT` | **Estrategia de Desbordamiento:** Número máximo de tareas en la cola privada de un trabajador antes de despachar a candidatos más costosos. | `3` |
+| `WORK_STEALING_ENABLED` | **Robo de Trabajo:** Si es `true`, los trabajadores inactivos pueden robar tareas de forma atómica de colegas sobrecargados. | `true` |
+| `HISTORY_DATABASE_URI` | URI para el almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` (Deshabilitado) |
+
 | `RATE_LIMITING_ENABLED` | Habilitar middleware de limitación de velocidad. | `true` |
 | `RATE_LIMIT_LIMIT` | Número máximo predeterminado de solicitudes permitidas por período para puntos finales API generales. | `100` |
 | `RATE_LIMIT_PERIOD` | Período de limitación de velocidad en segundos. | `60` |

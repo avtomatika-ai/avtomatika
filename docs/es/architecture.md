@@ -264,9 +264,28 @@ Responsable de asignar tareas al worker más adecuado.
 - **Estrategias:** Aplica algoritmos de selección: `default`, `round_robin` (utiliza un contador a nivel de clúster en Redis), `least_connections`, `cheapest`, `best_value` (basado en reputación).
 - **Encolado:** Coloca la tarea en la cola de prioridad del worker en el Almacenamiento.
 
+### 4. Despachador (Dispatcher)
+**Ubicación:** `src/avtomatika/dispatcher.py`
+
+Responsable de asignar tareas al worker más adecuado.
+- **Búsqueda de Worker O(1):** Utiliza intersecciones de **Conjuntos de Redis** (`SINTER`) para encontrar instantáneamente workers inactivos capaces de realizar un tipo de tarea específico. Esto garantiza un rendimiento de tiempo constante incluso con miles de workers.
+- **Filtrado:** 
+    1. **Estado y Tipo de Tarea:** Se manejan instantáneamente a través de la indexación de Redis.
+    2. **Requisitos de Recursos:** Filtra los candidatos resultantes por especificaciones de hardware (modelo de GPU, VRAM, modelos de ML instalados).
+- **Estrategias:** Aplica algoritmos de selección:
+    - `default`: Prioriza a los workers "calientes" (con los modelos requeridos en memoria) y luego selecciona al que tiene la mejor reputación entre los más económicos.
+    - `overflow`: "Desbordamiento a más costosos". Intenta asignar la tarea al trabajador más barato cuya longitud de cola sea inferior a `DISPATCHER_SOFT_LIMIT`. Si todos los trabajadores baratos están saturados, la carga "se desborda" hacia los más costosos.
+    - `round_robin`: Distribuye la carga secuencialmente utilizando un **contador a nivel de clúster en Redis**.
+    - `least_connections`: Selecciona al trabajador con el menor número de tareas activas.
+    - `cheapest`: Selecciona al trabajador con el costo más bajo para la habilidad específica.
+    - `best_value`: Selecciona al trabajador con la mejor relación precio/calidad utilizando su **reputación**.
+- **Robo de Trabajo (Work Stealing - Beta 17):** Para evitar el bloqueo de la cola (Head-of-Line Blocking), la capa de almacenamiento implementa un mecanismo atómico de "Robo de Trabajo". Si la cola privada de un trabajador está vacía, el Orquestador (a través de un script Lua en Redis) puede encontrar la cola más larga entre otros trabajadores que admiten la misma habilidad y mover una tarea de ella al trabajador inactivo.
+- **Encolado:** Coloca la tarea en la cola de prioridad del worker en el Almacenamiento.
+
 ### 4.1. Interacción con el Worker (Modelo Pull)
 
 El sistema utiliza un **Modelo Pull**, donde los workers inician la conexión con el orquestador para recibir tareas. Esto permite que los workers estén detrás de NAT o firewalls.
+
 
 - **Registro y Latidos (Heartbeats):** El worker se registra con el orquestador al inicio, informando sus capacidades. Luego envía periódicamente mensajes de latido para confirmar la actividad. Este mecanismo sigue siendo el mismo.
 - **Recuperación de Tareas (Long-Polling):**

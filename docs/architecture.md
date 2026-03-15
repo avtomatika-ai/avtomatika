@@ -263,10 +263,12 @@ Responsible for assigning tasks to the most suitable worker.
     2. **Resource Requirements:** Filters the resulting candidates by hardware specs (GPU model, VRAM, installed ML models).
 - **Strategies:** Applies one of the following selection algorithms to the final candidate pool:
     - `default`: Prefers "warm" workers (with required models in memory), then selects the one with the highest reputation among the cheapest.
+    - `overflow`: "Overflow to More Expensive". It tries to assign the task to the cheapest worker whose queue length is below `DISPATCHER_SOFT_LIMIT`. If all cheap workers are saturated, it "overflows" to more expensive ones.
     - `round_robin`: Distributes load sequentially using a **cluster-wide counter in Redis**.
     - `least_connections`: Selects worker with the lowest active task count.
     - `cheapest`: Selects worker with the lowest cost for the specific skill.
     - `best_value`: Selects worker with the best price/quality ratio using its **reputation**.
+- **Work Stealing:** To prevent Head-of-Line Blocking, the storage layer implements an atomic "Work Stealing" mechanism. If a worker's private queue is empty, the Orchestrator (via a Lua script in Redis) can find the longest queue among other workers supporting the same skill and move a task from it to the idle worker.
 - **Enqueuing:** Places the task in the worker's priority queue in Storage.
 
 ### 4.1. Worker Interaction (Pull Model)

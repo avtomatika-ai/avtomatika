@@ -201,7 +201,7 @@ class Dispatcher:
         hot_skill_workers = [
             w
             for w in workers
-            if any(hs.get("name") == task_type or hs.get("type") == task_type for hs in w.get("hot_skills", []))
+            if any(hs.get("name") == task_type or hs.get("type") == task_type for hs in (w.get("hot_skills") or []))
         ]
 
         # 2. Then Hot Cache
@@ -251,8 +251,8 @@ class Dispatcher:
     ) -> dict[str, Any]:
         """Selects the cheapest worker based on cost for the specific task_type."""
 
-        def get_cost(w):
-            return w.get("capabilities", {}).get("cost_per_skill", {}).get(task_type, float("inf"))
+        def get_cost(w: dict[str, Any]) -> float:
+            return float(w.get("capabilities", {}).get("cost_per_skill", {}).get(task_type, float("inf")))
 
         return min(workers, key=get_cost)
 
@@ -275,6 +275,48 @@ class Dispatcher:
     ) -> dict[str, Any]:
         """Selects the worker with the best price-quality (reputation) ratio."""
         return min(workers, key=lambda w: Dispatcher._get_best_value_score(w, task_type))
+
+    async def _select_overflow(
+        self,
+        workers: list[dict[str, Any]],
+        task_type: str,
+        max_cost: float | None = None,
+    ) -> dict[str, Any]:
+        """Strategy "Overflow to More Expensive":
+        1. Sort candidates by cost.
+        2. Assign to the cheapest worker whose queue length < SOFT_LIMIT.
+        3. Fallback: pick the one with the smallest queue among those within the price limit.
+        """
+
+        def get_cost(w: dict[str, Any]) -> float:
+            return float(w.get("capabilities", {}).get("cost_per_skill", {}).get(task_type, float("inf")))
+
+        # Sort by cost (ASC)
+        sorted_workers = sorted(workers, key=get_cost)
+
+        # Apply max_cost filter if provided
+        if max_cost is not None:
+            sorted_workers = [w for w in sorted_workers if get_cost(w) <= max_cost]
+
+        if not sorted_workers:
+            raise RuntimeError(f"No worker meets the maximum cost ({max_cost}) for task '{task_type}'")
+
+        # Get queue lengths
+        worker_queue_lens = {}
+        for w in sorted_workers:
+            wid = w["worker_id"]
+            worker_queue_lens[wid] = await self.storage.get_worker_queue_length(wid)
+
+        soft_limit = getattr(self.config, "DISPATCHER_SOFT_LIMIT", 3)
+
+        # Try to find the cheapest worker with a small queue
+        for w in sorted_workers:
+            wid = w["worker_id"]
+            if worker_queue_lens[wid] < soft_limit:
+                return w
+
+        # Find the one with the minimum queue among candidates
+        return min(sorted_workers, key=lambda w: worker_queue_lens[w["worker_id"]])
 
     async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]) -> None:
         job_id = job_state["id"]
@@ -398,6 +440,8 @@ class Dispatcher:
             selected_worker = self._select_cheapest(capable_workers, task_type)
         elif dispatch_strategy == "best_value":
             selected_worker = self._select_best_value(capable_workers, task_type)
+        elif dispatch_strategy == "overflow":
+            selected_worker = await self._select_overflow(capable_workers, task_type, max_cost=max_cost)
         else:  # "default"
             selected_worker = self._select_default(capable_workers, task_type)
 

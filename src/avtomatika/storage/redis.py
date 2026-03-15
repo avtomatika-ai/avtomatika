@@ -405,7 +405,53 @@ class RedisStorage(StorageBackend):
         key = f"orchestrator:task_queue:{worker_id}"
         try:
             result = await self._redis.bzpopmax([key], timeout=timeout)
-            return cast(dict[str, Any], self._unpack(result[1])) if result else None
+            if result:
+                return cast(dict[str, Any], self._unpack(result[1]))
+            worker_info = await self.get_worker_info(worker_id)
+            if not worker_info:
+                return None
+            skills = worker_info.get("supported_skills", [])
+            for skill in skills:
+                skill_name = skill.get("name") or skill.get("type")
+                if not skill_name:
+                    continue
+                # LUA Script for atomic work stealing
+                LUA_STEAL = """
+                local skill_index = KEYS[1]
+                local my_id = KEYS[2]
+                local workers = redis.call('SMEMBERS', skill_index)
+                local best_worker = nil
+                local max_len = 0
+
+                for i, wid in ipairs(workers) do
+                    if wid ~= my_id then
+                        local q_key = "orchestrator:task_queue:" .. wid
+                        local q_len = redis.call('ZCARD', q_key)
+                        if q_len > max_len then
+                            max_len = q_len
+                            best_worker = wid
+                        end
+                    end
+                end
+
+                if best_worker then
+                    local target_q = "orchestrator:task_queue:" .. best_worker
+                    local task = redis.call('ZPOPMAX', target_q)
+                    if task and #task > 0 then
+                        return task[1]
+                    end
+                end
+                return nil
+                """
+                skill_idx_key = f"orchestrator:index:workers:skill:{skill_name}"
+                try:
+                    stolen_payload_raw = await self._redis.eval(LUA_STEAL, 2, skill_idx_key, worker_id)
+                    if stolen_payload_raw:
+                        logger.info(f"Worker {worker_id} stole a task from another worker for skill {skill_name}")
+                        return cast(dict[str, Any], self._unpack(stolen_payload_raw))
+                except Exception as e:
+                    logger.warning(f"Work stealing failed for worker {worker_id}: {e}")
+            return None
         except CancelledError:
             return None
         except ResponseError as e:
@@ -414,6 +460,10 @@ class RedisStorage(StorageBackend):
                 if res:
                     return cast(dict[str, Any], self._unpack(res[0][0]))
             raise e
+
+    async def get_worker_queue_length(self, worker_id: str) -> int:
+        key = f"orchestrator:task_queue:{worker_id}"
+        return cast(int, await self._redis.zcard(key))
 
     async def refresh_worker_ttl(self, worker_id: str, ttl: int) -> bool:
         was_set = await self._redis.expire(f"orchestrator:worker:info:{worker_id}", ttl)

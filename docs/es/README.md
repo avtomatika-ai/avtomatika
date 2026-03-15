@@ -227,7 +227,9 @@ Avtomatika está diseñada para entornos de alta carga con miles de workers conc
 
 *   **Smart Dispatching (Despacho Inteligente)**: Enrutamiento de alto rendimiento utilizando Redis.
     *   **Deep Schema Matching**: Prioriza a los workers cuyo `input_schema` coincide con los parámetros de la tarea, asegurando la compatibilidad antes del despacho.
+    *   **Overflow Strategy**: Desvía automáticamente la carga hacia trabajadores más costosos si los económicos están saturados (alcanzan el límite `queue_length > SOFT_LIMIT`).
     *   **Hot Cache & Skill Awareness**: Prioriza a los workers que ya tienen modelos de IA específicos cargados en memoria.
+    *   **Work Stealing**: Los trabajadores inactivos pueden robar tareas de forma atómica de colegas sobrecargados, asegurando el máximo rendimiento.
     *   **Load Balancing**: Emplea incrementos de carga optimistas para prevenir la sobrecarga de los workers.
 *   **Reputación Autoregulada**:
     *   **Sistema de Penalizaciones**: Reducción inmediata de reputación por violaciones de contrato (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) o fallos críticos.

@@ -107,3 +107,8 @@ class Config:
 
         # Timezone settings
         self.TZ: str = getenv("TZ", "UTC")
+
+        # Advanced Dispatching & Load Balancing
+        self.DISPATCHER_SOFT_LIMIT: int = int(getenv("DISPATCHER_SOFT_LIMIT", 3))
+
+        self.WORK_STEALING_ENABLED: bool = getenv("WORK_STEALING_ENABLED", "true").lower() == "true"

@@ -171,6 +171,8 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `REPUTATION_PENALTY_TASK_FAILURE` | Reputation penalty for critical or permanent task failure. | `0.05` |
 | `REPUTATION_REWARD_SUCCESS` | Reputation reward for each successfully completed task. | `0.001` |
 | `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
+| `DISPATCHER_SOFT_LIMIT` | **Overflow Strategy:** Maximum number of tasks in a worker's private queue before dispatching to more expensive candidates. | `3` |
+| `WORK_STEALING_ENABLED` | **Work Stealing:** If `true`, idle workers can atomically steal tasks from heavily loaded colleagues. | `true` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
 | `RATE_LIMITING_ENABLED` | Enable rate limiting middleware. | `true` |
 | `RATE_LIMIT_LIMIT` | Default maximum number of requests allowed per period for general API endpoints. | `100` |
