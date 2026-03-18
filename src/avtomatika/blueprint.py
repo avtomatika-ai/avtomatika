@@ -14,6 +14,11 @@ from .datastore import AsyncDictStore
 
 logger = getLogger(__name__)
 
+
+def _PLACEHOLDER():
+    return None
+
+
 # Simple parser for expressions like "context.area.field operator value"
 # The order of operators is important: >= and <= must come before > and <
 CONDITION_REGEX = re_compile(
@@ -62,7 +67,7 @@ def _parse_condition(condition_str: str) -> Condition:
 
 
 class ConditionalHandler:
-    def __init__(self, blueprint: "StateMachineBlueprint", state: str, func: Callable, condition_str: str):
+    def __init__(self, blueprint: "Blueprint", state: str, func: Callable, condition_str: str):
         self.blueprint = blueprint
         self.state = state
         self.func = func
@@ -81,8 +86,8 @@ class ConditionalHandler:
 class HandlerDecorator:
     def __init__(
         self,
-        blueprint: "StateMachineBlueprint",
-        state: str,
+        blueprint: "Blueprint",
+        state: str | None = None,
         is_start: bool = False,
         is_end: bool = False,
     ):
@@ -92,35 +97,42 @@ class HandlerDecorator:
         self._is_end = is_end
 
     def __call__(self, func: Callable) -> Callable:
-        if self._state in self._blueprint.handlers:
-            raise ValueError(f"Default handler for state '{self._state}' is already registered.")
-        self._blueprint.handlers[self._state] = func
+        state_name = self._state or func.__name__
+
+        existing_handler = self._blueprint.handlers.get(state_name)
+        if existing_handler and existing_handler is not _PLACEHOLDER:
+            raise ValueError(f"Default handler for state '{state_name}' is already registered.")
+        self._blueprint.handlers[state_name] = func
 
         if self._is_start:
             if self._blueprint.start_state is not None:
                 raise ValueError(
                     f"Blueprint '{self._blueprint.name}' already has a start state: '{self._blueprint.start_state}'."
                 )
-            self._blueprint.start_state = self._state
+            self._blueprint.start_state = state_name
 
         if self._is_end:
-            self._blueprint.end_states.add(self._state)
+            self._blueprint.end_states.add(state_name)
 
+        # Update condition handlers state name mapping if needed
+        self._state = state_name
         return func
 
     def when(self, condition_str: str) -> Callable:
         def decorator(func: Callable) -> Callable:
-            if self._state not in self._blueprint.handlers:
-                self._blueprint.handlers[self._state] = lambda: None  # Placeholder
+            state_name = self._state or func.__name__
 
-            handler = ConditionalHandler(self._blueprint, self._state, func, condition_str)
+            if state_name not in self._blueprint.handlers:
+                self._blueprint.handlers[state_name] = _PLACEHOLDER
+
+            handler = ConditionalHandler(self._blueprint, state_name, func, condition_str)
             self._blueprint.conditional_handlers.append(handler)
             return func
 
         return decorator
 
 
-class StateMachineBlueprint:
+class Blueprint:
     def __init__(
         self,
         name: str,
@@ -163,17 +175,67 @@ class StateMachineBlueprint:
             raise ValueError(f"Data store with name '{name}' already exists.")
         self.data_stores[name] = AsyncDictStore(initial_data)
 
-    def handler_for(self, state: str, is_start: bool = False, is_end: bool = False) -> HandlerDecorator:
-        return HandlerDecorator(self, state, is_start=is_start, is_end=is_end)
+    def handler(
+        self,
+        state_or_func: str | Callable | None = None,
+        *,
+        is_start: bool = False,
+        is_end: bool = False,
+    ) -> Any:
+        """Decorator for registering a state handler.
 
-    def aggregator_for(self, state: str) -> Callable:
-        """Decorator for registering an aggregator handler."""
+        If the state name is not provided, it will be inferred from the
+        decorated function's name.
+
+        Args:
+            state_or_func: The name of the state or the function being decorated.
+            is_start: Whether this is the initial state of the blueprint.
+            is_end: Whether this is a terminal state.
+
+        Examples:
+            @bp.handler("start_state", is_start=True)
+            async def my_handler(actions): ...
+
+            @bp.handler(is_start=True)
+            async def start(actions): ...  # state name is "start"
+
+            @bp.handler
+            async def process(actions): ...  # state name is "process"
+        """
+        if callable(state_or_func):
+            # Used as @bp.handler without parens
+            decorator = HandlerDecorator(self, state_or_func.__name__, is_start=is_start, is_end=is_end)
+            return decorator(state_or_func)
+
+        # Used as @bp.handler("state_name") or @bp.handler(is_start=True)
+        return HandlerDecorator(self, state_or_func, is_start=is_start, is_end=is_end)
+
+    def aggregator(self, state_or_func: str | Callable | None = None) -> Any:
+        """Decorator for registering an aggregator handler.
+
+        If the state name is not provided, it will be inferred from the
+        decorated function's name.
+
+        Args:
+            state_or_func: The name of the state or the function being decorated.
+
+        Examples:
+            @bp.aggregator("aggregate_results")
+            async def my_aggregator(aggregation_results, actions): ...
+
+            @bp.aggregator
+            async def collect_results(aggregation_results, actions): ...  # state name is "collect_results"
+        """
 
         def decorator(func: Callable) -> Callable:
-            if state in self.aggregator_handlers:
-                raise ValueError(f"Aggregator for state '{state}' is already registered.")
-            self.aggregator_handlers[state] = func
+            state_name = state_or_func if isinstance(state_or_func, str) else func.__name__
+            if state_name in self.aggregator_handlers:
+                raise ValueError(f"Aggregator for state '{state_name}' is already registered.")
+            self.aggregator_handlers[state_name] = func
             return func
+
+        if callable(state_or_func):
+            return decorator(state_or_func)
 
         return decorator
 
@@ -248,6 +310,8 @@ class StateMachineBlueprint:
         for state, func in all_handlers:
             if state not in transitions:
                 transitions[state] = set()
+            if func is _PLACEHOLDER:
+                continue
             try:
                 source = textwrap.dedent(inspect.getsource(func))
                 tree = ast.parse(source)
@@ -255,8 +319,8 @@ class StateMachineBlueprint:
                     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                         continue
 
-                    # Handle actions.transition_to("state")
-                    if node.func.attr == "transition_to" and node.args and isinstance(node.args[0], ast.Constant):
+                    # Handle actions.go_to("state")
+                    if node.func.attr == "go_to" and node.args and isinstance(node.args[0], ast.Constant):
                         transitions[state].add(str(node.args[0].value))
 
                     # Handle actions.dispatch_task(..., transitions={"status": "state"})
@@ -301,10 +365,12 @@ class StateMachineBlueprint:
         for handler in self.conditional_handlers:
             if handler.state == state and handler.evaluate(context):
                 return handler.func
-        if default_handler := self.handlers.get(state):
+        default_handler = self.handlers.get(state)
+        if default_handler and default_handler is not _PLACEHOLDER:
             return default_handler
         raise ValueError(
-            f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context.",
+            f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context. "
+            "(All conditions failed and no default handler registered)"
         )
 
     def render_graph(self, output_filename: str | None = None, output_format: str = "png") -> str | None:

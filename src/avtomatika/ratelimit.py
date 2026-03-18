@@ -12,7 +12,6 @@ from aiohttp import web
 
 from .storage.base import StorageBackend
 
-# Define a type for the middleware handler
 Handler = Callable[[web.Request], Awaitable[web.Response]]
 
 
@@ -31,17 +30,14 @@ def rate_limit_middleware_factory(
         handler: Handler,
     ) -> web.Response:
         """Rate-limiting middleware that uses the provided storage backend."""
-        # Determine the key for rate limiting (e.g., by worker_id or IP)
         key_identifier = request.match_info.get("worker_id", request.remote) or "unknown"
 
-        # Determine the limit for this path
         limit = default_limit
         for path_substring, override_limit in limit_overrides.items():
             if path_substring in request.path:
                 limit = override_limit
                 break
 
-        # Key by identifier and path to have per-endpoint limits
         rate_limit_key = f"ratelimit:{key_identifier}:{request.path}"
 
         with suppress(Exception):

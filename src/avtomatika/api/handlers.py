@@ -19,7 +19,7 @@ from ..app_keys import (
     ENGINE_KEY,
     S3_SERVICE_KEY,
 )
-from ..blueprint import StateMachineBlueprint
+from ..blueprint import Blueprint
 from ..client_config_loader import load_client_configs_to_redis
 from ..constants import (
     JOB_STATUS_PENDING,
@@ -42,7 +42,7 @@ async def metrics_handler(_request: web.Request) -> web.Response:
     return web.Response(body=content, content_type="text/plain")
 
 
-def create_job_handler_factory(blueprint: StateMachineBlueprint) -> Callable[[web.Request], Any]:
+def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], Any]:
     async def handler(request: web.Request) -> web.Response:
         engine = request.app[ENGINE_KEY]
         try:

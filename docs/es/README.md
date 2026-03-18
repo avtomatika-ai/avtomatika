@@ -86,7 +86,7 @@ Puedes integrar y ejecutar fácilmente el motor del orquestador dentro de tu pro
 ```python
 # mi_app.py
 import asyncio
-from avtomatika import OrchestratorEngine, StateMachineBlueprint
+from avtomatika import OrchestratorEngine, Blueprint
 from avtomatika.context import ActionFactory
 from avtomatika.storage import MemoryStorage
 from avtomatika.config import Config
@@ -102,28 +102,30 @@ config.CLIENT_TOKEN = "my-secret-client-token"
 config.GLOBAL_WORKER_TOKEN = "my-secret-worker-token"
 
 # 2. Definir el Blueprint del Flujo de Trabajo
-my_blueprint = StateMachineBlueprint(
-    name="my_first_blueprint",
+bp = Blueprint(
+    name="bp",
     api_version="v1",
     api_endpoint="/jobs/my_flow"
 )
 
+> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
+
 # Usar inyección de dependencias para obtener solo los datos que necesitas.
-@my_blueprint.handler_for("start", is_start=True)
-async def start_handler(job_id: str, initial_data: dict, actions: ActionFactory):
+@bp.handler(is_start=True)
+async def start(job_id: str, initial_data: dict, actions: ActionFactory):
     """El estado inicial para cada nuevo trabajo."""
     print(f"Job {job_id} | Inicio: {initial_data}")
-    actions.transition_to("end")
+    actions.go_to("end")
 
 # Todavía puedes solicitar el objeto de contexto completo si lo prefieres.
-@my_blueprint.handler_for("end", is_end=True)
-async def end_handler(context):
+@bp.handler(is_end=True)
+async def end(context):
     """El estado final. El pipeline termina aquí."""
     print(f"Job {context.job_id} | Completo.")
 
 # 3. Inicializar el Motor del Orquestador
 engine = OrchestratorEngine(storage, config)
-engine.register_blueprint(my_blueprint)
+engine.register_blueprint(bp)
 
 # 4. Acceso a Componentes (Opcional)
 # Puedes acceder a la app aiohttp interna y a los componentes principales usando AppKeys
@@ -144,8 +146,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("
-Deteniendo servidor.")
+        print("\nDeteniendo servidor.")
 ```
 
 ### Ciclo de Vida del Motor: `run()` vs. `start()`
@@ -170,7 +171,7 @@ Los siguientes argumentos se pueden inyectar por nombre:
     *   `job_id` (str): El ID del trabajo actual.
     *   `initial_data` (dict): Los datos con los que se creó el trabajo.
     *   `state_history` (dict): Un diccionario para almacenar y pasar datos entre pasos. Los datos devueltos por los workers se fusionan automáticamente en este diccionario.
-    *   `actions` (ActionFactory): El objeto utilizado para decirle al orquestador qué hacer a continuación (por ejemplo, `actions.transition_to(...)`).
+    *   `actions` (ActionFactory): El objeto utilizado para decirle al orquestador qué hacer a continuación (por ejemplo, `actions.go_to(...)`).
     *   `client` (ClientConfig): Información sobre el cliente API que inició el trabajo.
     *   `data_stores` (SimpleNamespace): Acceso a recursos compartidos como conexiones de base de datos o cachés.
 *   **Desde los resultados del worker:**
@@ -184,22 +185,22 @@ Esta es la forma recomendada de escribir manejadores.
 # Un worker para esta tarea devolvió: {"output_path": "/videos/123.mp4", "duration": 95}
 # Este diccionario se fusionó automáticamente en `state_history`.
 
-@my_blueprint.handler_for("publish_video")
-async def publish_handler(
+@bp.handler
+async def publish_video(
     job_id: str,
     output_path: str, # Inyectado desde state_history
     duration: int,    # Inyectado desde state_history
     actions: ActionFactory
 ):
     print(f"Job {job_id}: Publicando video en {output_path} ({duration}s).")
-    actions.transition_to("complete")
+    actions.go_to("complete")
 ```
 
 ### El Objeto `actions`
 
 Este es el argumento inyectado más importante. Le dice al orquestador qué hacer a continuación. **Solo se puede llamar a un** método de `actions` en un solo manejador.
 
-*   `actions.transition_to("next_state")`: Mueve el trabajo a un nuevo estado.
+*   `actions.go_to("next_state")`: Mueve el trabajo a un nuevo estado.
 *   `actions.dispatch_task(...)`: Delega el trabajo a un Worker.
 *   `actions.dispatch_parallel(...)`: Ejecuta múltiples tareas a la vez.
 *   `actions.await_human_approval(...)`: Pausa el flujo de trabajo para recibir entrada externa.
@@ -211,13 +212,13 @@ Para compatibilidad con versiones anteriores o si prefieres tener un solo objeto
 
 ```python
 # Este manejador es equivalente al de arriba.
-@my_blueprint.handler_for("publish_video")
-async def publish_handler_old_style(context):
+@bp.handler
+async def publish_video(context):
     output_path = context.state_history.get("output_path")
     duration = context.state_history.get("duration")
 
     print(f"Job {context.job_id}: Publicando video en {output_path} ({duration}s).")
-    context.actions.transition_to("complete")
+    context.actions.go_to("complete")
 ```
 ## Conceptos Clave: JobContext y Actions
 
@@ -256,14 +257,14 @@ Usa `.when()` para crear ramas de lógica condicional. La cadena de condición e
 
 ```python
 # La condición `.when()` aún se refiere a `context`.
-@my_blueprint.handler_for("decision_step").when("context.initial_data.type == 'urgent'")
-async def handle_urgent(actions):
-    actions.transition_to("urgent_processing")
+@bp.handler().when("context.initial_data.type == 'urgent'")
+async def decision_step(actions):
+    actions.go_to("urgent_processing")
 
 # El manejador predeterminado si ninguna condición `.when()` coincide.
-@my_blueprint.handler_for("decision_step")
-async def handle_normal(actions):
-    actions.transition_to("normal_processing")
+@bp.handler
+async def decision_step(actions):
+    actions.go_to("normal_processing")
 ```
 
 > **Nota sobre Limitaciones:** La versión actual de `.when()` utiliza un analizador simple con las siguientes limitaciones:
@@ -276,8 +277,8 @@ async def handle_normal(actions):
 Esta es la función principal para delegar trabajo. El orquestador pondrá en cola la tarea y esperará a que un worker la recoja y devuelva un resultado.
 
 ```python
-@my_blueprint.handler_for("transcode_video")
-async def transcode_handler(initial_data, actions):
+@bp.handler
+async def transcode_video(initial_data, actions):
     actions.dispatch_task(
         task_type="video_transcoding",
         params={"input_path": initial_data.get("path")},
@@ -297,10 +298,10 @@ Ejecuta múltiples tareas simultáneamente y reúne sus resultados.
 
 ```python
 # 1. Fan-out: Despachar múltiples tareas para ser agregadas en un solo estado
-@my_blueprint.handler_for("process_files")
-async def fan_out_handler(initial_data, actions):
+@bp.handler
+async def process_files(initial_data, actions):
     tasks_to_dispatch = [
-        {"task_type": "file_analysis", "params": {"file": file}})
+        {"task_type": "file_analysis", "params": {"file": file}}
         for file in initial_data.get("files", [])
     ]
     # Usa dispatch_parallel para enviar todas las tareas a la vez.
@@ -310,16 +311,16 @@ async def fan_out_handler(initial_data, actions):
         aggregate_into="aggregate_results"
     )
 
-# 2. Fan-in: Recopilar resultados usando el decorador @aggregator_for
-@my_blueprint.aggregator_for("aggregate_results")
-async def aggregator_handler(aggregation_results, state_history, actions):
+# 2. Fan-in: Recopilar resultados usando el decorador @aggregator
+@bp.aggregator
+async def aggregate_results(aggregation_results, state_history, actions):
     # Este manejador solo se ejecutará DESPUÉS de que TODAS las tareas
     # despachadas por dispatch_parallel estén completas.
 
     # aggregation_results es un diccionario de {task_id: result_dict}
     summary = [res.get("data") for res in aggregation_results.values()]
     state_history["summary"] = summary
-    actions.transition_to("processing_complete")
+    actions.go_to("processing_complete")
 ```
 
 ### 4. Inyección de Dependencias (DataStore)
@@ -331,14 +332,14 @@ import redis.asyncio as redis
 
 # 1. Inicializar y registrar tu DataStore
 redis_client = redis.Redis(decode_responses=True)
-bp = StateMachineBlueprint(
+bp = Blueprint(
     "blueprint_with_datastore",
     data_stores={"cache": redis_client}
 )
 
 # 2. Usarlo en un manejador mediante inyección de dependencias
-@bp.handler_for("get_from_cache")
-async def cache_handler(data_stores):
+@bp.handler
+async def get_from_cache(data_stores):
     # Acceder al redis_client por el nombre "cache"
     user_data = await data_stores.cache.get("user:123")
     print(f"Usuario desde caché: {user_data}")
@@ -375,7 +376,7 @@ El orquestador proporciona soporte de primera clase para manejar archivos grande
 *   **Soporte de Directorios**: Soporta descarga y carga recursiva de directorios completos.
 
 ```python
-@bp.handler_for("process_data")
+@bp.handler
 async def process_data(task_files, actions):
     # Descarga por streaming de un archivo grande
     local_path = await task_files.download("large_dataset.csv")
@@ -385,7 +386,7 @@ async def process_data(task_files, actions):
     # Subir resultados
     await task_files.write_json("results.json", {"status": "done"})
     
-    actions.transition_to("finished")
+    actions.go_to("finished")
 ```
 
 ## Configuración de Producción
@@ -529,7 +530,7 @@ Por defecto, el motor utiliza almacenamiento en memoria. Para producción, debes
 Avtomatika admite la carga automática de blueprints desde un directorio. Esto le permite implementar y actualizar la lógica de su flujo de trabajo simplemente copiando archivos de Python sin cambiar el código central del orquestador.
 
 *   **Configurar**: Establezca la variable de entorno `BLUEPRINTS_DIR` con la ruta que contiene sus archivos de blueprint.
-*   **Cómo funciona**: Al inicio, el motor escanea el directorio en busca de todos los archivos `.py`, los importa y registra automáticamente cualquier instancia de `StateMachineBlueprint` encontrada.
+*   **Cómo funciona**: Al inicio, el motor escanea el directorio en busca de todos los archivos `.py`, los importa y registra automáticamente cualquier instancia de `Blueprint` encontrada.
 
 ### Seguridad
 

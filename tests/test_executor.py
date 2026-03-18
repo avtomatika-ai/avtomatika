@@ -8,7 +8,7 @@
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
-from src.avtomatika.blueprint import StateMachineBlueprint
+from src.avtomatika.blueprint import Blueprint
 from src.avtomatika.context import ActionFactory
 from src.avtomatika.executor import JobExecutor
 
@@ -60,13 +60,13 @@ async def test_process_job_calls_webhook(job_executor):
     """
     Tests that send_job_webhook is called when a job reaches a terminal state.
     """
-    bp = StateMachineBlueprint(name="webhook-test-bp")
+    bp = Blueprint(name="webhook-test-bp")
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def start_handler(actions):
-        actions.transition_to("finished")
+        actions.go_to("finished")
 
-    @bp.handler_for("finished", is_end=True)
+    @bp.handler("finished", is_end=True)
     async def finished_handler():
         pass
 
@@ -158,7 +158,7 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
     Tests that the new dependency injection for handlers works correctly.
     It should inject fields from JobContext, state_history, and initial_data.
     """
-    bp = StateMachineBlueprint(name="di-test-bp")
+    bp = Blueprint(name="di-test-bp")
     captured_args = {}
 
     # This handler uses the new dependency injection style
@@ -178,11 +178,11 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
         captured_args["state_history"] = state_history
         captured_args["worker_field"] = worker_field
         captured_args["initial_field"] = initial_field
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    bp.handler_for("start", is_start=True)(di_handler)
+    bp.handler("start", is_start=True)(di_handler)
 
-    @bp.handler_for("end", is_end=True)
+    @bp.handler("end", is_end=True)
     async def end_handler():
         pass
 
@@ -239,17 +239,17 @@ async def test_process_job_handler_backward_compatibility(job_executor):
     """
     Tests that the old handler style (context, actions) still works.
     """
-    bp = StateMachineBlueprint(name="compat-test-bp")
+    bp = Blueprint(name="compat-test-bp")
 
     # This handler uses the old style
     handler_mock = AsyncMock()
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def old_style_handler(context, actions):
         handler_mock(context, actions)
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    @bp.handler_for("end", is_end=True)
+    @bp.handler("end", is_end=True)
     async def end_handler():
         pass
 
@@ -307,7 +307,7 @@ async def test_di_name_collision_precedence(job_executor, mocker):
     Tests that JobContext fields take precedence over state_history and initial_data
     when there is a name collision during dependency injection.
     """
-    bp = StateMachineBlueprint(name="precedence-test-bp")
+    bp = Blueprint(name="precedence-test-bp")
     captured_args = {}
 
     async def precedence_handler(
@@ -320,11 +320,11 @@ async def test_di_name_collision_precedence(job_executor, mocker):
         captured_args["initial_data"] = initial_data
         captured_args["state_history"] = state_history
         captured_args["actions"] = actions
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    bp.handler_for("start", is_start=True)(precedence_handler)
+    bp.handler("start", is_start=True)(precedence_handler)
 
-    @bp.handler_for("end", is_end=True)
+    @bp.handler("end", is_end=True)
     async def end_handler():
         pass
 
@@ -381,18 +381,18 @@ async def test_di_missing_argument_fails_job(job_executor, caplog):
     Tests that if a handler requests an argument that cannot be injected,
     the job fails/retries.
     """
-    bp = StateMachineBlueprint(name="missing-arg-test-bp")
+    bp = Blueprint(name="missing-arg-test-bp")
 
     async def missing_arg_handler(
         job_id: str,
         actions: ActionFactory,
         non_existent_arg: str,  # This argument should not be found
     ):
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    bp.handler_for("start", is_start=True)(missing_arg_handler)
+    bp.handler("start", is_start=True)(missing_arg_handler)
 
-    @bp.handler_for("end", is_end=True)
+    @bp.handler("end", is_end=True)
     async def end_handler():
         pass
 
@@ -448,18 +448,18 @@ async def test_process_job_handles_none_fields_gracefully(job_executor):
     Tests that JobExecutor can handle job_state fields being None (null in Redis).
     This verifies the 'or {}' fixes in executor.py.
     """
-    bp = StateMachineBlueprint(name="none-fields-test-bp")
+    bp = Blueprint(name="none-fields-test-bp")
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def start_handler(state_history, aggregation_results, webhook_url, actions):
         # Verify that these are empty dicts, not None
         assert state_history == {}
         assert aggregation_results == {}
         # Verify webhook_url is None as expected (it doesn't have 'or {}')
         assert webhook_url is None
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    @bp.handler_for("end", is_end=True)
+    @bp.handler("end", is_end=True)
     async def end_handler():
         pass
 

@@ -16,7 +16,7 @@ import pytest
 import zstandard
 from aiohttp import web
 
-from avtomatika.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import Blueprint
 from avtomatika.client_config_loader import load_client_configs_to_redis
 from avtomatika.constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
 from avtomatika.engine import ENGINE_KEY, OrchestratorEngine
@@ -25,29 +25,29 @@ from tests.conftest import STORAGE_KEY
 
 # --- Test Blueprints ---
 
-child_bp = StateMachineBlueprint(name="child_flow")
+child_bp = Blueprint(name="child_flow")
 
 
-@child_bp.handler_for("start", is_start=True)
+@child_bp.handler("start", is_start=True)
 async def child_start(context, actions):
     await asyncio.sleep(0.1)
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
 
-@child_bp.handler_for("finished", is_end=True)
+@child_bp.handler("finished", is_end=True)
 async def child_finished(context, actions):
     pass
 
 
-parent_bp = StateMachineBlueprint(name="parent_flow", api_endpoint="/jobs/parent_flow", api_version="v1")
+parent_bp = Blueprint(name="parent_flow", api_endpoint="/jobs/parent_flow", api_version="v1")
 
 
-@parent_bp.handler_for("start", is_start=True)
+@parent_bp.handler("start", is_start=True)
 async def parent_start(context, actions):
-    actions.transition_to("running_child")
+    actions.go_to("running_child")
 
 
-@parent_bp.handler_for("running_child")
+@parent_bp.handler("running_child")
 async def run_child(context, actions):
     actions.run_blueprint(
         blueprint_name="child_flow",
@@ -56,60 +56,60 @@ async def run_child(context, actions):
     )
 
 
-@parent_bp.handler_for("child_finished")
+@parent_bp.handler("child_finished")
 async def parent_final_step(context, actions):
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
 
-@parent_bp.handler_for("finished", is_end=True)
+@parent_bp.handler("finished", is_end=True)
 async def parent_finished(context, actions):
     pass
 
 
-@parent_bp.handler_for("child_failed", is_end=True)
+@parent_bp.handler("child_failed", is_end=True)
 async def parent_failed(context, actions):
     pass
 
 
-unversioned_bp = StateMachineBlueprint(name="unversioned_flow", api_endpoint="/jobs/unversioned_flow")
+unversioned_bp = Blueprint(name="unversioned_flow", api_endpoint="/jobs/unversioned_flow")
 
 
-@unversioned_bp.handler_for("start", is_start=True)
+@unversioned_bp.handler("start", is_start=True)
 async def unversioned_start(context, actions):
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
 
-@unversioned_bp.handler_for("finished", is_end=True)
+@unversioned_bp.handler("finished", is_end=True)
 async def unversioned_finished(context, actions):
     pass
 
 
-data_store_bp = StateMachineBlueprint(name="data_store_test", api_endpoint="/jobs/data_store_test", api_version="v1")
+data_store_bp = Blueprint(name="data_store_test", api_endpoint="/jobs/data_store_test", api_version="v1")
 data_store_bp.add_data_store("my_store", {"initial": "value"})
 
 
-@data_store_bp.handler_for("start", is_start=True)
+@data_store_bp.handler("start", is_start=True)
 async def ds_start(context, actions):
     initial_value = await context.data_stores.my_store.get("initial")
     await context.data_stores.my_store.set("new_key", f"value_from_{initial_value}")
-    actions.transition_to("verify")
+    actions.go_to("verify")
 
 
-@data_store_bp.handler_for("verify")
+@data_store_bp.handler("verify")
 async def ds_verify(context, actions):
     new_value = await context.data_stores.my_store.get("new_key")
     if new_value == "value_from_value":
-        actions.transition_to("finished")
+        actions.go_to("finished")
     else:
-        actions.transition_to("failed")
+        actions.go_to("failed")
 
 
-@data_store_bp.handler_for("finished", is_end=True)
+@data_store_bp.handler("finished", is_end=True)
 async def ds_finished(context, actions):
     pass
 
 
-@data_store_bp.handler_for("failed", is_end=True)
+@data_store_bp.handler("failed", is_end=True)
 async def ds_failed(context, actions):
     pass
 
@@ -253,18 +253,18 @@ async def test_quota_middleware(aiohttp_client, app):
     assert resp.status == 429
 
 
-context_bp = StateMachineBlueprint("context_test_bp", api_endpoint="/jobs/context_test", api_version="v1")
+context_bp = Blueprint("context_test_bp", api_endpoint="/jobs/context_test", api_version="v1")
 
 
-@context_bp.handler_for("start", is_start=True)
+@context_bp.handler("start", is_start=True)
 async def context_start_handler(context, actions):
     client_plan = context.client.plan
     client_lang = context.client.params.get("languages", ["default"])[0]
     context.state_history["test_output"] = f"{client_plan}:{client_lang}"
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
 
-@context_bp.handler_for("finished", is_end=True)
+@context_bp.handler("finished", is_end=True)
 async def context_finished_handler(context, actions):
     pass
 
@@ -425,10 +425,10 @@ async def test_unversioned_route(aiohttp_client, app):
     assert final_state["current_state"] == "finished"
 
 
-cancellation_bp = StateMachineBlueprint("cancellation_bp", api_endpoint="/jobs/cancel_me", api_version="v1")
+cancellation_bp = Blueprint("cancellation_bp", api_endpoint="/jobs/cancel_me", api_version="v1")
 
 
-@cancellation_bp.handler_for("start", is_start=True)
+@cancellation_bp.handler("start", is_start=True)
 async def cancel_start(context, actions):
     actions.dispatch_task(
         task_type="long_running_task",
@@ -436,12 +436,12 @@ async def cancel_start(context, actions):
     )
 
 
-@cancellation_bp.handler_for("finished", is_end=True)
+@cancellation_bp.handler("finished", is_end=True)
 async def cancel_finished(context, actions):
     pass
 
 
-@cancellation_bp.handler_for("cancelled", is_end=True)
+@cancellation_bp.handler("cancelled", is_end=True)
 async def cancel_cancelled(context, actions):
     pass
 

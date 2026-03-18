@@ -2,7 +2,7 @@
 
 # Cookbook: Creating a Blueprint (Pipeline)
 
-Blueprints (`StateMachineBlueprint`) are the foundation for defining business logic in the system. Each blueprint represents a state machine ("script") that the Orchestrator will execute.
+Blueprints (`Blueprint`) are the foundation for defining business logic in the system. Each blueprint represents a state machine ("script") that the Orchestrator will execute.
 
 This guide will show how to create a simple yet complete pipeline.
 
@@ -12,17 +12,17 @@ It is recommended to store blueprints in a separate file, e.g., `my_service/blue
 
 ## Step 2: Define the Blueprint
 
-Import `StateMachineBlueprint` and create an instance.
+Import `Blueprint` and create an instance.
 
 - `name`: Unique blueprint name.
 - `api_version`: API version (e.g., "v1").
 - `api_endpoint`: URL where clients will create tasks for this pipeline.
 
 ```python
-from avtomatika import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # Create blueprint instance
-order_pipeline = StateMachineBlueprint(
+order_pipeline = Blueprint(
     name="order_processing_flow",
     api_version="v1",
     api_endpoint="/jobs/process_order"  # URL for task creation
@@ -33,14 +33,14 @@ order_pipeline = StateMachineBlueprint(
 
 Each step in your process is a "state" with an attached "handler" function.
 
--   Decorator `@blueprint.handler_for("state_name")` binds function to state.
+-   Decorator `@blueprint.handler("state_name")` binds function to state.
 -   **Initial State** must be exactly one, marked with `is_start=True`.
 -   **Final States** can be multiple, marked with `is_end=True`.
 
 Handler receives one argument — `context`, containing all task info and process control methods (`context.actions`).
 
 ```python
-@order_pipeline.handler_for("start", is_start=True)
+@order_pipeline.handler(is_start=True)
 async def start_handler(context):
     """
     Initial handler. Called when Job is created.
@@ -52,11 +52,11 @@ async def start_handler(context):
     context.state_history["processed_by"] = "start_handler"
 
     # Transition to next step
-    context.actions.transition_to("dispatch_to_worker")
+    context.actions.go_to("dispatch_to_worker")
 
 
-@order_pipeline.handler_for("dispatch_to_worker")
-async def dispatch_handler(context):
+@order_pipeline.handler
+async def dispatch_to_worker(context):
     """
     This handler dispatches task to worker.
     """
@@ -75,8 +75,8 @@ async def dispatch_handler(context):
         }
     )
 
-@order_pipeline.handler_for("inventory_ok")
-async def inventory_ok_handler(context):
+@order_pipeline.handler
+async def inventory_ok(context):
     """
     Called if worker confirmed item availability.
     """
@@ -84,27 +84,27 @@ async def inventory_ok_handler(context):
     worker_data = context.state_history.get("warehouse_info")
     print(f"Job {context.job_id}: items in stock. Info from worker: {worker_data}")
     
-    context.actions.transition_to("finished_successfully")
+    context.actions.go_to("finished_successfully")
 
 
-@order_pipeline.handler_for("inventory_failed", is_end=True)
-async def inventory_failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def inventory_failed(context):
     """
     Final state if items out of stock.
     """
     print(f"Job {context.job_id}: cannot process order, items out of stock.")
 
 
-@order_pipeline.handler_for("generic_failure", is_end=True)
-async def failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def generic_failure(context):
     """
     Final state for generic failures.
     """
     print(f"Job {context.job_id}: processing error occurred.")
 
 
-@order_pipeline.handler_for("finished_successfully", is_end=True)
-async def finished_handler(context):
+@order_pipeline.handler(is_end=True)
+async def finished_successfully(context):
     """
     Final state on success.
     """

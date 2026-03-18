@@ -16,15 +16,15 @@ from avtomatika.engine import OrchestratorEngine
 from avtomatika.storage.memory import MemoryStorage
 
 BLUEPRINT_CONTENT = """
-from avtomatika.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import Blueprint
 
-dynamic_bp = StateMachineBlueprint(name="dynamic_test_blueprint", api_endpoint="/jobs/dynamic_test")
+dynamic_bp = Blueprint(name="dynamic_test_blueprint", api_endpoint="/jobs/dynamic_test")
 
-@dynamic_bp.handler_for("start", is_start=True)
+@dynamic_bp.handler("start", is_start=True)
 async def start_handler(actions):
-    actions.transition_to("end")
+    actions.go_to("end")
 
-@dynamic_bp.handler_for("end", is_end=True)
+@dynamic_bp.handler("end", is_end=True)
 async def end_handler():
     pass
 """

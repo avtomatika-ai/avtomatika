@@ -94,7 +94,6 @@ class MemoryStorage(StorageBackend):
     ) -> None:
         """Registers a worker and creates a task queue for it."""
         async with self._lock:
-            # Set default reputation for new workers
             worker_info.setdefault("reputation", 1.0)
             self._workers[worker_id] = worker_info
             self._worker_ttls[worker_id] = monotonic() + ttl

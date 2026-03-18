@@ -10,7 +10,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .blueprint import StateMachineBlueprint
+from .blueprint import Blueprint
 
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
@@ -21,7 +21,7 @@ logger = getLogger(__name__)
 def load_blueprints_from_dir(engine: "OrchestratorEngine", blueprints_dir: str) -> None:
     """
     Scans the specified directory for Python files and registers any
-    StateMachineBlueprint instances found within them.
+    Blueprint instances found within them.
     """
     if not blueprints_dir:
         return
@@ -48,11 +48,11 @@ def load_blueprints_from_dir(engine: "OrchestratorEngine", blueprints_dir: str) 
                 module = module_from_spec(spec)
                 spec.loader.exec_module(module)
 
-                # Find all instances of StateMachineBlueprint in the module
+                # Find all instances of Blueprint in the module
                 blueprints_found = 0
                 for attr_name in dir(module):
                     attr = getattr(module, attr_name)
-                    if isinstance(attr, StateMachineBlueprint):
+                    if isinstance(attr, Blueprint):
                         try:
                             engine.register_blueprint(attr)
                             blueprints_found += 1
@@ -65,7 +65,7 @@ def load_blueprints_from_dir(engine: "OrchestratorEngine", blueprints_dir: str) 
                             )
 
                 if blueprints_found == 0:
-                    logger.debug(f"No StateMachineBlueprint instances found in {file.name}")
+                    logger.debug(f"No Blueprint instances found in {file.name}")
 
         except Exception as e:
             logger.exception(f"Error loading blueprint file {file.name}: {e}")

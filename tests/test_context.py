@@ -11,9 +11,9 @@ import pytest
 from src.avtomatika.context import ActionFactory
 
 
-def test_action_factory_transition_to():
+def test_action_factory_go_to():
     actions = ActionFactory("job-1")
-    actions.transition_to("next_state")
+    actions.go_to("next_state")
     assert actions.next_state == "next_state"
 
 
@@ -36,7 +36,7 @@ def test_action_factory_dispatch_parallel():
 
 
 ACTIONS_TO_TEST = [
-    ("transition_to", ("next_state",)),
+    ("go_to", ("next_state",)),
     ("dispatch_task", ("test_task", {}, {})),
     ("run_blueprint", ("child_bp", {}, {})),
     ("dispatch_parallel", ([{}], "agg_state")),

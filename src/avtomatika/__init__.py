@@ -18,7 +18,7 @@ __version__ = version("avtomatika")
 
 from rxon.validators import is_valid_identifier, validate_identifier
 
-from .blueprint import StateMachineBlueprint
+from .blueprint import Blueprint
 from .context import ActionFactory
 from .data_types import JobContext
 from .engine import OrchestratorEngine
@@ -26,9 +26,9 @@ from .storage.base import StorageBackend
 
 __all__ = [
     "ActionFactory",
+    "Blueprint",
     "JobContext",
     "OrchestratorEngine",
-    "StateMachineBlueprint",
     "StorageBackend",
     "is_valid_identifier",
     "validate_identifier",

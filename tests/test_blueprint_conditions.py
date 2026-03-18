@@ -8,7 +8,7 @@
 from unittest.mock import MagicMock
 
 import pytest
-from src.avtomatika.blueprint import OPERATORS, Condition, ConditionalHandler, StateMachineBlueprint, _parse_condition
+from src.avtomatika.blueprint import OPERATORS, Blueprint, Condition, ConditionalHandler, _parse_condition
 
 
 def test_parse_condition_valid():
@@ -67,35 +67,35 @@ def test_conditional_handler_evaluate_missing_field(conditional_handler):
 
 @pytest.fixture
 def blueprint():
-    return StateMachineBlueprint("test_bp")
+    return Blueprint("test_bp")
 
 
 def test_handler_decorator_duplicate_handler(blueprint):
-    @blueprint.handler_for("start")
+    @blueprint.handler("start")
     def handler1(context, actions):
         pass
 
     with pytest.raises(ValueError, match="Default handler for state 'start' is already registered."):
 
-        @blueprint.handler_for("start")
+        @blueprint.handler("start")
         def handler2(context, actions):
             pass
 
 
 def test_handler_decorator_duplicate_start_state(blueprint):
-    @blueprint.handler_for("start", is_start=True)
+    @blueprint.handler("start", is_start=True)
     def handler1(context, actions):
         pass
 
     with pytest.raises(ValueError, match="Blueprint 'test_bp' already has a start state: 'start'."):
 
-        @blueprint.handler_for("another_start", is_start=True)
+        @blueprint.handler("another_start", is_start=True)
         def handler2(context, actions):
             pass
 
 
 def test_handler_decorator_when(blueprint):
-    @blueprint.handler_for("start").when("context.initial_data.status == 'completed'")
+    @blueprint.handler("start").when("context.initial_data.status == 'completed'")
     def handler(context, actions):
         pass
 
@@ -109,14 +109,14 @@ def test_add_data_store_duplicate(blueprint):
         blueprint.add_data_store("my_store", {})
 
 
-def test_aggregator_for_duplicate(blueprint):
-    @blueprint.aggregator_for("start")
+def test_aggregator_duplicate(blueprint):
+    @blueprint.aggregator("start")
     def aggregator1(context, actions):
         pass
 
     with pytest.raises(ValueError, match="Aggregator for state 'start' is already registered."):
 
-        @blueprint.aggregator_for("start")
+        @blueprint.aggregator("start")
         def aggregator2(context, actions):
             pass
 
@@ -134,11 +134,11 @@ def test_find_handler_no_handler(blueprint):
 
 
 def test_render_graph_with_filename(blueprint, tmp_path):
-    @blueprint.handler_for("start", is_start=True)
+    @blueprint.handler("start", is_start=True)
     def handler(context, actions):
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    @blueprint.handler_for("end", is_end=True)
+    @blueprint.handler("end", is_end=True)
     def end_handler(context, actions):
         pass
 
@@ -148,11 +148,11 @@ def test_render_graph_with_filename(blueprint, tmp_path):
 
 
 def test_render_graph_no_filename(blueprint):
-    @blueprint.handler_for("start", is_start=True)
+    @blueprint.handler("start", is_start=True)
     def handler(context, actions):
-        actions.transition_to("end")
+        actions.go_to("end")
 
-    @blueprint.handler_for("end", is_end=True)
+    @blueprint.handler("end", is_end=True)
     def end_handler(context, actions):
         pass
 

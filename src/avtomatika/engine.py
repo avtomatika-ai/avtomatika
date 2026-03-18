@@ -35,7 +35,7 @@ from .app_keys import (
     WORKER_SERVICE_KEY,
     WS_MANAGER_KEY,
 )
-from .blueprint import StateMachineBlueprint
+from .blueprint import Blueprint
 from .client_config_loader import load_client_configs_to_redis
 from .compression import compression_middleware
 from .config import Config
@@ -76,12 +76,11 @@ class OrchestratorEngine:
         setup_telemetry()
         self.storage = storage
         self.config = config
-        self.blueprints: dict[str, StateMachineBlueprint] = {}
+        self.blueprints: dict[str, Blueprint] = {}
         self.blueprint_contracts: dict[str, dict[str, Any]] = {}
         self.history_storage: HistoryStorageBase = NoOpHistoryStorage()
         self.ws_manager = WebSocketManager(self.storage)
 
-        # HLN Subscriptions: Callbacks for internal signaling (bubbling)
         self.on_worker_event: list[Callable[[str, Any], Awaitable[None]]] = []
         self.on_job_finished: list[Callable[[str, str, dict[str, Any]], Awaitable[None]]] = []
 
@@ -113,7 +112,7 @@ class OrchestratorEngine:
 
         self.rxon_listener = HttpListener(self.app)
 
-    def register_blueprint(self, blueprint: StateMachineBlueprint) -> None:
+    def register_blueprint(self, blueprint: Blueprint) -> None:
         if self._setup_done:
             raise RuntimeError("Cannot register blueprints after engine setup.")
         if blueprint.name in self.blueprints:
@@ -293,12 +292,10 @@ class OrchestratorEngine:
             return data
 
         if hasattr(cls, "_fields"):
-            # NamedTuple support
             fields_list = cast(Any, cls)._fields
             filtered_data = {k: v for k, v in data.items() if k in fields_list}
             return cls(**filtered_data)
         elif is_dataclass(cls):
-            # Dataclass support
             known_field_names = {f.name for f in fields(cls)}
             filtered_data = {k: v for k, v in data.items() if k in known_field_names}
             return cls(**filtered_data)

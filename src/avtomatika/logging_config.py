@@ -68,13 +68,11 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: st
     handler = StreamHandler(stdout)
     formatter: Formatter
     if log_format.lower() == "json":
-        # Formatter for JSON logs
         formatter = TimezoneJsonFormatter(
             "%(asctime)s %(name)s %(levelname)s %(message)s %(pathname)s %(lineno)d",
             tz_name=tz_name,
         )
     else:
-        # Standard text formatter
         formatter = TimezoneFormatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             tz_name=tz_name,

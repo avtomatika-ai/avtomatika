@@ -2,7 +2,7 @@
 
 # Recetario: Creación de un Blueprint (Pipeline)
 
-Los Blueprints (`StateMachineBlueprint`) son la base para definir la lógica comercial en el sistema. Cada blueprint representa una máquina de estados ("guion") que el Orquestador ejecutará.
+Los Blueprints (`Blueprint`) son la base para definir la lógica comercial en el sistema. Cada blueprint representa una máquina de estados ("guion") que el Orquestador ejecutará.
 
 Esta guía mostrará cómo crear un pipeline simple pero completo.
 
@@ -12,17 +12,17 @@ Se recomienda almacenar los blueprints en un archivo separado, por ejemplo, `mi_
 
 ## Paso 2: Definir el Blueprint
 
-Importar `StateMachineBlueprint` y crear una instancia.
+Importar `Blueprint` y crear una instancia.
 
 - `name`: Nombre único del blueprint.
 - `api_version`: Versión de la API (por ejemplo, "v1").
 - `api_endpoint`: URL donde los clientes crearán tareas para este pipeline.
 
 ```python
-from avtomatika import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # Crear instancia de blueprint
-order_pipeline = StateMachineBlueprint(
+order_pipeline = Blueprint(
     name="order_processing_flow",
     api_version="v1",
     api_endpoint="/jobs/process_order"  # URL para creación de tareas
@@ -33,15 +33,17 @@ order_pipeline = StateMachineBlueprint(
 
 Cada paso en tu proceso es un "estado" con una función "manejadora" adjunta.
 
--   El decorador `@blueprint.handler_for("nombre_estado")` vincula la función al estado.
+-   El decorador `@blueprint.handler` vincula la función al estado.
 -   **Estado Inicial** debe haber exactamente uno, marcado con `is_start=True`.
 -   **Estados Finales** pueden ser múltiples, marcados con `is_end=True`.
+
+> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
 
 El manejador recibe un argumento — `context`, que contiene toda la información de la tarea y métodos de control del proceso (`context.actions`).
 
 ```python
-@order_pipeline.handler_for("start", is_start=True)
-async def start_handler(context):
+@order_pipeline.handler(is_start=True)
+async def start(context):
     """
     Manejador inicial. Llamado cuando se crea el Job.
     """
@@ -49,14 +51,14 @@ async def start_handler(context):
     print(f"Datos de entrada: {context.initial_data}")
 
     # Guardar algo en el historial para los siguientes pasos
-    context.state_history["processed_by"] = "start_handler"
+    context.state_history["processed_by"] = "start"
 
     # Transición al siguiente paso
-    context.actions.transition_to("dispatch_to_worker")
+    context.actions.go_to("dispatch_to_worker")
 
 
-@order_pipeline.handler_for("dispatch_to_worker")
-async def dispatch_handler(context):
+@order_pipeline.handler
+async def dispatch_to_worker(context):
     """
     Este manejador despacha la tarea al worker.
     """
@@ -75,8 +77,8 @@ async def dispatch_handler(context):
         }
     )
 
-@order_pipeline.handler_for("inventory_ok")
-async def inventory_ok_handler(context):
+@order_pipeline.handler
+async def inventory_ok(context):
     """
     Llamado si el worker confirmó la disponibilidad de artículos.
     """
@@ -84,27 +86,27 @@ async def inventory_ok_handler(context):
     worker_data = context.state_history.get("warehouse_info")
     print(f"Trabajo {context.job_id}: artículos en stock. Info del worker: {worker_data}")
     
-    context.actions.transition_to("finished_successfully")
+    context.actions.go_to("finished_successfully")
 
 
-@order_pipeline.handler_for("inventory_failed", is_end=True)
-async def inventory_failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def inventory_failed(context):
     """
     Estado final si los artículos están agotados.
     """
     print(f"Trabajo {context.job_id}: no se puede procesar el pedido, artículos agotados.")
 
 
-@order_pipeline.handler_for("generic_failure", is_end=True)
-async def failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def generic_failure(context):
     """
     Estado final para fallos genéricos.
     """
     print(f"Trabajo {context.job_id}: ocurrió un error de procesamiento.")
 
 
-@order_pipeline.handler_for("finished_successfully", is_end=True)
-async def finished_handler(context):
+@order_pipeline.handler(is_end=True)
+async def finished_successfully(context):
     """
     Estado final en caso de éxito.
     """
@@ -116,7 +118,7 @@ async def finished_handler(context):
 
 En el archivo principal de tu aplicación donde ejecutas `OrchestratorEngine`, registra el blueprint creado.
 
-Cuando llamas a `register_blueprint()`, el motor realiza automáticamente una **verificación de integridad**. Asegura que:
+Когда llamas a `register_blueprint()`, el motor realiza automáticamente una **verificación de integridad**. Asegura que:
 1.  El blueprint tiene exactamente un estado inicial.
 2.  Todas las transiciones conducen a estados existentes (sin transiciones "colgantes").
 3.  Todos los estados son alcanzables desde el estado inicial (sin "código muerto").

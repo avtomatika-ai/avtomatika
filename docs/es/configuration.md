@@ -156,7 +156,7 @@ Además de los archivos de configuración, el Orquestador se configura a través
 | `WORKERS_CONFIG_PATH` | Ruta a `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Ruta a `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Ruta a `schedules.toml`. | `""` |
-| `BLUEPRINTS_DIR` | Ruta a un directorio con archivos de Python que contienen instancias de `StateMachineBlueprint` para ser cargadas automáticamente. | `""` |
+| `BLUEPRINTS_DIR` | Ruta a un directorio con archivos de Python que contienen instancias de `Blueprint` para ser cargadas automáticamente. | `""` |
 | `TZ` | **Zona Horaria Global:** Afecta a los disparadores del programador, marcas de tiempo de logs y salida de API de historial (por ejemplo, "Europe/Madrid", "UTC"). | `UTC` |
 | `LOG_LEVEL` | Nivel de registro (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `LOG_FORMAT` | Formato de registro (`text` o `json`). | `json` |

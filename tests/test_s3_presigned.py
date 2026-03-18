@@ -7,7 +7,7 @@
 
 import pytest
 
-from avtomatika.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.s3 import S3Service
 
@@ -39,9 +39,9 @@ def test_generate_presigned_url_logic(s3_config):
 
 
 def create_dummy_bp():
-    bp = StateMachineBlueprint("dummy", api_endpoint="/dummy", api_version="v1")
+    bp = Blueprint("dummy", api_endpoint="/dummy", api_version="v1")
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def start(actions):
         pass
 

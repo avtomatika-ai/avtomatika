@@ -85,7 +85,7 @@ class ActionFactory:
             "aggregate_into": aggregate_into,
         }
 
-    def transition_to(self, state: str) -> None:
+    def go_to(self, state: str) -> None:
         """Schedules a transition to a new state."""
         self._check_for_existing_action()
         logger.debug(f"Job {self._job_id}: Transitioning to '{state}'")

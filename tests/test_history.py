@@ -13,7 +13,7 @@ import aiosqlite
 import pytest
 import pytest_asyncio
 from fakeredis.aioredis import FakeRedis
-from src.avtomatika.blueprint import StateMachineBlueprint
+from src.avtomatika.blueprint import Blueprint
 from src.avtomatika.config import Config
 from src.avtomatika.executor import JobExecutor
 from src.avtomatika.history.sqlite import SQLiteHistoryStorage
@@ -191,21 +191,21 @@ async def redis_client():
 # --- Integration Test (Variant B) ---
 
 # A simple blueprint for the test
-test_bp = StateMachineBlueprint("test_bp")
+test_bp = Blueprint("test_bp")
 
 
-@test_bp.handler_for("start", is_start=True)
+@test_bp.handler("start", is_start=True)
 async def start_handler(context, actions):
-    actions.transition_to("step_one")
+    actions.go_to("step_one")
 
 
-@test_bp.handler_for("step_one")
+@test_bp.handler("step_one")
 async def step_one_handler(context, actions):
     # Use a dispatch action to test that event type
     actions.dispatch_task("some_task", params={}, transitions={"success": "finished"})
 
 
-@test_bp.handler_for("finished")
+@test_bp.handler("finished")
 async def finished_handler(context, actions):
     pass  # Terminal state
 

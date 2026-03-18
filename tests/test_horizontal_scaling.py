@@ -45,11 +45,11 @@ async def test_horizontal_scaling_scheduler_locks():
         # Hack: Inject a blueprint directly to avoid full setup overhead if not needed
         # but create_background_job needs it.
         # We will mock the blueprint registration.
-        from avtomatika.blueprint import StateMachineBlueprint
+        from avtomatika.blueprint import Blueprint
 
-        bp = StateMachineBlueprint("scheduled_bp")
+        bp = Blueprint("scheduled_bp")
 
-        @bp.handler_for("start", is_start=True)
+        @bp.handler("start", is_start=True)
         async def start(actions):
             pass
 

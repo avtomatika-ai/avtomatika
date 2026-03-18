@@ -14,7 +14,7 @@ class Config:
     Loads parameters from environment variables.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Instance identity
         self.INSTANCE_ID: str = getenv("INSTANCE_ID", gethostname())
 

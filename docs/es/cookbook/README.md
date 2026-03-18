@@ -12,36 +12,36 @@ Este recetario proporciona una colección de recetas para construir flujos de tr
 
 **Tarea:** Crear un pipeline que ejecute secuencialmente tres pasos: A -> B -> C.
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-simple_pipeline = StateMachineBlueprint(
+simple_pipeline = Blueprint(
     name="simple_linear_flow",
     api_version="v1",
     api_endpoint="jobs/simple_flow"
 )
 
-@simple_pipeline.handler_for("start", is_start=True)
-async def start_handler(context, actions):
-    actions.transition_to("step_A")
+@simple_pipeline.handler(is_start=True)
+async def start(context, actions):
+    actions.go_to("step_A")
 
-@simple_pipeline.handler_for("step_A")
-async def handler_A(context, actions):
+@simple_pipeline.handler
+async def step_A(context, actions):
     actions.dispatch_task(
         task_type="simple_task",
         params=context.initial_data,
         transitions={"success": "step_B", "failure": "failed"}
     )
 
-@simple_pipeline.handler_for("step_B")
-async def handler_B(context, actions):
-    actions.transition_to("finished")
+@simple_pipeline.handler
+async def step_B(context, actions):
+    actions.go_to("finished")
 
-@simple_pipeline.handler_for("finished", is_end=True)
-async def finished_handler(context, actions):
+@simple_pipeline.handler(is_end=True)
+async def finished(context, actions):
     print(f"Pipeline {context.job_id} completado exitosamente.")
 
-@simple_pipeline.handler_for("failed", is_end=True)
-async def failed_handler(context, actions):
+@simple_pipeline.handler(is_end=True)
+async def failed(context, actions):
     print(f"Pipeline {context.job_id} falló.")
 ```
 
@@ -49,16 +49,16 @@ async def failed_handler(context, actions):
 
 **Tarea:** Pausar el pipeline después del paso `generate_data` y esperar la aprobación de un moderador.
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-moderation_pipeline = StateMachineBlueprint(
+moderation_pipeline = Blueprint(
     name="moderation_flow",
     api_version="v1",
     api_endpoint="jobs/moderation_flow"
 )
 
-@moderation_pipeline.handler_for("generate_data", is_start=True)
-async def generate_data_handler(context, actions):
+@moderation_pipeline.handler(is_start=True)
+async def generate_data(context, actions):
     actions.dispatch_task(
         task_type="data_generation",
         params=context.initial_data,
@@ -66,19 +66,19 @@ async def generate_data_handler(context, actions):
     )
 
 
-@moderation_pipeline.handler_for("process_approved_data", is_end=True)
-async def process_approved_handler(context, actions):
-    actions.transition_to("finished")
+@moderation_pipeline.handler(is_end=True)
+async def process_approved_data(context, actions):
+    actions.go_to("finished")
 
-@moderation_pipeline.handler_for("rejected_by_moderator", is_end=True)
-async def process_rejected_handler(context, actions):
+@moderation_pipeline.handler(is_end=True)
+async def rejected_by_moderator(context, actions):
     print(f"El trabajo {context.job_id} fue rechazado por el moderador.")
 
-@moderation_pipeline.handler_for("failed", is_end=True)
-async def moderation_failed_handler(context, actions):
+@moderation_pipeline.handler(is_end=True)
+async def failed(context, actions):
     print(f"El trabajo {context.job_id} falló.")
 
-@moderation_pipeline.handler_for("awaiting_approval")
+@moderation_pipeline.handler("awaiting_approval")
 async def await_approval_handler(context, actions):
     actions.await_human_approval(
         integration="telegram",
@@ -89,9 +89,9 @@ async def await_approval_handler(context, actions):
         }
     )
 
-@moderation_pipeline.handler_for("process_approved_data")
+@moderation_pipeline.handler("process_approved_data")
 async def process_approved_handler(context, actions):
-    actions.transition_to("finished")
+    actions.go_to("finished")
 ```
 
 ### **Receta 3: Ejecución Paralela y Agregación de Resultados**
@@ -101,22 +101,22 @@ async def process_approved_handler(context, actions):
 **Concepto:**
 El paralelismo se logra llamando a `actions.dispatch_task()` múltiples veces en un manejador.
 1.  **Lanzamiento:** En un manejador regular, llama a `dispatch_task` para cada tarea paralela. **Requisito clave:** todas estas llamadas deben apuntar al mismo estado en `transitions`. Este estado será el punto de agregación.
-2.  **Agregación:** El manejador para el estado agregador está marcado con el decorador especial `@blueprint.aggregator_for(...)`. El Orquestador no llamará a este manejador hasta que **todas** las tareas que conducen a este estado se completen.
+2.  **Agregación:** El manejador para el estado agregador está marcado con el decorador especial `@blueprint.aggregator(...)`. El Orquestador no llamará a este manejador hasta que **todas** las tareas que conducen a este estado se completen.
 3.  **Acceso a Resultados:** Dentro del manejador agregador, los resultados de todas las tareas paralelas están disponibles en `context.aggregation_results`. Este es un diccionario donde la clave es `task_id` y el valor es el resultado devuelto por el worker.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 import logging
 
 logger = logging.getLogger(__name__)
 
-parallel_bp = StateMachineBlueprint(
+parallel_bp = Blueprint(
     name="parallel_flow_example",
     api_version="v1",
     api_endpoint="/jobs/parallel_example"
 )
 
-@parallel_bp.handler_for("start", is_start=True)
+@parallel_bp.handler(is_start=True)
 async def start_parallel_tasks(context, actions):
     """
     Este manejador inicia dos tareas que se ejecutarán en paralelo.
@@ -138,8 +138,8 @@ async def start_parallel_tasks(context, actions):
         transitions={"success": "aggregate_results", "failure": "failed"}
     )
 
-@parallel_bp.aggregator_for("aggregate_results")
-async def aggregate_results_handler(context, actions):
+@parallel_bp.aggregator
+async def aggregate_results(context, actions):
     """
     Este manejador se llamará solo después de que tanto task_A como task_B se completen exitosamente.
     """
@@ -153,15 +153,15 @@ async def aggregate_results_handler(context, actions):
 
     context.state_history["aggregated_data"] = processed_results
     logger.info(f"Trabajo {context.job_id}: Datos agregados: {processed_results}")
-    actions.transition_to("end")
+    actions.go_to("end")
 
-@parallel_bp.handler_for("end", is_end=True)
+@parallel_bp.handler(is_end=True)
 async def end_flow(context, actions):
     final_data = context.state_history.get("aggregated_data")
     logger.info(f"Trabajo {context.job_id}: Proceso completo. Datos finales: {final_data}")
 
-@parallel_bp.handler_for("failed", is_end=True)
-async def failed_handler(context, actions):
+@parallel_bp.handler(is_end=True)
+async def failed(context, actions):
     logger.error(f"Trabajo {context.job_id} falló.")
 
 ```
@@ -215,28 +215,28 @@ python -m your_worker_module
 ### **Receta 5: Enrutamiento Condicional con .when()**
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-multilingual_pipeline = StateMachineBlueprint(
+multilingual_pipeline = Blueprint(
     name="multilingual_flow",
     api_version="v1",
     api_endpoint="jobs/multilingual_flow"
 )
 
-@multilingual_pipeline.handler_for("start", is_start=True)
+@multilingual_pipeline.handler(is_start=True)
 async def start_multilingual(context, actions):
     # Este paso solo pasa el control más adelante, donde se activará la lógica condicional
-    actions.transition_to("process_text")
+    actions.go_to("process_text")
 
-@multilingual_pipeline.handler_for("process_text").when("context.initial_data.language == 'en'")
+@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'en'")
 async def process_english_text(context, actions):
     actions.dispatch_task(task_type="process_en", params=context.initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler_for("process_text").when("context.initial_data.language == 'de'")
+@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'de'")
 async def process_german_text(context, actions):
     actions.dispatch_task(task_type="process_de", params=context.initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler_for("finished", is_end=True)
+@multilingual_pipeline.handler("finished", is_end=True)
 async def multilingual_finished(context, actions):
     print(f"Trabajo {context.job_id} terminó el procesamiento.")
 ```
@@ -246,15 +246,15 @@ async def multilingual_finished(context, actions):
 **Tarea:** Para una tarea crítica, usar no solo un worker aleatorio, sino el menos cargado.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-critical_pipeline = StateMachineBlueprint(
+critical_pipeline = Blueprint(
     name="critical_flow",
     api_version="v1",
     api_endpoint="jobs/critical_flow"
 )
 
-@critical_pipeline.handler_for("start", is_start=True)
+@critical_pipeline.handler(is_start=True)
 async def start_critical_task(context, actions):
     actions.dispatch_task(
         task_type="critical_computation",
@@ -264,7 +264,7 @@ async def start_critical_task(context, actions):
         transitions={"success": "finished"}
     )
 
-@critical_pipeline.handler_for("finished", is_end=True)
+@critical_pipeline.handler("finished", is_end=True)
 async def critical_finished(context, actions):
     print(f"Tarea crítica {context.job_id} terminada.")
 ```
@@ -277,15 +277,15 @@ async def critical_finished(context, actions):
 **Solución:** El método `dispatch_task` acepta un parámetro `priority`, que es un flotante. Mayor valor significa mayor prioridad.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-priority_pipeline = StateMachineBlueprint(
+priority_pipeline = Blueprint(
     name="priority_flow",
     api_version="v1",
     api_endpoint="jobs/priority_flow"
 )
 
-@priority_pipeline.handler_for("start", is_start=True)
+@priority_pipeline.handler(is_start=True)
 async def start_priority_task(context, actions):
     # Asignar prioridad diferente dependiendo de los datos de entrada
     is_urgent = context.initial_data.get("is_urgent", False)
@@ -298,7 +298,7 @@ async def start_priority_task(context, actions):
         transitions={"success": "finished"}
     )
 
-@priority_pipeline.handler_for("finished", is_end=True)
+@priority_pipeline.handler("finished", is_end=True)
 async def priority_finished(context, actions):
     print(f"Tarea {context.job_id} terminada.")
 
@@ -311,15 +311,15 @@ async def priority_finished(context, actions):
 **Tarea:** Despachar tarea al worker más barato, pero solo si su costo no excede un cierto umbral.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-cost_optimized_pipeline = StateMachineBlueprint(
+cost_optimized_pipeline = Blueprint(
     name="cost_optimized_flow",
     api_version="v1",
     api_endpoint="jobs/cost_optimized_flow"
 )
 
-@cost_optimized_pipeline.handler_for("start", is_start=True)
+@cost_optimized_pipeline.handler(is_start=True)
 async def start_cost_optimized_task(context, actions):
     actions.dispatch_task(
         task_type="image_compression",
@@ -331,11 +331,11 @@ async def start_cost_optimized_task(context, actions):
         transitions={"success": "finished", "failure": "too_expensive"}
     )
 
-@cost_optimized_pipeline.handler_for("finished", is_end=True)
+@cost_optimized_pipeline.handler("finished", is_end=True)
 async def cost_optimized_finished(context, actions):
     print("Trabajo terminado con optimización de costos.")
 
-@cost_optimized_pipeline.handler_for("too_expensive", is_end=True)
+@cost_optimized_pipeline.handler("too_expensive", is_end=True)
 async def cost_optimized_failed(context, actions):
     print("El trabajo falló porque ningún worker cumplió con los criterios de costo.")
 ```
@@ -351,11 +351,11 @@ async def cost_optimized_failed(context, actions):
 3.  **Persistencia:** Los datos en `data_store` persisten entre llamadas a manejadores e incluso entre diferentes `job_id` del mismo blueprint.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # 1. Crear blueprint y agregar data_store llamado 'request_counter' a él.
 #    También podemos establecer valores iniciales.
-analytics_bp = StateMachineBlueprint(
+analytics_bp = Blueprint(
     name="analytics_flow",
     api_version="v1",
     api_endpoint="jobs/analytics"
@@ -363,7 +363,7 @@ analytics_bp = StateMachineBlueprint(
 analytics_bp.add_data_store("request_counter", {"total_requests": 0})
 
 
-@analytics_bp.handler_for("start", is_start=True)
+@analytics_bp.handler("start", is_start=True)
 async def count_request(context, actions):
     # 2. Acceder al almacén a través del contexto e incrementar contador.
     #    Las operaciones son atómicas ya que Redis es de un solo hilo.
@@ -374,9 +374,9 @@ async def count_request(context, actions):
     # Guardar valor actual del contador en el historial de este trabajo específico
     context.state_history["request_number"] = new_count
 
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
-@analytics_bp.handler_for("finished", is_end=True)
+@analytics_bp.handler("finished", is_end=True)
 async def show_result(context, actions):
     request_num = context.state_history.get("request_number")
     print(f"Trabajo {context.job_id} procesado. Número de solicitud {request_num}.")
@@ -426,15 +426,15 @@ async def process_video(params: dict, task_id: str, job_id: str) -> dict:
 #### **Paso 2: Creación del Blueprint**
 El blueprint debe tener una transición para el nuevo estado `cancelled`.
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-cancellable_pipeline = StateMachineBlueprint(
+cancellable_pipeline = Blueprint(
     name="cancellable_flow",
     api_version="v1",
     api_endpoint="jobs/cancellable"
 )
 
-@cancellable_pipeline.handler_for("start", is_start=True)
+@cancellable_pipeline.handler(is_start=True)
 async def start_long_task(context, actions):
     actions.dispatch_task(
         task_type="long_video_processing",
@@ -446,16 +446,16 @@ async def start_long_task(context, actions):
         }
     )
 
-@cancellable_pipeline.handler_for("finished_successfully", is_end=True)
-async def success_handler(context, actions):
+@cancellable_pipeline.handler(is_end=True)
+async def finished_successfully(context, actions):
     print(f"Trabajo {context.job_id} terminado exitosamente.")
 
-@cancellable_pipeline.handler_for("task_failed", is_end=True)
-async def failure_handler(context, actions):
+@cancellable_pipeline.handler(is_end=True)
+async def task_failed(context, actions):
     print(f"Trabajo {context.job_id} falló.")
 
-@cancellable_pipeline.handler_for("task_cancelled", is_end=True)
-async def cancelled_handler(context, actions):
+@cancellable_pipeline.handler(is_end=True)
+async def task_cancelled(context, actions):
     print(f"Trabajo {context.job_id} cancelado exitosamente.")
 ```
 
@@ -530,38 +530,38 @@ Cuando el soporte S3 está habilitado en el Orquestador, puedes solicitar el arg
 - Dependencias instaladas: `pip install avtomatika[s3]`
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-s3_ops_bp = StateMachineBlueprint(
+s3_ops_bp = Blueprint(
     name="s3_ops_flow",
     api_version="v1",
     api_endpoint="jobs/s3_ops"
 )
 
-@s3_ops_bp.handler_for("check_config", is_start=True)
-async def check_config_handler(context, task_files, actions):
+@s3_ops_bp.handler(is_start=True)
+async def check_config(context, task_files, actions):
     """
     Descarga 'config.json' desde S3 (jobs/{job_id}/config.json),
     lo lee y decide el siguiente paso.
     """
     if not task_files:
         # S3 podría estar deshabilitado en la configuración
-        actions.transition_to("failed")
+        actions.go_to("failed")
         return
 
     try:
         # read_json descarga automáticamente el archivo si no está presente localmente
         config = await task_files.read_json("config.json")
     except Exception:
-        actions.transition_to("config_missing")
+        actions.go_to("config_missing")
         return
 
     if config.get("mode") == "fast":
-        actions.transition_to("fast_processing")
+        actions.go_to("fast_processing")
     else:
-        actions.transition_to("deep_processing")
+        actions.go_to("deep_processing")
 
-@s3_ops_bp.handler_for("fast_processing")
+@s3_ops_bp.handler("fast_processing")
 async def fast_process(context, task_files, actions):
     # ... lógica ...
     
@@ -572,7 +572,7 @@ async def fast_process(context, task_files, actions):
     # await task_files.download("dataset/") # Descarga s3://.../dataset/ a local
     # await task_files.upload("output_folder") # Sube carpeta local a s3://.../output_folder/
 
-    actions.transition_to("finished")
+    actions.go_to("finished")
 ```
 
 ### **Receta 12b: Trabajo con Archivos Grandes vía S3 (Lado del Worker)**
@@ -621,7 +621,7 @@ async def process_video(params: dict, **kwargs) -> dict:
 #### **Paso 2: Creación del Blueprint**
 El Blueprint simplemente pasa el URI S3 como parámetro.
 ```python
-@s3_pipeline.handler_for("start", is_start=True)
+@s3_pipeline.handler(is_start=True)
 async def start_s3_task(context, actions):
     actions.dispatch_task(
         task_type="process_video_from_s3",
@@ -673,7 +673,7 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 #### **Paso 2: Creación del Blueprint**
 El Blueprint puede tener diferentes ramas para diferentes resultados.
 ```python
-@error_handling_bp.handler_for("start", is_start=True)
+@error_handling_bp.handler(is_start=True)
 async def start_api_call(context, actions):
     actions.dispatch_task(
         task_type="fetch_external_data",
@@ -684,8 +684,8 @@ async def start_api_call(context, actions):
         }
     )
 
-@error_handling_bp.handler_for("handle_failure", is_end=True)
-async def failure_handler(context, actions):
+@error_handling_bp.handler(is_end=True)
+async def handle_failure(context, actions):
     # Aquí podemos analizar `job_state` para entender si la tarea fue puesta en cuarentena o simplemente falló.
     job_state = await context.storage.get_job_state(context.job_id)
     if job_state.get("status") == "quarantined":
@@ -702,46 +702,46 @@ async def failure_handler(context, actions):
 El mecanismo de blueprint anidado permite que un pipeline (padre) ejecute otro (hijo) y espere su finalización. El resultado del blueprint hijo (éxito o fallo) se guarda automáticamente en `state_history` del pipeline padre. Esto permite crear flujos de trabajo complejos pero modulares y reutilizables.
 
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # 1. Primero define un blueprint pequeño y reutilizable.
 #    No tiene punto final de API, solo puede ser ejecutado desde otro blueprint.
-text_processing_bp = StateMachineBlueprint(name="text_processor")
+text_processing_bp = Blueprint(name="text_processor")
 
-@text_processing_bp.handler_for("start", is_start=True)
+@text_processing_bp.handler("start", is_start=True)
 async def process(context, actions):
     # ... alguna lógica de procesamiento de texto ...
     text = context.initial_data.get("text", "")
     if not text:
         # Si la entrada es inválida, terminar el blueprint con fallo.
-        actions.transition_to("failed")
+        actions.go_to("failed")
     else:
         # El resultado se puede guardar en `state_history` del blueprint hijo.
         # Aunque no se pasa directamente, está disponible para depuración en el historial.
         context.state_history["processed_text"] = text.upper()
-        actions.transition_to("finished")
+        actions.go_to("finished")
 
-@text_processing_bp.handler_for("finished", is_end=True)
+@text_processing_bp.handler("finished", is_end=True)
 async def text_processing_finished(context, actions):
     pass
 
-@text_processing_bp.handler_for("failed", is_end=True)
+@text_processing_bp.handler("failed", is_end=True)
 async def text_processing_failed(context, actions):
     pass
 
 
 # 2. Ahora crea el pipeline principal llamándolo.
-main_pipeline = StateMachineBlueprint(
+main_pipeline = Blueprint(
     name="main_flow",
     api_version="v1",
     api_endpoint="jobs/main_flow"
 )
 
-@main_pipeline.handler_for("start", is_start=True)
+@main_pipeline.handler("start", is_start=True)
 async def parent_start(context, actions):
-    actions.transition_to("process_user_text")
+    actions.go_to("process_user_text")
 
-@main_pipeline.handler_for("process_user_text")
+@main_pipeline.handler("process_user_text")
 async def main_handler(context, actions):
     user_text = context.initial_data.get("raw_text", "")
     actions.run_blueprint(
@@ -750,7 +750,7 @@ async def main_handler(context, actions):
         transitions={"success": "final_step", "failure": "sub_job_failed"}
     )
 
-@main_pipeline.handler_for("final_step")
+@main_pipeline.handler
 async def final_step_handler(context, actions):
     # Resultado del blueprint hijo guardado en `state_history`.
     # Clave generada automáticamente. Podemos encontrarla iterando claves.
@@ -765,18 +765,18 @@ async def final_step_handler(context, actions):
     else:
         print("Resultado de sub-blueprint no encontrado en historial de estado.")
 
-    actions.transition_to("finished")
+    actions.go_to("finished")
 
-@main_pipeline.handler_for("sub_job_failed")
+@main_pipeline.handler
 async def sub_job_failed_handler(context, actions):
     print("Sub-blueprint falló, manejando fallo en padre.")
-    actions.transition_to("failed")
+    actions.go_to("failed")
 
-@main_pipeline.handler_for("finished", is_end=True)
+@main_pipeline.handler("finished", is_end=True)
 async def main_finished(context, actions):
     pass
 
-@main_pipeline.handler_for("failed", is_end=True)
+@main_pipeline.handler("failed", is_end=True)
 async def main_failed(context, actions):
     pass
 ```
@@ -785,7 +785,7 @@ async def main_failed(context, actions):
 
 **Tarea:** Analizar o documentar un pipeline complejo generando automáticamente su esquema visual.
 
-**Solución:** Cada objeto `StateMachineBlueprint` tiene un método integrado `.render_graph()` que utiliza `graphviz` para crear un diagrama de estado y transición. Analiza el código de tus manejadores para encontrar llamadas a `actions.transition_to()` y `actions.dispatch_task()` y construye el gráfico basado en ellas.
+**Solución:** Cada objeto `Blueprint` tiene un método integrado `.render_graph()` que utiliza `graphviz` para crear un diagrama de estado y transición. Analiza el código de tus manejadores para encontrar llamadas a `actions.go_to()` y `actions.dispatch_task()` y construye el gráfico basado en ellas.
 
 **Prerrequisito:**
 **Graphviz** debe estar instalado en tu sistema para que esta función funcione.
@@ -795,28 +795,28 @@ async def main_failed(context, actions):
 
 **Ejemplo:**
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # Tomar pipeline de lógica condicional de otra receta
-conditional_pipeline = StateMachineBlueprint(name="conditional_flow")
+conditional_pipeline = Blueprint(name="conditional_flow")
 
-@conditional_pipeline.handler_for("start", is_start=True)
+@conditional_pipeline.handler(is_start=True)
 async def start(context, actions):
-    actions.transition_to("process_data")
+    actions.go_to("process_data")
 
-@conditional_pipeline.handler_for("process_data").when("context.initial_data.type == 'A'")
+@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'A'")
 async def process_a(context, actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler_for("process_data").when("context.initial_data.type == 'B'")
+@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'B'")
 async def process_b(context, actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler_for("finished", is_end=True)
+@conditional_pipeline.handler(is_end=True)
 async def finished(context, actions):
     print("Terminado.")
 
-@conditional_pipeline.handler_for("failed", is_end=True)
+@conditional_pipeline.handler(is_end=True)
 async def failed(context, actions):
     print("Fallado.")
 
@@ -869,15 +869,15 @@ languages = ["en"]
 
 #### **Paso 2: Uso en Blueprint**
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-premium_features_bp = StateMachineBlueprint(
+premium_features_bp = Blueprint(
     name="premium_flow",
     api_version="v1",
     api_endpoint="jobs/premium_flow"
 )
 
-@premium_features_bp.handler_for("start", is_start=True)
+@premium_features_bp.handler(is_start=True)
 async def start_premium_flow(context, actions):
     # Obtener configuración del cliente que hizo la solicitud
     client_config = context.client.config
@@ -899,13 +899,13 @@ async def start_premium_flow(context, actions):
         )
     else:
         # Error para otros
-        actions.transition_to("failed", error_message="Idioma no soportado para su plan")
+        actions.go_to("failed", error_message="Idioma no soportado para su plan")
 
-@premium_features_bp.handler_for("finished", is_end=True)
+@premium_features_bp.handler("finished", is_end=True)
 async def premium_finished(context, actions):
     pass
 
-@premium_features_bp.handler_for("failed", is_end=True)
+@premium_features_bp.handler("failed", is_end=True)
 async def premium_failed(context, actions):
     pass
 ```
@@ -922,16 +922,16 @@ El manejador inicial es la "puerta de entrada" de tu pipeline. Lugar ideal para:
 
 **Ejemplo:**
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 
-validation_bp = StateMachineBlueprint(
+validation_bp = Blueprint(
     name="validation_example",
     api_version="v1",
     api_endpoint="jobs/validation"
 )
 
-@validation_bp.handler_for("validate_input", is_start=True)
-async def validate_input_handler(context, actions):
+@validation_bp.handler(is_start=True)
+async def validate_input(context, actions):
     """
     Valida datos de entrada y decide a dónde dirigir el proceso.
     """
@@ -939,7 +939,7 @@ async def validate_input_handler(context, actions):
     document_type = context.initial_data.get("document_type")
 
     if not user_id or not document_type:
-        actions.transition_to("invalid_input_failed")
+        actions.go_to("invalid_input_failed")
         return
 
     # Guardar datos validados en state_history para usar en otros manejadores
@@ -948,21 +948,21 @@ async def validate_input_handler(context, actions):
 
     # Enrutamiento basado en tipo de documento
     if document_type == "invoice":
-        actions.transition_to("process_invoice")
+        actions.go_to("process_invoice")
     else:
-        actions.transition_to("process_other_document")
+        actions.go_to("process_other_document")
 
 # ... (otros manejadores) ...
 
-@validation_bp.handler_for("invalid_input_failed", is_end=True)
-async def invalid_input_handler(context, actions):
+@validation_bp.handler(is_end=True)
+async def invalid_input_failed(context, actions):
     print(f"El trabajo {context.job_id} falló debido a entrada inválida.")
 
 ```
 
 #### **Propósito de los Manejadores `is_end=True`**
 
-Los manejadores finales son la "salida" de tu pipeline. Realizan acciones finales y **no deben** contener llamadas a `actions.transition_to()` o `dispatch_task()`.
+Los manejadores finales son la "salida" de tu pipeline. Realizan acciones finales y **no deben** contener llamadas a `actions.go_to()` o `dispatch_task()`.
 
 **Usos Clave:**
 1.  **Registro Final y Notificación:** Registrar resultado, enviar correo electrónico o mensaje de Slack.
@@ -971,15 +971,15 @@ Los manejadores finales son la "salida" de tu pipeline. Realizan acciones finale
 
 **Ejemplo:**
 ```python
-from orchestrator.blueprint import StateMachineBlueprint
+from avtomatika import Blueprint
 import os
 
-finalization_bp = StateMachineBlueprint(name="finalization_example")
+finalization_bp = Blueprint(name="finalization_example")
 
 # ... (pasos intermedios que conducen a diferentes resultados) ...
 
-@finalization_bp.handler_for("cleanup_and_notify_success", is_end=True)
-async def success_handler(context, actions):
+@finalization_bp.handler(is_end=True)
+async def cleanup_and_notify_success(context, actions):
     """
     Ejecutado al completar exitosamente.
     """
@@ -992,8 +992,8 @@ async def success_handler(context, actions):
     print(f"Trabajo {context.job_id} terminado exitosamente. Notificación enviada.")
 
 
-@finalization_bp.handler_for("handle_rejection", is_end=True)
-async def rejection_handler(context, actions):
+@finalization_bp.handler(is_end=True)
+async def handle_rejection(context, actions):
     """
     Ejecutado si el proceso fue rechazado.
     """
@@ -1011,15 +1011,15 @@ Usar `is_start` e `is_end` de esta manera hace que tus pipelines sean más estru
 **Solución:** El método `dispatch_task` en `ActionFactory` acepta el parámetro `resource_requirements`, permitiendo especificar los requisitos mínimos de recursos del worker. El Despachador filtra automáticamente a los workers que no cumplen con estos requisitos.
 
 ```python
-from avtomatika.blueprint import StateMachineBlueprint
+from avtomatika.blueprint import Blueprint
 
-gpu_intensive_pipeline = StateMachineBlueprint(
+gpu_intensive_pipeline = Blueprint(
     name="gpu_intensive_flow",
     api_version="v1",
     api_endpoint="jobs/gpu_flow"
 )
 
-@gpu_intensive_pipeline.handler_for("start")
+@gpu_intensive_pipeline.handler
 async def start_gpu_task(context, actions):
     actions.dispatch_task(
         task_type="video_montage",

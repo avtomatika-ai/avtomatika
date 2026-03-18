@@ -233,7 +233,7 @@ async def test_recursive_upload(config):
 @pytest.mark.asyncio
 async def test_job_executor_s3_injection(config):
     from avtomatika.app_keys import S3_SERVICE_KEY
-    from avtomatika.blueprint import StateMachineBlueprint
+    from avtomatika.blueprint import Blueprint
     from avtomatika.engine import OrchestratorEngine
     from avtomatika.executor import JobExecutor
 
@@ -251,17 +251,17 @@ async def test_job_executor_s3_injection(config):
     mock_s3.get_task_files.return_value = mock_task_files
     engine.app[S3_SERVICE_KEY] = mock_s3
 
-    bp = StateMachineBlueprint("s3_test")
+    bp = Blueprint("s3_test")
     handler_called = False
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def s3_handler(task_files, actions):
         nonlocal handler_called
         assert task_files is mock_task_files
         handler_called = True
-        actions.transition_to("finished")
+        actions.go_to("finished")
 
-    @bp.handler_for("finished", is_end=True)
+    @bp.handler("finished", is_end=True)
     async def end_handler():
         pass
 
@@ -286,7 +286,7 @@ async def test_job_executor_s3_injection(config):
 @pytest.mark.asyncio
 async def test_job_executor_s3_auto_cleanup(config):
     from avtomatika.app_keys import S3_SERVICE_KEY
-    from avtomatika.blueprint import StateMachineBlueprint
+    from avtomatika.blueprint import Blueprint
     from avtomatika.engine import OrchestratorEngine
     from avtomatika.executor import JobExecutor
 
@@ -306,9 +306,9 @@ async def test_job_executor_s3_auto_cleanup(config):
     mock_s3.get_task_files.return_value = mock_task_files
     engine.app[S3_SERVICE_KEY] = mock_s3
 
-    bp = StateMachineBlueprint("cleanup_test")
+    bp = Blueprint("cleanup_test")
 
-    @bp.handler_for("start", is_start=True, is_end=True)
+    @bp.handler("start", is_start=True, is_end=True)
     async def terminal_handler():
         pass
 

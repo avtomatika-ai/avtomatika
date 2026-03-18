@@ -74,7 +74,7 @@ Encapsulates core business logic, separating it from the HTTP API.
 This is the central class that brings all components together. Its main tasks:
 - Initialize the `aiohttp` web application and delegate route setup to the API layer.
 - **Initialize Services:** Bootstraps `WorkerService`, `S3Service`, etc.
-- **Register "Blueprints":** Supports both manual registration of `StateMachineBlueprint` and automatic loading from a directory specified by `BLUEPRINTS_DIR`.
+- **Register "Blueprints":** Supports both manual registration of `Blueprint` and automatic loading from a directory specified by `BLUEPRINTS_DIR`.
 - Manage the lifecycle of background processes (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
 - Provide access to shared resources via `aiohttp.web.AppKey`.
 
@@ -86,13 +86,16 @@ The HTTP API handling logic has been decoupled from the core engine to improve m
 -   **`handlers.py`**: Contains the actual request handlers for Client and Public endpoints.
 -   **Worker API**: Now handled by `HttpListener` from the `rxon` library, which is integrated directly into `OrchestratorEngine`. This listener manages the lower-level HTTP details of the RXON protocol.
 
-### 2. `StateMachineBlueprint`
+### 2. `Blueprint`
 **Location:** `src/avtomatika/blueprint.py`
 
 This is a declarative way to define a workflow (pipeline).
+
+> **Tip:** The state name in `@bp.handler()` and `@bp.aggregator()` is now optional. If omitted, the function name will be used as the state name.
+
 - **State Machine:** Each blueprint represents a state machine where states are process steps, and transitions are defined by logic inside "handlers".
-- **Handlers:** Functions bound to specific states using the `@blueprint.handler_for("state_name")` decorator. They receive `JobContext` and `ActionFactory` to perform actions.
-- **Explicit State Definition:** The `@blueprint.handler_for` decorator accepts two boolean flags:
+- **Handlers:** Functions bound to specific states using the `@blueprint.handler` decorator. They receive `JobContext` and `ActionFactory` to perform actions.
+- **Explicit State Definition:** The `@blueprint.handler` decorator accepts two boolean flags:
     - `is_start=True`: Marks the state as **initial**. Each blueprint must have exactly one such state.
     - `is_end=True`: Marks the state as **final** (terminal). A blueprint can have multiple such states.
 - **Validation:** When registering a blueprint in `OrchestratorEngine`, the `validate()` method is automatically called, which checks that the blueprint has exactly one start state. This prevents configuration errors at an early stage.
@@ -106,7 +109,7 @@ This is a declarative way to define a workflow (pipeline).
 This is the main background process responsible for executing jobs.
 - **Execution Loop:** Constantly retrieves jobs from the queue in Redis (`dequeue_job`).
 - **Job Processing:** For each job, it finds the corresponding handler in the blueprint and executes it.
-- **State Management:** After executing the handler, it processes actions requested via `ActionFactory`. This can be a simple transition to a new state (`transition_to`) or more complex logic, such as dispatching a task to a worker (`dispatch_task`).
+- **State Management:** After executing the handler, it processes actions requested via `ActionFactory`. This can be a simple transition to a new state (`go_to`) or more complex logic, such as dispatching a task to a worker (`dispatch_task`).
 
   **Asynchronous Transitions with `dispatch_task`**
 
@@ -168,8 +171,8 @@ This is the main background process responsible for executing jobs.
 
       ```python
       # Handler starting parallel tasks
-      @blueprint.handler_for("start_parallel_tasks")
-      async def start_parallel_work(context, actions):
+      @blueprint.handler
+      async def start_parallel_tasks(context, actions):
           # Dispatch task A
           actions.dispatch_task(
               task_type="task_a",
@@ -184,14 +187,14 @@ This is the main background process responsible for executing jobs.
           )
       ```
   2.  **Result Aggregation:**
-      - The handler intended to collect results is marked with the special decorator `@blueprint.aggregator_for("state_name")`.
+      - The handler intended to collect results is marked with the special decorator `@blueprint.aggregator`.
       - This handler will be executed only **after ALL parallel branches leading to this state are complete**.
       - Inside the aggregator, results of all executed tasks are available via `context.aggregation_results`.
 
       ```python
       # Aggregator handler
-      @blueprint.aggregator_for("aggregate_results")
-      async def aggregator(context, actions):
+      @blueprint.aggregator
+      async def aggregate_results(context, actions):
           # Results are available as a dictionary: {task_id: result_dict}
           results = context.aggregation_results
 
@@ -201,7 +204,7 @@ This is the main background process responsible for executing jobs.
 
           # Save final result and proceed
           context.state_history["summary"] = summary
-          actions.transition_to("final_step")
+          actions.go_to("final_step")
       ```
       - `context.aggregation_results` is a dictionary where keys are task IDs and values are full result objects returned by workers.
 
@@ -222,7 +225,7 @@ Each handler receives a `context` object as input, which contains all necessary 
 As a second argument, each handler receives an `actions` object. This object provides methods by which the handler determines what should happen after its execution. **Only one** `actions` method can be called within a single handler.
 
 **Key Methods:**
-- `actions.transition_to(state: str)`: Simply transitions the state machine to the next state. Execution will continue immediately.
+- `actions.go_to(state: str)`: Simply transitions the state machine to the next state. Execution will continue immediately.
 - `actions.dispatch_task(task_type, params, transitions, priority, ...)`: Dispatches a task for execution to a worker and pauses the pipeline until a result is received. The `transitions` dictionary determines which state the pipeline will transition to depending on the `status` returned by the worker. The `priority` parameter allows specifying task priority.
 - `actions.await_human_approval(message, transitions)`: Pauses the pipeline until an external system or human sends a webhook with a decision.
 - `actions.run_blueprint(blueprint_name, initial_data, transitions)`: Runs another (child) blueprint as part of the current pipeline. The main pipeline will be paused until the child one completes.
@@ -237,15 +240,15 @@ The system supports a dependency injection mechanism that allows providing handl
 
   my_cache = AsyncDictStore({"initial_key": "initial_value"})
 
-  bp = StateMachineBlueprint(
-      "my_blueprint_with_datastore",
+  bp = Blueprint(
+      "bp_with_datastore",
       data_stores={"cache": my_cache}
   )
   ```
 - **Access in Handler:** Registered `DataStores` become available inside any handler of this blueprint via the `context` object. Access is by name specified during registration.
   ```python
-  @bp.handler_for("some_state")
-  async def my_handler(context, actions):
+  @bp.handler
+  async def some_state(context, actions):
       # Access our cache
       value = await context.data_stores.cache.get("some_key")
       print(f"Value from cache: {value}")

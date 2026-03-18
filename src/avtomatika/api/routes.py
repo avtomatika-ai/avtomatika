@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     """Sets up application routes for Public and Client APIs."""
 
-    # --- Public API (Unprotected) ---
     public_app = web.Application()
     public_app[ENGINE_KEY] = engine
     public_app.router.add_get("/status", status_handler)
@@ -52,7 +51,6 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     public_app.router.add_get("/jobs/quarantined", get_quarantined_jobs_handler)
     app.add_subapp("/_public/", public_app)
 
-    # --- Protected API (Client Access) ---
     if engine.config.ENABLE_CLIENT_API:
         auth_middleware = client_auth_middleware_factory(engine.storage)
         quota_middleware = quota_middleware_factory(engine.storage)
@@ -63,7 +61,6 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
         versioned_apps: dict[str, web.Application] = {}
         has_unversioned_routes = False
 
-        # Register Blueprint routes
         for bp in engine.blueprints.values():
             if not bp.api_endpoint:
                 continue
@@ -80,7 +77,6 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
                 protected_app.router.add_post(endpoint, handler)
                 has_unversioned_routes = True
 
-        # Common routes for all protected apps
         all_protected_apps = list(versioned_apps.values())
         if has_unversioned_routes:
             all_protected_apps.append(protected_app)
@@ -88,7 +84,6 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
         for sub_app in all_protected_apps:
             _register_common_routes(sub_app, engine)
 
-        # Mount protected apps
         if has_unversioned_routes:
             app.add_subapp("/api/", protected_app)
         for version, sub_app in versioned_apps.items():

@@ -76,8 +76,6 @@ def setup_telemetry(service_name: str = "avtomatika") -> Any:
 
     provider.add_span_processor(processor)
 
-    # Sets the global default tracer provider
     trace.set_tracer_provider(provider)
 
-    # Returns a tracer from the global provider
     return trace.get_tracer(__name__)

@@ -218,11 +218,11 @@ async def test_get_jobs_invalid_params(engine, request_mock):
 
 @pytest.mark.asyncio
 async def test_docs_handler_injection(engine, request_mock):
-    from avtomatika.blueprint import StateMachineBlueprint
+    from avtomatika.blueprint import Blueprint
 
-    bp = StateMachineBlueprint(name="test_bp", api_endpoint="/jobs/test", api_version="v1")
+    bp = Blueprint(name="test_bp", api_endpoint="/jobs/test", api_version="v1")
 
-    @bp.handler_for("start", is_start=True)
+    @bp.handler("start", is_start=True)
     async def start(context, actions):
         pass
 

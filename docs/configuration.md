@@ -156,7 +156,7 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WORKERS_CONFIG_PATH` | Path to `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Path to `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Path to `schedules.toml`. | `""` |
-| `BLUEPRINTS_DIR` | Path to a directory with Python files containing `StateMachineBlueprint` instances to be loaded automatically. | `""` |
+| `BLUEPRINTS_DIR` | Path to a directory with Python files containing `Blueprint` instances to be loaded automatically. | `""` |
 | `TZ` | **Global Timezone:** Affects scheduler triggers, log timestamps, and history API output (e.g., "Europe/Moscow", "UTC"). | `UTC` |
 | `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
 | `LOG_FORMAT` | Log format (`text` or `json`). | `json` |

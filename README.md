@@ -86,7 +86,7 @@ You can easily integrate and run the orchestrator engine within your own applica
 ```python
 # my_app.py
 import asyncio
-from avtomatika import OrchestratorEngine, StateMachineBlueprint
+from avtomatika import OrchestratorEngine, Blueprint
 from avtomatika.context import ActionFactory
 from avtomatika.storage import MemoryStorage
 from avtomatika.config import Config
@@ -102,28 +102,28 @@ config.CLIENT_TOKEN = "my-secret-client-token"
 config.GLOBAL_WORKER_TOKEN = "my-secret-worker-token"
 
 # 2. Define the Workflow Blueprint
-my_blueprint = StateMachineBlueprint(
-    name="my_first_blueprint",
+bp = Blueprint(
+    name="bp",
     api_version="v1",
     api_endpoint="/jobs/my_flow"
 )
 
 # Use dependency injection to get only the data you need.
-@my_blueprint.handler_for("start", is_start=True)
-async def start_handler(job_id: str, initial_data: dict, actions: ActionFactory):
+@bp.handler(is_start=True)
+async def start(job_id: str, initial_data: dict, actions: ActionFactory):
     """The initial state for each new job."""
     print(f"Job {job_id} | Start: {initial_data}")
-    actions.transition_to("end")
+    actions.go_to("end")
 
 # You can still request the full context object if you prefer.
-@my_blueprint.handler_for("end", is_end=True)
-async def end_handler(context):
+@bp.handler(is_end=True)
+async def end(context):
     """The final state. The pipeline ends here."""
     print(f"Job {context.job_id} | Complete.")
 
 # 3. Initialize the Orchestrator Engine
 engine = OrchestratorEngine(storage, config)
-engine.register_blueprint(my_blueprint)
+engine.register_blueprint(bp)
 
 # 4. Accessing Components (Optional)
 # You can access the internal aiohttp app and core components using AppKeys
@@ -163,13 +163,15 @@ State handlers are the core of your workflow logic. Avtomatika provides a powerf
 
 Instead of receiving a single, large `context` object, your handler can ask for exactly what it needs as function arguments. The engine will automatically provide them.
 
+> **Tip:** The state name in `@bp.handler()` and `@bp.aggregator()` is now optional. If omitted, the name of the function will be used as the state name.
+
 The following arguments can be injected by name:
 
 *   **From the core job context:**
     *   `job_id` (str): The ID of the current job.
     *   `initial_data` (dict): The data the job was created with.
     *   `state_history` (dict): A dictionary for storing and passing data between steps. Data returned by workers is automatically merged into this dictionary.
-    *   `actions` (ActionFactory): The object used to tell the orchestrator what to do next (e.g., `actions.transition_to(...)`).
+    *   `actions` (ActionFactory): The object used to tell the orchestrator what to do next (e.g., `actions.go_to(...)`).
     *   `client` (ClientConfig): Information about the API client that started the job.
     *   `data_stores` (SimpleNamespace): Access to shared resources like database connections or caches.
 *   **From worker results:**
@@ -183,22 +185,22 @@ This is the recommended way to write handlers.
 # A worker for this task returned: {"output_path": "/videos/123.mp4", "duration": 95}
 # This dictionary was automatically merged into `state_history`.
 
-@my_blueprint.handler_for("publish_video")
-async def publish_handler(
+@bp.handler
+async def publish_video(
     job_id: str,
     output_path: str, # Injected from state_history
     duration: int,    # Injected from state_history
     actions: ActionFactory
 ):
     print(f"Job {job_id}: Publishing video at {output_path} ({duration}s).")
-    actions.transition_to("complete")
+    actions.go_to("complete")
 ```
 
 ### The `actions` Object
 
 This is the most important injected argument. It tells the orchestrator what to do next. **Only one** `actions` method can be called in a single handler.
 
-*   `actions.transition_to("next_state")`: Moves the job to a new state.
+*   `actions.go_to("next_state")`: Moves the job to a new state.
 *   `actions.dispatch_task(...)`: Delegates work to a Worker.
 *   `actions.dispatch_parallel(...)`: Runs multiple tasks at once.
 *   `actions.await_human_approval(...)`: Pauses the workflow for external input.
@@ -210,13 +212,13 @@ For backward compatibility or if you prefer to have a single object, you can sti
 
 ```python
 # This handler is equivalent to the one above.
-@my_blueprint.handler_for("publish_video")
-async def publish_handler_old_style(context):
+@bp.handler
+async def publish_video(context):
     output_path = context.state_history.get("output_path")
     duration = context.state_history.get("duration")
 
     print(f"Job {context.job_id}: Publishing video at {output_path} ({duration}s).")
-    context.actions.transition_to("complete")
+    context.actions.go_to("complete")
 ```
 ## Key Concepts: JobContext and Actions
 
@@ -263,14 +265,14 @@ Use `.when()` to create conditional logic branches. The condition string is eval
 
 ```python
 # The `.when()` condition still refers to `context`.
-@my_blueprint.handler_for("decision_step").when("context.initial_data.type == 'urgent'")
-async def handle_urgent(actions):
-    actions.transition_to("urgent_processing")
+@bp.handler().when("context.initial_data.type == 'urgent'")
+async def decision_step(actions):
+    actions.go_to("urgent_processing")
 
 # The default handler if no `.when()` condition matches.
-@my_blueprint.handler_for("decision_step")
-async def handle_normal(actions):
-    actions.transition_to("normal_processing")
+@bp.handler
+async def decision_step(actions):
+    actions.go_to("normal_processing")
 ```
 
 > **Note on Limitations:** The current version of `.when()` uses a simple parser with the following limitations:
@@ -283,8 +285,8 @@ async def handle_normal(actions):
 This is the primary function for delegating work. The orchestrator will queue the task and wait for a worker to pick it up and return a result.
 
 ```python
-@my_blueprint.handler_for("transcode_video")
-async def transcode_handler(initial_data, actions):
+@bp.handler
+async def transcode_video(initial_data, actions):
     actions.dispatch_task(
         task_type="video_transcoding",
         params={"input_path": initial_data.get("path")},
@@ -304,8 +306,8 @@ Run multiple tasks simultaneously and gather their results.
 
 ```python
 # 1. Fan-out: Dispatch multiple tasks to be aggregated into a single state
-@my_blueprint.handler_for("process_files")
-async def fan_out_handler(initial_data, actions):
+@bp.handler
+async def process_files(initial_data, actions):
     tasks_to_dispatch = [
         {"task_type": "file_analysis", "params": {"file": file}}
         for file in initial_data.get("files", [])
@@ -317,16 +319,16 @@ async def fan_out_handler(initial_data, actions):
         aggregate_into="aggregate_results"
     )
 
-# 2. Fan-in: Collect results using the @aggregator_for decorator
-@my_blueprint.aggregator_for("aggregate_results")
-async def aggregator_handler(aggregation_results, state_history, actions):
+# 2. Fan-in: Collect results using the @aggregator decorator
+@bp.aggregator
+async def aggregate_results(aggregation_results, state_history, actions):
     # This handler will only execute AFTER ALL tasks
     # dispatched by dispatch_parallel are complete.
 
     # aggregation_results is a dictionary of {task_id: result_dict}
     summary = [res.get("data") for res in aggregation_results.values()]
     state_history["summary"] = summary
-    actions.transition_to("processing_complete")
+    actions.go_to("processing_complete")
 ```
 
 ### 4. Dependency Injection (DataStore)
@@ -338,14 +340,14 @@ import redis.asyncio as redis
 
 # 1. Initialize and register your DataStore
 redis_client = redis.Redis(decode_responses=True)
-bp = StateMachineBlueprint(
+bp = Blueprint(
     "blueprint_with_datastore",
     data_stores={"cache": redis_client}
 )
 
 # 2. Use it in a handler via dependency injection
-@bp.handler_for("get_from_cache")
-async def cache_handler(data_stores):
+@bp.handler
+async def get_from_cache(data_stores):
     # Access the redis_client by the name "cache"
     user_data = await data_stores.cache.get("user:123")
     print(f"User from cache: {user_data}")
@@ -382,7 +384,7 @@ Orchestrator provides first-class support for handling large files via S3-compat
 *   **Directory Support**: Supports recursive download and upload of entire directories.
 
 ```python
-@bp.handler_for("process_data")
+@bp.handler
 async def process_data(task_files, actions):
     # Streaming download of a large file
     local_path = await task_files.download("large_dataset.csv")
@@ -392,7 +394,7 @@ async def process_data(task_files, actions):
     # Upload results
     await task_files.write_json("results.json", {"status": "done"})
     
-    actions.transition_to("finished")
+    actions.go_to("finished")
 ```
 
 ## Production Configuration
@@ -536,7 +538,7 @@ By default, the engine uses in-memory storage. For production, you must configur
 Avtomatika supports automatic loading of blueprints from a directory. This allows you to deploy and update your workflow logic by simply copying Python files without changing the orchestrator's core code.
 
 *   **Configure**: Set the `BLUEPRINTS_DIR` environment variable to the path containing your blueprint files.
-*   **How it works**: At startup, the engine scans the directory for all `.py` files, imports them, and automatically registers any found `StateMachineBlueprint` instances.
+*   **How it works**: At startup, the engine scans the directory for all `.py` files, imports them, and automatically registers any found `Blueprint` instances.
 
 ### Security
 

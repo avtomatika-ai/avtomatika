@@ -74,7 +74,7 @@ Encapsula la lógica comercial central, separándola de la API HTTP.
 Esta es la clase central que une todos los componentes. Sus tareas principales:
 - Inicializar la aplicación web `aiohttp` y delegar la configuración de rutas a la capa API.
 - **Inicializar Servicios:** Arranca `WorkerService`, `S3Service`, etc.
-- **Registrar "Blueprints":** Admite tanto el registro manual de `StateMachineBlueprint` como la carga automática desde un directorio especificado por `BLUEPRINTS_DIR`.
+- **Registrar "Blueprints":** Admite tanto el registro manual de `Blueprint` como la carga automática desde un directorio especificado por `BLUEPRINTS_DIR`.
 - Gestionar el ciclo de vida de los procesos en segundo plano (`JobExecutor`, `Watcher`, `HealthChecker`, `ReputationCalculator`, `Scheduler`).
 - Proporcionar acceso a recursos compartidos a través de `aiohttp.web.AppKey`.
 
@@ -86,13 +86,16 @@ La lógica de manejo de la API HTTP se ha desacoplado del motor central para mej
 -   **`handlers.py`**: Contiene los manejadores de solicitudes reales para los puntos finales de Cliente y Público.
 -   **API de Worker**: Ahora manejada por `HttpListener` de la librería `rxon`, que está integrada directamente en `OrchestratorEngine`. Este oyente gestiona los detalles HTTP de nivel inferior del protocolo RXON.
 
-### 2. `StateMachineBlueprint`
+### 2. `Blueprint`
 **Ubicación:** `src/avtomatika/blueprint.py`
 
 Esta es una forma declarativa de definir un flujo de trabajo (pipeline).
+
+> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
+
 - **Máquina de Estados:** Cada blueprint representa una máquina de estados donde los estados son pasos del proceso y las transiciones se definen mediante la lógica dentro de los "manejadores".
-- **Manejadores:** Funciones vinculadas a estados específicos utilizando el decorador `@blueprint.handler_for("state_name")`. Reciben `JobContext` y `ActionFactory` para realizar acciones.
-- **Definición Explícita de Estado:** El decorador `@blueprint.handler_for` acepta dos banderas booleanas:
+- **Manejadores:** Funciones vinculadas a estados específicos utilizando el decorador `@blueprint.handler`. Reciben `JobContext` y `ActionFactory` para realizar acciones.
+- **Definición Explícita de Estado:** El decorador `@blueprint.handler` acepta dos banderas booleanas:
     - `is_start=True`: Marca el estado como **inicial**. Cada blueprint debe tener exactamente un estado de este tipo.
     - `is_end=True`: Marca el estado como **final** (terminal). Un blueprint puede tener múltiples estados de este tipo.
 - **Validación:** Al registrar un blueprint en `OrchestratorEngine`, se llama automáticamente al método `validate()`, que comprueba que el blueprint tiene exactamente un estado inicial. Esto evita errores de configuración en una etapa temprana.
@@ -106,7 +109,7 @@ Esta es una forma declarativa de definir un flujo de trabajo (pipeline).
 Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
 - **Bucle de Ejecución:** Recupera constantemente trabajos de la cola en Redis (`dequeue_job`).
 - **Procesamiento de Trabajos:** Para cada trabajo, encuentra el manejador correspondiente en el blueprint y lo ejecuta.
-- **Gestión de Estado:** Después de ejecutar el manejador, procesa las acciones solicitadas a través de `ActionFactory`. Esto puede ser una simple transición a un nuevo estado (`transition_to`) o una lógica más compleja, como despachar una tarea a un worker (`dispatch_task`).
+- **Gestión de Estado:** Después de ejecutar el manejador, procesa las acciones solicitadas a través de `ActionFactory`. Esto puede ser una simple transición a un nuevo estado (`go_to`) o una lógica más compleja, como despachar una tarea a un worker (`dispatch_task`).
 
   **Transiciones Asíncronas con `dispatch_task`**
 
@@ -168,7 +171,7 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
 
       ```python
       # Manejador iniciando tareas paralelas
-      @blueprint.handler_for("start_parallel_tasks")
+      @blueprint.handler("start_parallel_tasks")
       async def start_parallel_work(context, actions):
           # Despachar tarea A
           actions.dispatch_task(
@@ -184,13 +187,13 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
           )
       ```
   2.  **Agregación de Resultados:**
-      - El manejador destinado a recopilar resultados está marcado con el decorador especial `@blueprint.aggregator_for("state_name")`.
+      - El manejador destinado a recopilar resultados está marcado con el decorador especial `@blueprint.aggregator("state_name")`.
       - Este manejador se ejecutará solo **después de que TODAS las ramas paralelas que conducen a este estado estén completas**.
       - Dentro del agregador, los resultados de todas las tareas ejecutadas están disponibles a través de `context.aggregation_results`.
 
       ```python
       # Manejador agregador
-      @blueprint.aggregator_for("aggregate_results")
+      @blueprint.aggregator("aggregate_results")
       async def aggregator(context, actions):
           # Los resultados están disponibles como un diccionario: {task_id: result_dict}
           results = context.aggregation_results
@@ -201,7 +204,7 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
 
           # Guardar resultado final y proceder
           context.state_history["summary"] = summary
-          actions.transition_to("final_step")
+          actions.go_to("final_step")
       ```
       - `context.aggregation_results` es un diccionario donde las claves son IDs de tareas y los valores son objetos de resultado completos devueltos por los workers.
 
@@ -222,7 +225,7 @@ Cada manejador recibe un objeto `context` como entrada, que contiene toda la inf
 Como segundo argumento, cada manejador recibe un objeto `actions`. Este objeto proporciona métodos mediante los cuales el manejador determina qué debe suceder después de su ejecución. **Solo se puede llamar a un** método `actions` dentro de un solo manejador.
 
 **Métodos Clave:**
-- `actions.transition_to(state: str)`: Simplemente transiciona la máquina de estados al siguiente estado. La ejecución continuará inmediatamente.
+- `actions.go_to(state: str)`: Simplemente transiciona la máquina de estados al siguiente estado. La ejecución continuará inmediatamente.
 - `actions.dispatch_task(task_type, params, transitions, priority, ...)`: Despacha una tarea para su ejecución a un worker y pausa el pipeline hasta que se reciba un resultado. El diccionario `transitions` determina a qué estado pasará el pipeline dependiendo del `status` devuelto por el worker. El parámetro `priority` permite especificar la prioridad de la tarea.
 - `actions.await_human_approval(message, transitions)`: Pausa el pipeline hasta que un sistema externo o humano envíe un webhook con una decisión.
 - `actions.run_blueprint(blueprint_name, initial_data, transitions)`: Ejecuta otro blueprint (secundario) como parte del pipeline actual. El pipeline principal se pausará hasta que el secundario se complete.
@@ -237,14 +240,14 @@ El sistema admite un mecanismo de inyección de dependencias que permite proporc
 
   my_cache = AsyncDictStore({"initial_key": "initial_value"})
 
-  bp = StateMachineBlueprint(
-      "my_blueprint_with_datastore",
+  bp = Blueprint(
+      "bp_with_datastore",
       data_stores={"cache": my_cache}
   )
   ```
 - **Acceso en Manejador:** Los `DataStores` registrados están disponibles dentro de cualquier manejador de este blueprint a través del objeto `context`. El acceso es por el nombre especificado durante el registro.
   ```python
-  @bp.handler_for("some_state")
+  @bp.handler("some_state")
   async def my_handler(context, actions):
       # Acceder a nuestra caché
       value = await context.data_stores.cache.get("some_key")
@@ -329,7 +332,7 @@ Un proceso en segundo plano que vigila las tareas "atascadas" o que han superado
 **Ubicación:** `src/avtomatika/reputation.py`
 
 Este componente es responsable de analizar el rendimiento de los workers y gestionar la confianza en la red.
-- **Autorregulación Instantánea:** A diferencia del recálculo en segundo plano, el sistema aplica ahora penalizaciones inmediatas (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) por violaciones de esquemas и recompensas (`REPUTATION_REWARD_SUCCESS`) por ejecuciones exitosas. Esto crea una economía de confianza dinámica en tiempo real.
+- **Autorregulación Instantánea:** A diferencia del recálculo en segundo plano, el sistema aplica ahora penalizaciones inmediatas (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) por violaciones de esquemas y recompensas (`REPUTATION_REWARD_SUCCESS`) por ejecuciones exitosas. Esto crea una economía de confianza dinámica en tiempo real.
 - **Umbral de Admisión:** El parámetro configurable `REPUTATION_MIN_THRESHOLD` permite desconectar automáticamente nodos inestables o de baja calidad de la red.
 - **Calibración de Fondo:** Recálculo periódico (cada hora) basado en el historial de 30 días para una evaluación a largo plazo basada en análisis estadístico.
 

@@ -2,7 +2,7 @@
 
 # Cookbook: Создание Блупринта (Пайплайна)
 
-Блупринты (`StateMachineBlueprint`) — это основа для определения бизнес-логики в системе. Каждый блупринт представляет собой конечный автомат ("сценарий"), который Оркестратор будет выполнять.
+Блупринты (`Blueprint`) — это основа для определения бизнес-логики в системе. Каждый блупринт представляет собой конечный автомат ("сценарий"), который Оркестратор будет выполнять.
 
 Это руководство покажет, как создать простой, но полноценный пайплайн.
 
@@ -12,17 +12,17 @@
 
 ## Шаг 2: Определите блупринт
 
-Импортируйте `StateMachineBlueprint` и создайте его экземпляр.
+Импортируйте `Blueprint` и создайте его экземпляр.
 
 - `name`: Уникальное имя блупринта.
 - `api_version`: Версия API (например, "v1").
 - `api_endpoint`: URL, по которому клиенты будут создавать задачи для этого пайплайна.
 
 ```python
-from avtomatika import StateMachineBlueprint
+from avtomatika import Blueprint
 
 # Создаем экземпляр блупринта
-order_pipeline = StateMachineBlueprint(
+order_pipeline = Blueprint(
     name="order_processing_flow",
     api_version="v1",
     api_endpoint="/jobs/process_order"  # URL для создания задач
@@ -33,15 +33,17 @@ order_pipeline = StateMachineBlueprint(
 
 Каждый шаг в вашем процессе — это "состояние" с привязанной к нему функцией-"обработчиком".
 
--   Декоратор `@blueprint.handler_for("state_name")` связывает функцию с состоянием.
+-   Декоратор `@blueprint.handler` связывает функцию с состоянием.
 -   **Начальное состояние** должно быть ровно одно, оно помечается флагом `is_start=True`.
 -   **Конечных состояний** может быть несколько, они помечаются `is_end=True`.
+
+> **Совет:** Имя состояния теперь необязательно; если оно не указано, будет использовано имя функции.
 
 Обработчик получает один аргумент — `context`, который содержит всю информацию о задаче и методы для управления процессом (`context.actions`).
 
 ```python
-@order_pipeline.handler_for("start", is_start=True)
-async def start_handler(context):
+@order_pipeline.handler(is_start=True)
+async def start(context):
     """
     Начальный обработчик. Вызывается при создании Job.
     """
@@ -49,14 +51,14 @@ async def start_handler(context):
     print(f"Входные данные: {context.initial_data}")
 
     # Сохраняем что-то в историю для следующих шагов
-    context.state_history["processed_by"] = "start_handler"
+    context.state_history["processed_by"] = "start"
 
     # Переходим к следующему шагу
-    context.actions.transition_to("dispatch_to_worker")
+    context.actions.go_to("dispatch_to_worker")
 
 
-@order_pipeline.handler_for("dispatch_to_worker")
-async def dispatch_handler(context):
+@order_pipeline.handler
+async def dispatch_to_worker(context):
     """
     Этот обработчик отправляет задачу на выполнение воркеру.
     """
@@ -75,8 +77,8 @@ async def dispatch_handler(context):
         }
     )
 
-@order_pipeline.handler_for("inventory_ok")
-async def inventory_ok_handler(context):
+@order_pipeline.handler
+async def inventory_ok(context):
     """
     Вызывается, если воркер подтвердил наличие товара.
     """
@@ -84,27 +86,27 @@ async def inventory_ok_handler(context):
     worker_data = context.state_history.get("warehouse_info")
     print(f"Job {context.job_id}: товар в наличии. Информация от воркера: {worker_data}")
     
-    context.actions.transition_to("finished_successfully")
+    context.actions.go_to("finished_successfully")
 
 
-@order_pipeline.handler_for("inventory_failed", is_end=True)
-async def inventory_failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def inventory_failed(context):
     """
     Конечное состояние, если товара нет в наличии.
     """
     print(f"Job {context.job_id}: не удалось обработать заказ, товара нет на складе.")
 
 
-@order_pipeline.handler_for("generic_failure", is_end=True)
-async def failed_handler(context):
+@order_pipeline.handler(is_end=True)
+async def generic_failure(context):
     """
     Конечное состояние для обработки общих сбоев.
     """
     print(f"Job {context.job_id}: произошла ошибка при обработке.")
 
 
-@order_pipeline.handler_for("finished_successfully", is_end=True)
-async def finished_handler(context):
+@order_pipeline.handler(is_end=True)
+async def finished_successfully(context):
     """
     Конечное состояние при успешном выполнении.
     """

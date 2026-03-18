@@ -5,12 +5,12 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from src.avtomatika.blueprint import StateMachineBlueprint
+from src.avtomatika.blueprint import Blueprint
 
-error_flow_bp = StateMachineBlueprint(name="error_flow", api_endpoint="/jobs/error_flow", api_version="v1")
+error_flow_bp = Blueprint(name="error_flow", api_endpoint="/jobs/error_flow", api_version="v1")
 
 
-@error_flow_bp.handler_for("start", is_start=True)
+@error_flow_bp.handler("start", is_start=True)
 async def start(context, actions):
     actions.dispatch_task(
         task_type="error_task",
@@ -19,11 +19,11 @@ async def start(context, actions):
     )
 
 
-@error_flow_bp.handler_for("finished", is_end=True)
+@error_flow_bp.handler("finished", is_end=True)
 async def finished(context, actions):
     pass
 
 
-@error_flow_bp.handler_for("failed", is_end=True)
+@error_flow_bp.handler("failed", is_end=True)
 async def failed(context, actions):
     pass
