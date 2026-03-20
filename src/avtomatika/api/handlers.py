@@ -164,7 +164,7 @@ async def get_worker_catalog_handler(request: web.Request) -> web.Response:
 
     catalog = {}
     for worker in workers:
-        for skill in worker.get("supported_skills", []):
+        for skill in worker.get("supported_skills") or []:
             skill_name = skill.get("name")
             if not skill_name:
                 continue

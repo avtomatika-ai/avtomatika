@@ -179,6 +179,7 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `RATE_LIMIT_PERIOD` | Rate limiting period in seconds. | `60` |
 | `RATE_LIMIT_HEARTBEAT_LIMIT` | Specific limit for worker heartbeat requests per period. | `120` |
 | `RATE_LIMIT_POLL_LIMIT` | Specific limit for worker task poll requests per period. | `60` |
+| `MAX_TRANSITIONS_PER_JOB` | **Infinite Loop Protection:** Maximum number of state transitions allowed for a single job before it is terminated. | `100` |
 
 ### Security & TLS (mTLS)
 

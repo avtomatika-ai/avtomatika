@@ -74,7 +74,11 @@ class RedisStorage(StorageBackend):
 
     @staticmethod
     def _unpack(data: bytes) -> Any:
-        return unpackb(data, raw=False)
+        try:
+            return unpackb(data, raw=False)
+        except Exception as e:
+            logger.error(f"Failed to unpack msgpack data: {e}")
+            return None
 
     async def get_job_state(self, job_id: str) -> dict[str, Any] | None:
         """Get the job state from Redis."""
@@ -180,7 +184,7 @@ class RedisStorage(StorageBackend):
             else:
                 pipe.srem("orchestrator:index:workers:idle", worker_id)
 
-            supported_skills = worker_info.get("supported_skills", [])
+            supported_skills = worker_info.get("supported_skills") or []
             if supported_skills:
                 skill_names_to_index = []
                 for skill in supported_skills:
@@ -410,7 +414,7 @@ class RedisStorage(StorageBackend):
             worker_info = await self.get_worker_info(worker_id)
             if not worker_info:
                 return None
-            skills = worker_info.get("supported_skills", [])
+            skills = worker_info.get("supported_skills") or []
             for skill in skills:
                 skill_name = skill.get("name") or skill.get("type")
                 if not skill_name:

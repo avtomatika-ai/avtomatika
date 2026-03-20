@@ -136,7 +136,7 @@ class MemoryStorage(StorageBackend):
                 worker_info = self._workers.get(worker_id)
                 if not worker_info:
                     return None
-                skills = worker_info.get("supported_skills", [])
+                skills = worker_info.get("supported_skills") or []
                 for skill in skills:
                     skill_name = skill.get("name") or skill.get("type")
                     if not skill_name:

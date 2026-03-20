@@ -469,6 +469,15 @@ The orchestrator has built-in mechanisms for handling failures based on the `err
 *   **SECURITY_ERROR / DEPENDENCY_ERROR**: Treated as permanent errors (e.g., security violation or missing model). Immediate quarantine.
 *   **INVALID_INPUT_ERROR**: An error in the input data. The entire pipeline (Job) will be immediately moved to the failed state.
 
+### Security & Stability Guardrails
+
+The orchestrator includes several enterprise-grade mechanisms to ensure system integrity:
+
+*   **Exponential Backoff:** Core loops (`JobExecutor`, `Watcher`) automatically implement an exponential backoff strategy when infrastructure failures (e.g., Redis outages) occur, ensuring the system self-heals without overwhelming resources.
+*   **Job Hijacking Protection:** Strict ownership enforcement ensures that only the worker assigned to a task can submit its result. Unauthorized attempts are blocked and logged as security incidents.
+*   **Infinite Loop Protection:** The `MAX_TRANSITIONS_PER_JOB` setting (default 100) automatically terminates blueprints that enter logical cycles, preventing resource exhaustion.
+*   **Stale Result Protection:** System automatically ignores results for tasks that have already timed out or been re-dispatched, ensuring state consistency.
+
 ### Progress Tracking
 
 Workers can report real-time execution progress (0-100%) and status messages. This information is automatically persisted by the Orchestrator and exposed via the Job Status API (`GET /api/v1/jobs/{job_id}`).

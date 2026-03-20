@@ -5,7 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from asyncio import Lock
+from asyncio import Lock, gather
 from logging import getLogger
 from typing import Any
 
@@ -65,9 +65,11 @@ class WebSocketManager:
 
     async def close_all(self) -> None:
         """Closes all active WebSocket connections."""
+
         async with self._lock:
             logger.info(f"Closing {len(self._connections)} active WebSocket connections...")
-            for ws in self._connections.values():
-                await ws.close(code=1001, message=b"Server shutdown")
+            tasks = [ws.close(code=1001, message=b"Server shutdown") for ws in self._connections.values()]
+            if tasks:
+                await gather(*tasks, return_exceptions=True)
             self._connections.clear()
             logger.info("All WebSocket connections closed.")

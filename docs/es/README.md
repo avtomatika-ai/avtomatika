@@ -461,6 +461,15 @@ El orquestador tiene mecanismos integrados para manejar fallos basados en el cam
 *   **SECURITY_ERROR / DEPENDENCY_ERROR**: Tratados como errores permanentes (por ejemplo, violación de seguridad o modelo faltante). Cuarentena inmediata.
 *   **INVALID_INPUT_ERROR**: Un error en los datos de entrada. Todo el pipeline (Job) se moverá inmediatamente al estado fallido.
 
+### Garantías de Seguridad y Estabilidad
+
+El orquestador incluye varios mecanismos de grado empresarial para garantizar la integridad del sistema:
+
+*   **Retroceso Exponencial (Exponential Backoff):** Los bucles principales (`JobExecutor`, `Watcher`) implementan automáticamente una estrategia de retroceso exponencial cuando ocurren fallos de infraestructura (por ejemplo, cortes de Redis), asegurando que el sistema se recupere solo sin abrumar los recursos.
+*   **Protección contra Secuestro de Trabajos (Job Hijacking):** La aplicación estricta de la propiedad garantiza que solo el worker asignado a una tarea pueda enviar su resultado. Los intentos no autorizados son bloqueados y registrados como incidentes de seguridad.
+*   **Protección contra Bucles Infinitos:** El ajuste `MAX_TRANSITIONS_PER_JOB` (por defecto 100) termina automáticamente los blueprints que entran en ciclos lógicos, previniendo el agotamiento de recursos.
+*   **Protección contra Resultados Obsoletos:** El sistema ignora automáticamente los resultados de tareas que ya han expirado o han sido re-despachadas, garantizando la coherencia del estado.
+
 ### Seguimiento del Progreso
 
 Los workers pueden informar el progreso de ejecución en tiempo real (0-100%) y mensajes de estado. Esta información es persistida automáticamente por el Orquestador y expuesta a través de la API de Estado del Trabajo (`GET /api/v1/jobs/{job_id}`).

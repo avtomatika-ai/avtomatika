@@ -327,14 +327,13 @@ class Dispatcher:
         dispatch_strategy = task_info.get("dispatch_strategy", "default")
         resource_requirements = (task_info.get("resource_requirements") or {}).copy()
         if "params" not in resource_requirements:
-            resource_requirements["params"] = task_info.get("params", {})
+            resource_requirements["params"] = task_info.get("params") or {}
         if "transitions" not in resource_requirements:
-            resource_requirements["transitions"] = task_info.get("transitions", {})
+            resource_requirements["transitions"] = task_info.get("transitions") or {}
 
         # HLN OPTIMIZATION: Hot Cache and Hot Skill awareness
-        resource_hint = task_info.get("params", {}).get("resource_hint") or task_info.get("params", {}).get(
-            "model_name"
-        )
+        params = task_info.get("params") or {}
+        resource_hint = params.get("resource_hint") or params.get("model_name")
         capable_workers = []
 
         hot_skill_ids = await self.storage.find_workers_by_hot_skill(task_type)

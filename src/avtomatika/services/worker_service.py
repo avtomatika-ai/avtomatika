@@ -28,6 +28,7 @@ from ..constants import (
     EVENT_TYPE_PROGRESS,
     IGNORED_REASON_CANCELLED,
     IGNORED_REASON_LATE,
+    IGNORED_REASON_MISMATCH,
     IGNORED_REASON_NOT_FOUND,
     IGNORED_REASON_STALE,
     JOB_STATUS_CANCELLED,
@@ -79,6 +80,8 @@ class WorkerService:
         worker_id = worker_data.get("worker_id")
         if not isinstance(worker_id, str):
             raise ValueError("Missing or invalid worker_id in registration data")
+
+        worker_data["supported_skills"] = worker_data.get("supported_skills") or []
 
         validate_identifier(worker_id, "worker_id")
 
@@ -185,6 +188,20 @@ class WorkerService:
                 "status": "ignored",
                 "reason": IGNORED_REASON_NOT_FOUND,
                 "message": f"Job {job_id} not found (expired or deleted).",
+            }
+
+        # HLN SECURITY: Verify that the worker submitting the result is the one assigned to the task
+        task_worker_id = job_state.get("task_worker_id")
+        if task_worker_id and task_worker_id != authenticated_worker_id:
+            logger.critical(
+                f"HIJACKING ATTEMPT DETECTED: Worker {authenticated_worker_id} tried to submit result "
+                f"for job {job_id} task {task_id}, which is assigned to worker {task_worker_id}."
+            )
+            # We treat this as an IGNORED result for safety, but log it as CRITICAL
+            return {
+                "status": "ignored",
+                "reason": IGNORED_REASON_MISMATCH,
+                "message": "Forbidden: This task is assigned to a different worker.",
             }
 
         # SAFETY CHECK: Verify that the submitted task_id matches the current task of the job.
@@ -604,64 +621,70 @@ class WorkerService:
         self, worker_id: str, update_data: Optional[dict[str, Any]]
     ) -> Optional[dict[str, Any]]:
         """Updates worker TTL and status, and checks for tasks that should be cancelled."""
-        from rxon.constants import HB_RESP_CANCEL_TASKS, HB_RESP_REQUIRE_FULL_SYNC
+        try:
+            from rxon.constants import HB_RESP_CANCEL_TASKS, HB_RESP_REQUIRE_FULL_SYNC
 
-        ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
-        response_data: dict[str, Any] = {"status": "ok"}
+            ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
+            response_data: dict[str, Any] = {"status": "ok"}
 
-        if update_data:
-            # HLN Optimization: Traffic reduction
-            new_hash = update_data.get("skills_hash")
-            current_worker = await self.storage.get_worker_info(worker_id)
+            if update_data:
+                # HLN Optimization: Traffic reduction
+                new_hash = update_data.get("skills_hash")
+                current_worker = await self.storage.get_worker_info(worker_id)
 
-            # If hash is provided and matches, we don't need to re-register skills
-            if current_worker and new_hash and current_worker.get("skills_hash") == new_hash:
-                # SELF-HEALING: Check if storage actually has the skills
-                if not current_worker.get("supported_skills"):
-                    logger.warning(f"Worker {worker_id} hash match, but skills missing in storage. Forcing Full Sync.")
-                    response_data[HB_RESP_REQUIRE_FULL_SYNC] = True
+                # If hash is provided and matches, we don't need to re-register skills
+                if current_worker and new_hash and current_worker.get("skills_hash") == new_hash:
+                    # SELF-HEALING: Check if storage actually has the skills
+                    if not current_worker.get("supported_skills"):
+                        logger.warning(
+                            f"Worker {worker_id} hash match, but skills missing in storage. Forcing Full Sync."
+                        )
+                        response_data[HB_RESP_REQUIRE_FULL_SYNC] = True
 
-                # Remove skills from update to keep it lightweight
-                update_data.pop("supported_skills", None)
+                    # Remove skills from update to keep it lightweight
+                    update_data.pop("supported_skills", None)
 
-            updated_worker = await self.storage.update_worker_status(worker_id, update_data, ttl)
+                updated_worker = await self.storage.update_worker_status(worker_id, update_data, ttl)
 
-            if updated_worker:
-                await self.history_storage.log_worker_event(
-                    {
-                        "worker_id": worker_id,
-                        "event_type": "status_update",
-                        "worker_info_snapshot": updated_worker,
-                    },
-                )
+                if updated_worker:
+                    await self.history_storage.log_worker_event(
+                        {
+                            "worker_id": worker_id,
+                            "event_type": "status_update",
+                            "worker_info_snapshot": updated_worker,
+                        },
+                    )
 
-                # Check current tasks for cancellation
-                current_tasks = update_data.get("current_tasks", [])
-                if current_tasks:
-                    cancel_task_ids = []
-                    from ..executor import TERMINAL_STATES
+                    # Check current tasks for cancellation
+                    current_tasks = update_data.get("current_tasks", []) or []
+                    if current_tasks:
+                        cancel_task_ids = []
+                        from ..executor import TERMINAL_STATES
 
-                    for task_id in current_tasks:
-                        # Find job_id for this task_id.
-                        # In Avtomatika, task_id is often the same as job_id or can be mapped.
-                        job_state = await self.storage.get_job_state(task_id)
-                        if not job_state:
-                            # If job is missing, it's definitely stale
-                            cancel_task_ids.append(task_id)
-                            continue
+                        for task_id in current_tasks:
+                            # Find job_id for this task_id.
+                            # In Avtomatika, task_id is often the same as job_id or can be mapped.
+                            job_state = await self.storage.get_job_state(task_id)
+                            if not job_state:
+                                # If job is missing, it's definitely stale
+                                cancel_task_ids.append(task_id)
+                                continue
 
-                        status = job_state.get("status")
-                        # If the job is in a terminal state or cancelled, tell the worker to stop
-                        if (status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED) and job_state.get(
-                            "task_worker_id"
-                        ) == worker_id:
-                            # Verification: check if THIS worker is still the one assigned
-                            cancel_task_ids.append(task_id)
+                            status = job_state.get("status")
+                            # If the job is in a terminal state or cancelled, tell the worker to stop
+                            if (status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED) and job_state.get(
+                                "task_worker_id"
+                            ) == worker_id:
+                                # Verification: check if THIS worker is still the one assigned
+                                cancel_task_ids.append(task_id)
 
-                    if cancel_task_ids:
-                        response_data[HB_RESP_CANCEL_TASKS] = cancel_task_ids
+                        if cancel_task_ids:
+                            response_data[HB_RESP_CANCEL_TASKS] = cancel_task_ids
 
-            return response_data
-        else:
-            refreshed = await self.storage.refresh_worker_ttl(worker_id, ttl)
-            return {"status": "ttl_refreshed"} if refreshed else None
+                return response_data
+            else:
+                refreshed = await self.storage.refresh_worker_ttl(worker_id, ttl)
+                return {"status": "ttl_refreshed"} if refreshed else None
+        except Exception as e:
+            logger.exception(f"CRITICAL ERROR in update_worker_heartbeat for worker {worker_id}: {e}")
+            raise e

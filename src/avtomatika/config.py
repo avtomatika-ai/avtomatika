@@ -112,3 +112,5 @@ class Config:
         self.DISPATCHER_SOFT_LIMIT: int = int(getenv("DISPATCHER_SOFT_LIMIT", 3))
 
         self.WORK_STEALING_ENABLED: bool = getenv("WORK_STEALING_ENABLED", "true").lower() == "true"
+
+        self.MAX_TRANSITIONS_PER_JOB: int = int(getenv("MAX_TRANSITIONS_PER_JOB", 100))

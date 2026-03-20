@@ -180,6 +180,7 @@ Además de los archivos de configuración, el Orquestador se configura a través
 | `RATE_LIMIT_PERIOD` | Período de limitación de velocidad en segundos. | `60` |
 | `RATE_LIMIT_HEARTBEAT_LIMIT` | Límite específico para solicitudes de latido de worker por período. | `120` |
 | `RATE_LIMIT_POLL_LIMIT` | Límite específico para solicitudes de sondeo de tareas de worker por período. | `60` |
+| `MAX_TRANSITIONS_PER_JOB` | **Protección contra Bucles Infinitos:** Número máximo de transiciones de estado permitidas para un solo trabajo antes de ser terminado. | `100` |
 
 ### Seguridad y TLS (mTLS)
 

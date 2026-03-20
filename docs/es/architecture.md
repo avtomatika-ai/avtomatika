@@ -144,7 +144,17 @@ Este es el principal proceso en segundo plano responsable de ejecutar trabajos.
   - **Transferencia de Datos del Worker:** Además del `status`, el worker puede devolver un objeto `data`. El contenido de este objeto (si es un diccionario) se copiará automáticamente a `context.state_history` y estará disponible en los pasos siguientes del blueprint.
   - **Estado Desconocido:** Si el worker devuelve un estado para el cual no hay clave en el diccionario `transitions`, el proceso pasa automáticamente a un estado llamado `"failed"`. Esto asegura la tolerancia a fallos y evita que los procesos se cuelguen.
 
-- **Tolerancia a Fallos:** Implementa lógica de reintento y movimiento de tareas fallidas a cuarentena. El Orquestador maneja errores de los workers según su tipo, permitiendo una gestión flexible de tareas fallidas.
+- **Tolerancia a Fallos:** Implementa lógica de reintento y movimiento de tareas fallidas a cuarentena.
+
+  **Mecanismos de Fiabilidad y Protección**
+
+  El sistema implementa varios mecanismos avanzados para garantizar la estabilidad y la seguridad en entornos hostiles o inestables:
+
+  - **Protección contra Secuestro de Trabajos (Job Hijacking Protection):** El Orquestador impone una propiedad estricta de las tareas. Cuando un trabajador envía un resultado, el sistema verifica que este trabajador sea efectivamente aquel al que se le asignó la tarea. Los intentos no autorizados son bloqueados y registrados como eventos críticos de seguridad.
+  - **Protección contra Resultados Obsoletos:** Si una tarea se vuelve a despachar (por ejemplo, después de un tiempo de espera), el sistema ignorará cualquier resultado "tardío" del trabajador anterior, evitando la corrupción del estado.
+  - **Prevención de Bucles Infinitos:** Para proteger contra errores de diseño de los blueprints, el límite `MAX_TRANSITIONS_PER_JOB` (por defecto 100) asegura que los trabajos atrapados en ciclos lógicos sean terminados.
+  - **Retroceso Exponencial (Exponential Backoff):** Los bucles principales en segundo plano (`JobExecutor`, `Watcher`) utilizan una estrategia de retroceso exponencial cuando encuentran fallos de infraestructura transitorios (como problemas de conectividad con Redis), asegurando que el sistema se recupere solo sin inundar los registros ni colapsar.
+
 
   **Tipos de Error Devueltos por el Worker:**
   Un worker puede devolver uno de tres tipos de error en el campo `error.code`:
@@ -282,7 +292,7 @@ Responsable de asignar tareas al worker más adecuado.
     - `least_connections`: Selecciona al trabajador con el menor número de tareas activas.
     - `cheapest`: Selecciona al trabajador con el costo más bajo para la habilidad específica.
     - `best_value`: Selecciona al trabajador con la mejor relación precio/calidad utilizando su **reputación**.
-- **Robo de Trabajo (Work Stealing - Beta 17):** Para evitar el bloqueo de la cola (Head-of-Line Blocking), la capa de almacenamiento implementa un mecanismo atómico de "Robo de Trabajo". Si la cola privada de un trabajador está vacía, el Orquestador (a través de un script Lua en Redis) puede encontrar la cola más larga entre otros trabajadores que admiten la misma habilidad y mover una tarea de ella al trabajador inactivo.
+- **Robo de Trabajo (Work Stealing):** Para evitar el bloqueo de la cola (Head-of-Line Blocking), la capa de almacenamiento implementa un mecanismo atómico de "Robo de Trabajo". Si la cola privada de un trabajador está vacía, el Orquestador (a través de un script Lua en Redis) puede encontrar la cola más larga entre otros trabajadores que admiten la misma habilidad y mover una tarea de ella al trabajador inactivo.
 - **Encolado:** Coloca la tarea en la cola de prioridad del worker en el Almacenamiento.
 
 ### 4.1. Interacción con el Worker (Modelo Pull)

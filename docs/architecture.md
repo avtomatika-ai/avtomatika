@@ -144,7 +144,17 @@ This is the main background process responsible for executing jobs.
   - **Data Transfer from Worker:** Besides `status`, the worker can return a `data` object. The content of this object (if it is a dictionary) will be automatically copied to `context.state_history` and become available in subsequent blueprint steps.
   - **Unknown Status:** If the worker returns a status for which there is no key in the `transitions` dictionary, the process automatically transitions to a state named `"failed"`. This ensures fault tolerance and prevents processes from hanging.
 
-- **Fault Tolerance:** Implements retry logic and moving failed tasks to quarantine. The Orchestrator handles errors from workers based on their type, allowing flexible management of failed tasks.
+- **Fault Tolerance:** Implements retry logic and moving failed tasks to quarantine.
+
+  **Reliability & Security Guardrails**
+
+  The system implements several advanced mechanisms to ensure stability and security in hostile or unstable environments:
+
+  - **Job Hijacking Protection:** Orchestrator enforces strict ownership of tasks. When a worker submits a result, the system verifies that this worker is indeed the one the task was assigned to. Unauthorized attempts are blocked and logged as critical security events.
+  - **Stale Result Protection:** If a task is re-dispatched (e.g., after a timeout), the system will ignore any "late" results from the previous worker, preventing state corruption.
+  - **Infinite Loop Prevention:** To protect against blueprint design errors, the `MAX_TRANSITIONS_PER_JOB` limit (default 100) ensures that jobs caught in logical cycles are terminated.
+  - **Exponential Backoff:** Core background loops (`JobExecutor`, `Watcher`) use an exponential backoff strategy when encountering transient infrastructure failures (like Redis connectivity issues), ensuring the system self-heals without flooding logs or crashing.
+
 
   **Error Types Returned by Worker:**
   A worker can return one of three error types in the `error.code` field:

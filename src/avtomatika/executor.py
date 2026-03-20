@@ -112,6 +112,39 @@ class JobExecutor:
             if "retry_count" not in job_state:
                 job_state["retry_count"] = 0
 
+            # HLN SAFETY: Detect infinite loops in blueprints
+            transition_count = job_state.get("transition_count", 0) + 1
+
+            max_transitions = 100
+            try:
+                if isinstance(self.engine.config.MAX_TRANSITIONS_PER_JOB, int):
+                    max_transitions = self.engine.config.MAX_TRANSITIONS_PER_JOB
+            except Exception:
+                pass
+
+            if transition_count > max_transitions:
+                duration_ms = int((monotonic() - start_time) * 1000)
+                error_msg = (
+                    f"Blueprint execution exceeded maximum transitions ({max_transitions}). "
+                    "Suspected infinite loop detected."
+                )
+                logger.critical(f"Job {job_id} failed: {error_msg}")
+                job_state["status"] = JOB_STATUS_FAILED
+                job_state["error_message"] = error_msg
+                await self.storage.save_job_state(job_id, job_state)
+                await self.history_storage.log_job_event(
+                    {
+                        "job_id": job_id,
+                        "state": job_state.get("current_state"),
+                        "event_type": "job_failed",
+                        "duration_ms": duration_ms,
+                        "context_snapshot": job_state,
+                    }
+                )
+                return
+
+            job_state["transition_count"] = transition_count
+
             await self.history_storage.log_job_event(
                 {
                     "job_id": job_id,
@@ -652,10 +685,13 @@ class JobExecutor:
         logger.info("JobExecutor started.")
         self._running = True
         semaphore = asyncio.Semaphore(self.engine.config.EXECUTOR_MAX_CONCURRENT_JOBS)
+        backoff_delay = 1.0
 
         while self._running:
+            acquired = False
             try:
                 await semaphore.acquire()
+                acquired = True
 
                 block_time = self.engine.config.REDIS_STREAM_BLOCK_MS
                 result = await self.storage.dequeue_job(block=block_time if block_time > 0 else None)
@@ -665,17 +701,27 @@ class JobExecutor:
                     task = create_task(self._process_job(job_id, message_id))
                     task.add_done_callback(self._handle_task_completion)
                     task.add_done_callback(lambda _: semaphore.release())
+                    backoff_delay = 1.0  # Reset backoff on success
                 else:
                     semaphore.release()
+                    acquired = False
                     if block_time <= 0:
                         await sleep(0.1)
 
             except CancelledError:
+                if acquired:
+                    semaphore.release()
                 break
             except Exception:
                 logger.exception("Error in JobExecutor main loop.")
-                semaphore.release()
-                await sleep(1)
+                if acquired:
+                    from contextlib import suppress
+
+                    with suppress(ValueError):
+                        semaphore.release()
+                await sleep(backoff_delay)
+                backoff_delay = min(backoff_delay * 2, 60.0)  # Exponential backoff up to 60s
+
         logger.info("JobExecutor stopped.")
 
     def stop(self) -> None:
