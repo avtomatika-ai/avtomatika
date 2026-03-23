@@ -39,6 +39,27 @@ class Scheduler:
         except Exception as e:
             logger.error(f"Failed to load schedules config: {e}")
 
+    async def _process_interval_jobs(self, jobs: list[ScheduledJobConfig], now_tz: datetime) -> None:
+        if not jobs:
+            return
+
+        last_run_keys = [f"scheduler:last_run:{job.name}" for job in jobs]
+        last_run_vals = await self.storage.mget(last_run_keys)
+        now_ts = now_tz.timestamp()
+
+        for i, job in enumerate(jobs):
+            last_run_ts = last_run_vals[i]
+            if last_run_ts and job.interval_seconds is not None and now_ts - float(last_run_ts) < job.interval_seconds:
+                continue
+
+            lock_key = f"scheduler:lock:interval:{job.name}"
+            if await self.storage.set_nx_ttl(lock_key, "locked", ttl=5):
+                try:
+                    await self._trigger_job(job)
+                    await self.storage.set_str(last_run_keys[i], str(now_ts))
+                except Exception as e:
+                    logger.error(f"Failed to trigger interval job {job.name}: {e}")
+
     async def run(self) -> None:
         self.load_config()
         if not self.schedules:
@@ -53,8 +74,13 @@ class Scheduler:
                 now_utc = datetime.now(ZoneInfo("UTC"))
                 now_tz = now_utc.astimezone(self.timezone)
 
-                for job in self.schedules:
-                    await self._process_job(job, now_tz)
+                interval_jobs = [j for j in self.schedules if j.interval_seconds]
+                calendar_jobs = [j for j in self.schedules if not j.interval_seconds]
+
+                await self._process_interval_jobs(interval_jobs, now_tz)
+
+                for job in calendar_jobs:
+                    await self._process_calendar_job(job, now_tz)
 
                 await sleep(1)
 
@@ -70,27 +96,11 @@ class Scheduler:
         self._running = False
 
     async def _process_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
+        # Not used anymore in the main loop, but keeping for compatibility if needed
         if job.interval_seconds:
-            await self._process_interval_job(job, now_tz)
+            await self._process_interval_jobs([job], now_tz)
         else:
             await self._process_calendar_job(job, now_tz)
-
-    async def _process_interval_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
-        last_run_key = f"scheduler:last_run:{job.name}"
-        last_run_ts = await self.storage.get_str(last_run_key)
-
-        now_ts = now_tz.timestamp()
-
-        if last_run_ts and job.interval_seconds is not None and now_ts - float(last_run_ts) < job.interval_seconds:
-            return
-
-        lock_key = f"scheduler:lock:interval:{job.name}"
-        if await self.storage.set_nx_ttl(lock_key, "locked", ttl=5):
-            try:
-                await self._trigger_job(job)
-                await self.storage.set_str(last_run_key, str(now_ts))
-            except Exception as e:
-                logger.error(f"Failed to trigger interval job {job.name}: {e}")
 
     async def _process_calendar_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
         target_time_str = job.daily_at or job.time

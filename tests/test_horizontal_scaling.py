@@ -96,12 +96,14 @@ async def test_horizontal_scaling_scheduler_locks():
             return True
         return False
 
+    from avtomatika.app_keys import SCHEDULER_KEY
+
     # Run setup to initialize internal components (like app keys)
     for eng in engines:
         # Minimal setup manually
         from avtomatika.scheduler import Scheduler
 
-        eng.app["avtomatika_scheduler"] = Scheduler(eng)
+        eng.app[SCHEDULER_KEY] = Scheduler(eng)
         await eng.storage.ping()  # Ensure connection
 
     # Fire all triggers concurrently

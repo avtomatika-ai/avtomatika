@@ -1,4 +1,4 @@
-[EN](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/api_reference.md) | **ES** | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/api_reference.md)
+[EN](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/api_reference.md) | [RU](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/ru/api_reference.md) | **ES**
 
 # Referencia de la API del Orquestador
 
@@ -6,8 +6,8 @@ Este documento describe todos los puntos finales HTTP proporcionados por el serv
 
 ## Autenticación
 
--   **Cliente -> Orquestador:** Todas las solicitudes a los puntos finales `/api/*` deben contener el encabezado `X-Client-Token` con el token del cliente.
--   **Worker -> Orquestador:** Todas las solicitudes a los puntos finales `/_worker/*` deben contener el encabezado `X-Worker-Token` con un token de worker válido (individual o global).
+-   **Cliente -> Orquestador:** Todas las solicitudes a los puntos finales `/api/v1/*` deben contener el encabezado `X-Client-Token` con el token del cliente.
+-   **Worker -> Orquestador:** Todas las solicitudes a los puntos finales `/_worker/*` deben contener el encabezado `X-Worker-Token` con un token de worker válido.
 
 ---
 
@@ -16,47 +16,29 @@ Este documento describe todos los puntos finales HTTP proporcionados por el serv
 Estos puntos finales no requieren autenticación.
 
 ### Verificación del Estado del Servicio
-
 -   **Punto final:** `GET /_public/status`
--   **Descripción:** Devuelve una respuesta simple confirmando que el servicio se está ejecutando.
+-   **Descripción:** Confirma que el servicio se está ejecutando.
 -   **Respuesta (`200 OK`):** `{"status": "ok"}`
 
 ### Métricas de Prometheus
-
 -   **Punto final:** `GET /_public/metrics`
--   **Descripción:** Devuelve métricas de la aplicación en un formato compatible con Prometheus.
+-   **Descripción:** Métricas de la aplicación, incluyendo la medición del lag del Event Loop.
 -   **Respuesta (`200 OK`):** Respuesta de texto con métricas.
 
 ### Webhook para "Aprobación Humana"
-
 -   **Punto final:** `POST /_public/webhooks/approval/{job_id}`
--   **Descripción:** Permite a un sistema externo aprobar o rechazar un paso en el pipeline.
--   **Cuerpo de la Solicitud:** `{"decision": "approved"}`
--   **Respuesta (`200 OK`):** `{"status": "approval_received", "job_id": "..."}`
-
-### Punto Final de Depuración para Limpieza de BD
-
--   **Punto final:** `POST /_public/debug/flush_db`
--   **Descripción:** **(¡Solo desarrollo!)** Borra toda la base de datos Redis.
--   **Respuesta (`200 OK`):** `{"status": "db_flushed"}`
-
-### Documentación Interactiva de la API
-
--   **Punto final:** `GET /_public/docs`
--   **Descripción:** Devuelve una página HTML interactiva con documentación de la API (estilo Swagger UI).
--   **Respuesta (`200 OK`):** Página HTML.
+-   **Descripción:** Permite la aprobación manual de un paso del pipeline.
+-   **Respuesta (`200 OK`):** `{"status": "approval_received"}`
 
 ---
 
-## 2. Puntos Finales de Cliente (`/api`)
+## 2. Puntos Finales de Cliente (`/api/v1`)
 
-Estos puntos finales están diseñados para sistemas externos que inician y monitorean flujos de trabajo. Requiere encabezado `X-Client-Token`.
+Requieren encabezado `X-Client-Token`.
 
 ### Crear Nuevo Trabajo
-
--   **Punto final:** `POST /api/{api_version}/{blueprint_api_endpoint}`
--   **Ejemplo:** `POST /api/v1/jobs/simple_flow`
--   **Descripción:** Crea e inicia una nueva instancia (Job) del blueprint especificado.
+-   **Punto final:** `POST /api/v1/{blueprint_api_endpoint}`
+-   **Descripción:** Inicia una nueva instancia (Job) de un blueprint.
 -   **Cuerpo de la Solicitud:**
     ```json
     {
@@ -66,139 +48,41 @@ Estos puntos finales están diseñados para sistemas externos que inician y moni
       "result_timeout": 300
     }
     ```
-    *   `initial_data` (objeto, opcional): Datos iniciales para el trabajo.
-    *   `webhook_url` (cadena, opcional): URL para recibir notificaciones asíncronas sobre la finalización, fallo o cuarentena del trabajo.
-    *   `dispatch_timeout` (entero, opcional): Tiempo máximo en segundos que una tarea puede esperar en la cola por un worker.
-    *   `result_timeout` (entero, opcional): Plazo absoluto en segundos para recibir el resultado desde la creación del trabajo.
 -   **Respuesta (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
--   **Respuesta (`429 Too Many Requests`):** Si el cliente o IP excede el límite de velocidad configurado.
 
 ### Obtener Estado del Trabajo
-
 -   **Punto final:** `GET /api/v1/jobs/{job_id}`
--   **Descripción:** Devuelve el estado actual completo del trabajo especificado.
--   **Respuesta (`200 OK`):** Objeto JSON con el estado del `Job`.
--   **Respuesta (`404 Not Found`):** Si no se encuentra un trabajo con tal ID.
+-   **Descripción:** Devuelve el estado actual del trabajo.
+-   **Parámetros:** `?fields=status,result` — filtrado de campos devueltos.
+-   **Respuesta (`200 OK`):** JSON del trabajo.
 
-### Obtener URL de Subida a S3
+### Operaciones con S3
+-   `GET /api/v1/jobs/{job_id}/files/upload` — obtener URL de subida.
+-   `PUT /api/v1/jobs/{job_id}/files/content/{filename}` — streaming directo de archivos.
+-   `GET /api/v1/jobs/{job_id}/files/download/{filename}` — enlace estable de descarga.
 
--   **Punto final:** `GET /api/v1/jobs/{job_id}/files/upload`
--   **Descripción:** Genera una URL presignada de S3 temporal para subir un archivo directamente al almacenamiento del trabajo.
--   **Parámetros de consulta:**
-    *   `filename` (cadena, requerido): Nombre del archivo a subir.
-    *   `expires_in` (entero, opcional): Validez del enlace en segundos. Por defecto: `3600`.
--   **Respuesta (`200 OK`):** `{"url": "...", "expires_in": 3600, "method": "PUT"}`
--   **Respuesta (`501 Not Implemented`):** Si el soporte de S3 no está habilitado.
-
-### Subir Archivo (Streaming Directo)
-
--   **Punto final:** `PUT /api/v1/jobs/{job_id}/files/content/{filename}`
--   **Descripción:** Sube un archivo directamente a S3 a través del proxy de streaming del Orquestador. Evita el disco local y utiliza una RAM mínima.
--   **Cuerpo:** Contenido binario del archivo.
--   **Respuesta (`200 OK`):** `{"status": "uploaded", "s3_uri": "..."}`
-
-### Descargar Archivo (Enlace Estable)
-
--   **Punto final:** `GET /api/v1/jobs/{job_id}/files/download/{filename}`
--   **Descripción:** Un enlace estable que redirige automáticamente a una URL presignada de S3 fresca. Útil para descargas de navegador.
--   **Respuesta (`302 Found`):** Redirige a la URL de S3.
-
-### Cancelar Tarea en Ejecución
-
-- **Punto final**: `POST /api/v1/jobs/{job_id}/cancel`
-- **Descripción**: Inicia la cancelación de una tarea que está siendo ejecutada por un worker.
-- **Respuesta (`200 OK`):** `{"status": "cancellation_request_sent"}` (si es vía WebSocket) o `{"status": "cancellation_request_accepted"}` (si es vía bandera Redis).
-
-### Obtener Historial del Trabajo
-
--   **Punto final:** `GET /api/v1/jobs/{job_id}/history`
--   **Descripción:** Devuelve el historial completo de eventos para el trabajo especificado (si el almacenamiento de historial está habilitado).
--   **Respuesta (`200 OK`):** Matriz de objetos de evento.
-
-### Obtener Grafo del Blueprint
-
--   **Punto final:** `GET /api/v1/blueprints/{blueprint_name}/graph`
--   **Descripción:** Devuelve la estructura del blueprint en formato DOT para visualización.
--   **Respuesta (`200 OK`):** Respuesta de texto en formato `text/vnd.graphviz`.
-
-### Obtener Lista de Workers Activos
-
--   **Punto final:** `GET /api/v1/workers`
--   **Descripción:** Devuelve una lista de todos los workers actualmente activos.
--   **Respuesta (`200 OK`):** Matriz de objetos con información del worker.
-
-### Obtener Datos del Tablero
-
--   **Punto final:** `GET /api/v1/dashboard`
--   **Descripción:** Devuelve estadísticas agregadas sobre el estado del sistema.
--   **Respuesta (`200 OK`):** Objeto JSON con estadísticas.
-
-### Catálogo de Habilidades (Marketplace)
-
--   **Punto final:** `GET /api/v1/workers/catalog`
--   **Descripción:** Devuelve un catálogo agregado de todas las habilidades únicas disponibles en la red, con sus contratos completos (esquemas, estados, precios).
--   **Respuesta (`200 OK`):** Objeto JSON donde las claves son nombres de habilidades.
+### Gestión y Diagnóstico
+-   `POST /api/v1/jobs/{job_id}/cancel` — cancelar tarea activa.
+-   `GET /api/v1/jobs/{job_id}/history` — historial completo de eventos del trabajo.
+-   `GET /api/v1/blueprints/{blueprint_name}/graph` — estructura del blueprint en formato DOT.
+-   `GET /api/v1/workers` — lista de workers activos.
+-   `GET /api/v1/dashboard` — estadísticas agregadas del sistema.
+-   `GET /api/v1/workers/catalog` — catálogo de habilidades (caché 10 seg).
 
 ---
 
 ## 3. Puntos Finales Internos para Workers (`/_worker`)
-...
-### Emitir Evento Genérico (Bottom-Up)
 
--   **Punto final:** `POST /_worker/events`
--   **Descripción:** Permite a un worker enviar cualquier señal (evento) al Orquestador.
--   **Cuerpo de la Solicitud:** `WorkerEventPayload` (incluyendo `origin_worker_id` y `bubbling_chain`).
--   **Respuesta (`200 OK`):** `{"status": "event_accepted"}`
+Requieren encabezado `X-Worker-Token`.
 
-Estos puntos finales son utilizados por los workers para registrarse, recibir tareas y enviar resultados. Requiere encabezado `X-Worker-Token`.
+### Registro y Latido (Heartbeat)
+-   **POST /_worker/workers/register** — registro del worker y sus capacidades.
+-   **PATCH /_worker/workers/{worker_id}** — confirmación de actividad. Devuelve `next_heartbeat_jitter_ms`.
 
-### Registrar Worker
+### Tareas y Resultados
+-   **GET /_worker/workers/{worker_id}/tasks/next** — solicitud de nueva tarea (Long-Polling + Work Stealing).
+-   **POST /_worker/tasks/result** — envío del resultado de la tarea.
+-   **POST /_worker/events** — envío de evento intermedio (progreso, logs).
 
--   **Punto final:** `POST /_worker/workers/register`
--   **Descripción:** Registra un worker en el sistema.
--   **Cuerpo de la Solicitud:** Objeto JSON con descripción completa del worker (ID, tareas soportadas, recursos, etc.).
-    ```json
-    {
-      "worker_id": "worker-123",
-      "supported_skills": ["video_processing", "audio_transcription"]
-    }
-    ```
--   **Respuesta (`200 OK`):** `{"status": "registered"}`
-
-### Latido / Actualización de Estado
-
--   **Punto final:** `PATCH /_worker/workers/{worker_id}`
--   **Descripción:** Punto final universal para confirmar actividad y actualizar estado.
-    -   **Cuerpo Vacío:** Actúa como un "ping" ligero, solo actualiza el TTL del worker.
-    -   **Cuerpo de la Solicitud (JSON):** Actualiza datos del worker (estado, carga, tareas disponibles) y actualiza el TTL.
--   **Respuesta (`200 OK`):** `{"status": "ttl_refreshed"}` o JSON con estado actualizado del worker.
-
-### Obtener Siguiente Tarea (Sondeo Largo)
-
--   **Punto final:** `GET /_worker/workers/{worker_id}/tasks/next`
--   **Descripción:** El worker solicita la siguiente tarea. La conexión se mantiene abierta si no hay tareas disponibles.
--   **Respuesta (`200 OK`):** Objeto JSON con datos de la tarea.
--   **Respuesta (`204 No Content`):** Devuelto al expirar el tiempo de espera si no aparecieron nuevas tareas.
-
-### Enviar Resultado de Tarea
-
--   **Punto final:** `POST /_worker/tasks/result`
--   **Descripción:** El worker envía el resultado de una tarea completada.
--   **Cuerpo de la Solicitud:**
-    ```json
-    {
-      "job_id": "...",
-      "task_id": "...",
-      "worker_id": "...",
-      "status": "success",
-      "data": { "output": "..." },
-      "error": null
-    }
-    ```
--   **Respuesta (`200 OK`):** `{"status": "result_accepted_success"}`
-
-### Establecer Conexión WebSocket
-
-- **Punto final**: `GET /_worker/ws/{worker_id}`
-- **Descripción**: Establece una conexión WebSocket para recibir comandos en tiempo real del orquestador (por ejemplo, `cancel_task`).
-- **Protocolo**: `WebSocket`
+### WebSocket
+-   **GET /_worker/ws/{worker_id}** — canal para comandos en tiempo real (ej. `cancel_task`).

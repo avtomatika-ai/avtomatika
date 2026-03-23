@@ -32,3 +32,9 @@ def test_init_metrics_idempotent():
     init_metrics()
 
     assert "orchestrator_jobs_total" in REGISTRY.collectors
+
+
+def test_loop_lag_metric_exists():
+    """Verifies that the loop lag metric is registered."""
+    init_metrics()
+    assert "orchestrator_loop_lag_seconds" in REGISTRY.collectors

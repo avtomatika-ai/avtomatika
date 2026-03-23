@@ -7,6 +7,7 @@
 
 import ssl
 import subprocess
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
@@ -201,3 +202,28 @@ async def test_sts_flow(pki, mtls_config):
 
     await site.stop()
     await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_token_hash_cache():
+    """Checks that token hashes are cached to save CPU."""
+    from avtomatika.security import _TOKEN_HASH_CACHE, verify_worker_auth
+
+    mock_storage = MagicMock()
+    mock_storage.verify_worker_access_token = AsyncMock(return_value="w1")
+    mock_config = MagicMock()
+
+    _TOKEN_HASH_CACHE.clear()
+    token = "token-to-cache"
+
+    # First call
+    with patch("avtomatika.security.sha256") as mock_sha:
+        mock_sha.return_value.hexdigest.return_value = "hash1"
+        await verify_worker_auth(mock_storage, mock_config, token, None, "w1")
+        assert mock_sha.called
+
+    # Second call with same token
+    with patch("avtomatika.security.sha256") as mock_sha:
+        await verify_worker_auth(mock_storage, mock_config, token, None, "w1")
+        # Should NOT be called, taken from cache
+        assert not mock_sha.called

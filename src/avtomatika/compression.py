@@ -24,6 +24,9 @@ def _compress_gzip(data: bytes) -> bytes:
     return buf.getvalue()
 
 
+_ZSTD_COMPRESSOR = ZstdCompressor()
+
+
 @web.middleware
 async def compression_middleware(
     request: web.Request,
@@ -38,8 +41,7 @@ async def compression_middleware(
     encoding = None
 
     if "zstd" in accept_encoding:
-        compressor = ZstdCompressor()
-        compress_func = compressor.compress
+        compress_func = _ZSTD_COMPRESSOR.compress
         encoding = "zstd"
     elif "gzip" in accept_encoding:
         compress_func = _compress_gzip

@@ -104,5 +104,6 @@ async def app(request, config, redis_storage):
 
     yield engine.app
 
+    await engine.on_shutdown(engine.app)
     if hasattr(storage, "close"):
         await storage.close()

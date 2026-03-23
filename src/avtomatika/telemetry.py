@@ -14,7 +14,6 @@ logger = getLogger(__name__)
 try:
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import (
         BatchSpanProcessor,
         ConsoleSpanExporter,
@@ -50,6 +49,13 @@ def setup_telemetry(service_name: str = "avtomatika") -> Any:
     """Configures OpenTelemetry for the application if installed."""
     if not TELEMETRY_ENABLED:
         logger.info("opentelemetry-sdk not found. Telemetry is disabled.")
+        return trace.get_tracer(__name__)
+
+    # HLN Optimization: Avoid re-initializing if provider is already set
+    # This prevents "Overriding of current TracerProvider is not allowed" warnings
+    from opentelemetry.sdk.trace import TracerProvider
+
+    if isinstance(trace.get_tracer_provider(), TracerProvider):
         return trace.get_tracer(__name__)
 
     resource = Resource(attributes={"service.name": service_name})

@@ -21,6 +21,7 @@ ratelimit_blocked_total: Counter
 jobs_timeouts_total: Counter
 tasks_ignored_total: Counter
 tasks_hot_dispatched_total: Counter
+loop_lag_seconds: Gauge
 
 
 def init_metrics() -> None:
@@ -30,19 +31,20 @@ def init_metrics() -> None:
     """
     global jobs_total, jobs_failed_total, job_duration_seconds, task_queue_length
     global active_workers, ratelimit_blocked_total, jobs_timeouts_total
-    global tasks_ignored_total, tasks_hot_dispatched_total
+    global tasks_ignored_total, tasks_hot_dispatched_total, loop_lag_seconds
 
     if "orchestrator_jobs_total" in REGISTRY.collectors:
         # Get existing metrics if they are already registered
-        jobs_total = REGISTRY.collectors["orchestrator_jobs_total"]
-        jobs_failed_total = REGISTRY.collectors["orchestrator_jobs_failed_total"]
-        job_duration_seconds = REGISTRY.collectors["orchestrator_job_duration_seconds"]
-        task_queue_length = REGISTRY.collectors["orchestrator_task_queue_length"]
-        active_workers = REGISTRY.collectors["orchestrator_active_workers"]
-        ratelimit_blocked_total = REGISTRY.collectors["orchestrator_ratelimit_blocked_total"]
+        jobs_total = REGISTRY.collectors.get("orchestrator_jobs_total")
+        jobs_failed_total = REGISTRY.collectors.get("orchestrator_jobs_failed_total")
+        job_duration_seconds = REGISTRY.collectors.get("orchestrator_job_duration_seconds")
+        task_queue_length = REGISTRY.collectors.get("orchestrator_task_queue_length")
+        active_workers = REGISTRY.collectors.get("orchestrator_active_workers")
+        ratelimit_blocked_total = REGISTRY.collectors.get("orchestrator_ratelimit_blocked_total")
         jobs_timeouts_total = REGISTRY.collectors.get("orchestrator_jobs_timeouts_total")
         tasks_ignored_total = REGISTRY.collectors.get("orchestrator_tasks_ignored_total")
         tasks_hot_dispatched_total = REGISTRY.collectors.get("orchestrator_tasks_hot_dispatched_total")
+        loop_lag_seconds = REGISTRY.collectors.get("orchestrator_loop_lag_seconds")
         return
 
     jobs_total = Counter(
@@ -87,4 +89,8 @@ def init_metrics() -> None:
         "orchestrator_tasks_hot_dispatched_total",
         "Total number of tasks dispatched to HOT workers",
         const_labels={LABEL_BLUEPRINT: "", "kind": ""},  # kind: "hot_skill" or "hot_cache"
+    )
+    loop_lag_seconds = Gauge(
+        "orchestrator_loop_lag_seconds",
+        "Delay in the asyncio event loop.",
     )

@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS worker_history (
 """
 
 CREATE_JOB_ID_INDEX_PG = "CREATE INDEX IF NOT EXISTS idx_job_id ON job_history(job_id);"
+CREATE_WORKER_ID_INDEX_PG = "CREATE INDEX IF NOT EXISTS idx_worker_id_ts ON job_history(worker_id, timestamp);"
 
 
 class PostgresHistoryStorage(HistoryStorageBase, ABC):
@@ -78,6 +79,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
                 await conn.execute(CREATE_JOB_HISTORY_TABLE_PG)
                 await conn.execute(CREATE_WORKER_HISTORY_TABLE_PG)
                 await conn.execute(CREATE_JOB_ID_INDEX_PG)
+                await conn.execute(CREATE_WORKER_ID_INDEX_PG)
             logger.info(f"PostgreSQL history storage initialized (TZ={self.tz_name}).")
         except (PostgresError, OSError) as e:
             logger.error(f"Failed to initialize PostgreSQL history storage: {e}")

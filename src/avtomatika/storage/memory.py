@@ -431,6 +431,11 @@ class MemoryStorage(StorageBackend):
             val = self._generic_keys.get(key)
             return str(val) if val is not None else None
 
+    async def mget(self, keys: list[str]) -> list[str | None]:
+        async with self._lock:
+            await self._clean_expired()
+            return [str(self._generic_keys.get(k)) if self._generic_keys.get(k) is not None else None for k in keys]
+
     async def set_str(self, key: str, value: str, ttl: int | None = None) -> None:
         async with self._lock:
             self._generic_keys[key] = value

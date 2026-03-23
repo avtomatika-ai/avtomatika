@@ -5,11 +5,10 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from asyncio import CancelledError, Queue, QueueFull, Task, create_task, sleep
-from contextlib import suppress
+from asyncio import CancelledError, Queue, QueueFull, Task, create_task, gather, sleep
 from dataclasses import asdict, dataclass
 from logging import getLogger
-from typing import Any, Optional
+from typing import Any
 
 from aiohttp import ClientSession, ClientTimeout
 
@@ -26,25 +25,34 @@ class WebhookPayload:
 
 
 class WebhookSender:
-    def __init__(self, session: ClientSession):
+    def __init__(self, session: ClientSession, worker_count: int = 5):
         self.session = session
         self.timeout = ClientTimeout(total=10)
         self.max_retries = 3
         self._queue: Queue[tuple[str, WebhookPayload]] = Queue(maxsize=1000)
-        self._worker_task: Optional[Task[None]] = None
+        self._worker_tasks: list[Task[None]] = []
+        self._worker_count = worker_count
 
     def start(self) -> None:
-        if not self._worker_task:
-            self._worker_task = create_task(self._worker())
-            logger.info("WebhookSender background worker started.")
+        if not self._worker_tasks:
+            for i in range(self._worker_count):
+                task = create_task(self._worker(i))
+                self._worker_tasks.append(task)
+            logger.info(f"WebhookSender started with {self._worker_count} concurrent workers.")
 
     async def stop(self) -> None:
-        if self._worker_task:
-            self._worker_task.cancel()
-            with suppress(CancelledError):
-                await self._worker_task
-            self._worker_task = None
-            logger.info("WebhookSender background worker stopped.")
+        if self._worker_tasks:
+            # Wait for the queue to be processed before stopping
+            if not self._queue.empty():
+                logger.info(f"WebhookSender stopping, waiting for {self._queue.qsize()} webhooks to be sent...")
+                await self._queue.join()
+
+            for task in self._worker_tasks:
+                task.cancel()
+
+            await gather(*self._worker_tasks, return_exceptions=True)
+            self._worker_tasks = []
+            logger.info("WebhookSender background workers stopped.")
 
     async def send(self, url: str, payload: WebhookPayload) -> None:
         """
@@ -59,14 +67,14 @@ class WebhookSender:
                 "Consider increasing queue size or checking external service latency."
             )
 
-    async def _worker(self) -> None:
+    async def _worker(self, worker_id: int) -> None:
         while True:
             try:
                 url, payload = await self._queue.get()
                 try:
                     await self._send_single(url, payload)
                 except Exception as e:
-                    logger.exception(f"Unexpected error in webhook worker: {e}")
+                    logger.exception(f"Unexpected error in webhook worker {worker_id}: {e}")
                 finally:
                     self._queue.task_done()
             except CancelledError:

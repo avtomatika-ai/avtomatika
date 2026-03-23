@@ -6,7 +6,7 @@
 [![PyPI Version](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
-Avtomatika is a powerful, state-driven engine for managing complex asynchronous workflows in Python. It provides a robust framework for building scalable and resilient applications by separating process logic from execution logic.
+Avtomatika is a high-performance, state-driven engine for managing complex asynchronous workflows in Python. It provides a robust framework for building scalable and resilient applications by separating process logic from execution logic.
 
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
 
@@ -231,8 +231,11 @@ Avtomatika is engineered for high-load environments with thousands of concurrent
         *   **Deep Schema Matching**: Prioritizes workers whose `input_schema` matches the specific task parameters.
         *   **Overflow Strategy**: Automatically spills load to more expensive workers if the cheaper ones are saturated (`queue_length > SOFT_LIMIT`).
         *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
-        *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues, ensuring maximum throughput.
+        *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues at O(1) speed.
         *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
+    *   **Efficient Networking**: TCP Keep-Alive and Zstd/Gzip response compression.
+    *   **Asynchronous Logging**: Non-blocking log processing via background `QueueHandler`.
+    *   **Offloaded IO**: Heavy serialization and database indices optimize history throughput.
 *   **Self-Regulating Reputation**:
     *   **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
     *   **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
@@ -244,7 +247,7 @@ Avtomatika is engineered for high-load environments with thousands of concurrent
 *   **Network Visibility**:
     *   **Skill Catalog**: Aggregated real-time marketplace of all unique skills and contracts available in the grid.
     *   **Global Registry**: Contracts are stored in Redis for cluster-wide consistency.
-*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands directly in response to optimized heartbeats.
+*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands directly in response to optimized heartbeats with Jitter.
 *   **Zero Trust Security**:
     *   **mTLS (Mutual TLS)**: Mutual authentication between Orchestrator and Workers using certificates.
     *   **STS (Security Token Service)**: Token rotation mechanism with short-lived access tokens.
@@ -254,7 +257,7 @@ Avtomatika is engineered for high-load environments with thousands of concurrent
     *   **Audit Trail**: File metadata is logged in history for full traceability.
 *   **Protocol Layer**: Built on top of `rxon`, a strict contract defining interactions, ensuring forward compatibility and allowing transport evolution (e.g., to gRPC).
 *   **Non-Blocking I/O**:
-    *   **Webhooks**: Sent via a bounded background queue.
+    *   **Webhooks**: Sent via a parallel background worker pool.
     *   **S3 Streaming**: Constant memory usage regardless of file size.
 
 ## Blueprint Cookbook: Key Features
@@ -274,11 +277,6 @@ async def decision_step(actions):
 async def decision_step(actions):
     actions.go_to("normal_processing")
 ```
-
-> **Note on Limitations:** The current version of `.when()` uses a simple parser with the following limitations:
-> *   **No Nested Attributes:** You can only access direct fields of `context.initial_data` or `context.state_history` (e.g., `context.initial_data.field`). Nested objects (e.g., `context.initial_data.area.field`) are not supported.
-> *   **Simple Comparisons Only:** Only the following operators are supported: `==`, `!=`, `>`, `<`, `>=`, `<=`. Complex logical expressions with `AND`, `OR`, or `NOT` are not allowed.
-> *   **Limited Value Types:** The parser only recognizes strings (in quotes), integers, and floats. Boolean values (`True`, `False`) and `None` are not correctly parsed and will be treated as strings.
 
 ### 2. Delegating Tasks to Workers (`dispatch_task`)
 
@@ -397,7 +395,10 @@ async def process_data(task_files, actions):
     actions.go_to("finished")
 ```
 
-## Production Configuration
+## API Groups & Versioning
+
+All external API endpoints are strictly versioned and prefixed with `/api/v1/`.
+
 *   **Events:**
     *   `job_finished`: The job reached a final success state.
     *   `job_failed`: The job failed (e.g., due to an error or invalid input).
@@ -431,191 +432,86 @@ POST /api/v1/jobs/my_flow
 
 ## Production Configuration
 
-The orchestrator's behavior can be configured through environment variables. Additionally, any configuration parameter loaded from environment variables can be programmatically overridden in your application code after the `Config` object has been initialized. This provides flexibility for different deployment and testing scenarios.
+The orchestrator's behavior can be configured through environment variables. Additionally, any configuration parameter loaded from environment variables can be programmatically overridden in your application code after the `Config` object has been initialized.
 
-**Important:** The system employs **strict validation** for configuration files (`clients.toml`, `workers.toml`) at startup. If a configuration file is invalid (e.g., malformed TOML, missing required fields), the application will **fail fast** and exit with an error, rather than starting in a partially broken state. This ensures the security and integrity of the deployment.
+**Important:** The system employs **strict validation** for configuration files (`clients.toml`, `workers.toml`) at startup.
 
 ### Configuration Files
 
-To manage access and worker settings securely, Avtomatika uses TOML configuration files.
-
 -   **`clients.toml`**: Defines API clients, their tokens, plans, and quotas.
-    ```toml
-    [client_premium]
-    token = "secret-token-123"
-    plan = "premium"
-    ```
 -   **`workers.toml`**: Defines individual tokens for workers to enhance security.
-    ```toml
-    [gpu-worker-01]
-    token = "worker-secret-456"
-    ```
 -   **`schedules.toml`**: Defines periodic tasks (CRON-like) for the native scheduler.
-    ```toml
-    [nightly_backup]
-    blueprint = "backup_flow"
-    daily_at = "02:00"
-    ```
 
-For detailed specifications and examples, please refer to the [**Configuration Guide**](docs/configuration.md).
+For detailed specifications and examples, please refer to the [**Configuration Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/configuration.md).
 
 ### Fault Tolerance
 
-The orchestrator has built-in mechanisms for handling failures based on the `error.code` field in a worker's response.
+The orchestrator handles failures based on the `error.code` field in a worker's response.
 
-*   **TRANSIENT_ERROR**: A temporary error (e.g., network failure). The orchestrator will automatically retry the task several times.
-*   **RESOURCE_EXHAUSTED_ERROR / TIMEOUT_ERROR / INTERNAL_ERROR**: Treated as transient errors and retried.
-*   **PERMANENT_ERROR**: A permanent error. The task will be immediately sent to quarantine.
-*   **SECURITY_ERROR / DEPENDENCY_ERROR**: Treated as permanent errors (e.g., security violation or missing model). Immediate quarantine.
-*   **INVALID_INPUT_ERROR**: An error in the input data. The entire pipeline (Job) will be immediately moved to the failed state.
+*   **TRANSIENT_ERROR**: Temporary errors (network, timeouts). Automatic retries.
+*   **PERMANENT_ERROR**: Permanent errors (logic, security). Immediate quarantine.
+*   **INVALID_INPUT_ERROR**: Data errors. Job fails immediately.
 
 ### Security & Stability Guardrails
 
-The orchestrator includes several enterprise-grade mechanisms to ensure system integrity:
-
-*   **Exponential Backoff:** Core loops (`JobExecutor`, `Watcher`) automatically implement an exponential backoff strategy when infrastructure failures (e.g., Redis outages) occur, ensuring the system self-heals without overwhelming resources.
-*   **Job Hijacking Protection:** Strict ownership enforcement ensures that only the worker assigned to a task can submit its result. Unauthorized attempts are blocked and logged as security incidents.
-*   **Infinite Loop Protection:** The `MAX_TRANSITIONS_PER_JOB` setting (default 100) automatically terminates blueprints that enter logical cycles, preventing resource exhaustion.
-*   **Stale Result Protection:** System automatically ignores results for tasks that have already timed out or been re-dispatched, ensuring state consistency.
-
-### Progress Tracking
-
-Workers can report real-time execution progress (0-100%) and status messages. This information is automatically persisted by the Orchestrator and exposed via the Job Status API (`GET /api/v1/jobs/{job_id}`).
+*   **Exponential Backoff:** Core loops (`JobExecutor`, `Watcher`) automatically implement exponential backoff on infrastructure failures.
+*   **Job Hijacking Protection:** Only the assigned worker can submit task results.
+*   **Infinite Loop Protection:** `MAX_TRANSITIONS_PER_JOB` (default 100) terminates cycling blueprints.
+*   **Stale Result Protection:** Ignores results for timed-out or re-dispatched tasks.
 
 ### Concurrency & Performance
 
-To prevent system overload during high traffic, the Orchestrator implements a backpressure mechanism for its internal job processing logic.
-
-*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limits the number of job handlers running simultaneously within the Orchestrator process (default: `100`). If this limit is reached, new jobs remain in the Redis queue until a slot becomes available. This ensures the event loop remains responsive even with a massive backlog of pending jobs.
+*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limits internal job handlers (default: `1000`).
+*   **`WATCHER_LIMIT`**: Number of timeouts checked per cycle (default: `500`).
+*   **`DISPATCHER_MAX_CANDIDATES`**: Limits worker compliance checks (default: `50`).
 
 ### High Availability & Distributed Locking
 
-The architecture supports horizontal scaling. Multiple Orchestrator instances can run behind a load balancer.
+Multiple Orchestrator instances can run behind a load balancer.
 
-*   **Stateless API:** The API is stateless; all state is persisted in Redis.
-*   **Instance Identity:** Each instance should have a unique `INSTANCE_ID` (defaults to hostname) for correct handling of Redis Streams consumer groups.
-*   **Distributed Locking:** Background processes (`Watcher`, `ReputationCalculator`) use distributed locks (via Redis `SET NX`) to coordinate and prevent race conditions when multiple instances are active.
+*   **Stateless API:** All state is persisted in Redis.
+*   **Distributed Locking:** `Watcher` and `ReputationCalculator` use Redis `SET NX` locks.
 
 ### Logging & Observability
 
-Avtomatika is designed for modern observability stacks (ELK, Loki, Prometheus).
-
-*   **Structured Logging:** By default, logs are output in JSON format, making them easy to parse and index. Can be switched to text via `LOG_FORMAT="text"`.
-*   **Timezone Awareness:** All log timestamps respect the globally configured `TZ` environment variable.
-*   **Traceability:** Logs include `job_id`, `worker_id`, and `task_id` for full end-to-end tracing.
-*   **Metrics:** Prometheus metrics are available at `/_public/metrics`, including a specific counter `orchestrator_ratelimit_blocked_total` to track blocked requests.
+*   **Structured JSON Logging**: Easy to parse and index.
+*   **Asynchronous processing**: Non-blocking `QueueHandler` prevents event loop blocking.
+*   **Metrics**: Available at `/_public/metrics`, with `orchestrator_` prefix and `orchestrator_loop_lag_seconds`.
 
 ### Rate Limiting
 
-The Orchestrator includes a built-in, granular rate limiter based on Redis to protect against abuse and DDoS.
-
-*   **Granular Protection:** Limits are applied per Client Token (for API clients) or per Worker ID (for workers).
-*   **Context Aware:** Different limits apply to different operations:
-    *   **Heartbeats:** Higher limit (default 120/min) to allow frequent status updates.
-    *   **Polling:** Moderate limit (default 60/min) for task fetching.
-    *   **General API:** Default limit (default 100/min) for other operations.
-*   **Global Enforcement:** The middleware is applied globally, protecting all entry points including Worker API and Client API.
-
-### Storage Backend
-
-By default, the engine uses in-memory storage. For production, you must configure persistent storage via environment variables.
-
-*   **Redis (StorageBackend)**: For storing current job states (serialized with `msgpack`) and managing task queues (using Redis Streams with consumer groups).
-    *   Install:
-        ```bash
-        pip install "avtomatika[redis]"
-        ```
-    *   Configure:
-        ```bash
-        export REDIS_HOST=your_redis_host
-        ```
-
-*   **PostgreSQL/SQLite (HistoryStorage)**: For archiving completed job history.
-    *   Install:
-        ```bash
-        pip install "avtomatika[history]"
-        ```
-    *   Configure:
-        ```bash
-        export HISTORY_DATABASE_URI=...
-        ```
-        *   SQLite: `sqlite:///path/to/history.db`
-        *   PostgreSQL: `postgresql://user:pass@host/db`
+Granular, context-aware Redis-based rate limiter (Heartbeats: 120/min, Polling: 60/min, General: 100/min).
 
 ### Dynamic Blueprint Loading
 
-Avtomatika supports automatic loading of blueprints from a directory. This allows you to deploy and update your workflow logic by simply copying Python files without changing the orchestrator's core code.
-
-*   **Configure**: Set the `BLUEPRINTS_DIR` environment variable to the path containing your blueprint files.
-*   **How it works**: At startup, the engine scans the directory for all `.py` files, imports them, and automatically registers any found `Blueprint` instances.
-
-### Security
-
-The orchestrator uses tokens to authenticate API requests.
-
-*   **Client Authentication**: All API clients must provide a token in the `X-Client-Token` header. The orchestrator validates this token against client configurations.
-*   **Worker Authentication**: Workers must provide a token in the `X-Worker-Token` header.
-    *   `GLOBAL_WORKER_TOKEN`: You can set a global token for all workers using this environment variable. For development and testing, it defaults to `"secure-worker-token"`.
-    *   **Individual Tokens**: For production, it is recommended to define individual tokens for each worker in a separate configuration file and provide its path via the `WORKERS_CONFIG_PATH` environment variable. Tokens from this file are stored in a hashed format for security.
-
-> **Note on Dynamic Reloading:** The worker configuration file can be reloaded without restarting the orchestrator by sending an authenticated `POST` request to the `/api/v1/admin/reload-workers` endpoint. This allows for dynamic updates of worker tokens.
+Automatic loading from `BLUEPRINTS_DIR`. Scans, imports, and registers `.py` files on startup.
 
 ### Pure Holon Mode
-For high-security environments or when operating as a Compound Holon within an HLN, you can disable the public client API.
-*   **Enable/Disable**: Set `ENABLE_CLIENT_API="false"` (default: `true`).
-*   **Effect**: The Orchestrator will stop listening on `/api/v1/jobs/...`. It will only accept tasks via the Worker Protocol (RXON) from its parent.
+Disable public API with `ENABLE_CLIENT_API="false"` to only accept tasks via RXON from parent holons.
 
-### Observability
-
-When installed with the telemetry dependency, the system automatically provides:
-
-*   **Prometheus Metrics**: Available at the `/_public/metrics` endpoint.
-*   **Distributed Tracing**: Compatible with OpenTelemetry and systems like Jaeger or Zipkin.
 ## Contributor Guide
 
 ### Setup Environment
 
-*   Clone the repository.
-*   **For local development**, install the protocol package first:
-    ```bash
-    pip install -e ../rxon
-    ```
-*   Then install the engine in editable mode with all dependencies:
-    ```bash
-    pip install -e ".[all,test]"
-    ```
-*   Ensure you have system dependencies installed, such as `graphviz`.
-    *   Debian/Ubuntu:
-        ```bash
-        sudo apt-get install graphviz
-        ```
-    *   macOS (Homebrew):
-        ```bash
-        brew install graphviz
-        ```
+```bash
+pip install -e ../rxon
+pip install -e ".[all,test]"
+```
 
 ### Running Tests
 
-To run the `avtomatika` test suite:
 ```bash
 pytest tests/
 ```
 
 ### Interactive API Documentation
 
-Avtomatika provides a built-in interactive API documentation page (similar to Swagger UI) that is automatically generated based on your registered blueprints.
-
-*   **Endpoint:** `/_public/docs`
-*   **Features:**
-    *   **List of all system endpoints:** Detailed documentation for Public, Protected, and Worker API groups.
-    *   **Dynamic Blueprint Documentation:** Automatically generates and lists documentation for all blueprints registered in the engine, including their specific API endpoints.
-    *   **Interactive Testing:** Allows you to test API calls directly from the browser. You can provide authentication tokens, parameters, and request bodies to see real server responses.
+Available at `/_public/docs`. Features dynamic blueprint documentation and interactive testing.
 
 ## Detailed Documentation
 
-For a deeper dive into the system, please refer to the following documents:
-
-- [**Architecture Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/architecture.md): A detailed overview of the system components and their interactions.
-- [**API Reference**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/api_reference.md): Full specification of the HTTP API.
-- [**Deployment Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/deployment.md): Instructions for deploying with Gunicorn/Uvicorn and NGINX.
-- [**Cookbook**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/cookbook/README.md): Examples and best practices for creating blueprints.
+- [**Architecture Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/architecture.md)
+- [**API Reference**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/api_reference.md)
+- [**Configuration Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/configuration.md)
+- [**Deployment Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/deployment.md)
+- [**Cookbook**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/cookbook/README.md)

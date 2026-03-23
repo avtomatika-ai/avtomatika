@@ -20,6 +20,9 @@ from avtomatika.watcher import Watcher
 async def test_dispatch_timeout():
     """Verify dispatch timeout for jobs waiting in queue."""
     engine = MagicMock()
+    engine.config.WATCHER_INTERVAL_SECONDS = 20
+    engine.config.WATCHER_LIMIT = 100
+    engine.config.INSTANCE_ID = "test-instance"
     # Mock an expired job in the queue (picked_up is None)
     job_id = "expired-in-queue"
     engine.storage.get_timed_out_jobs = AsyncMock(return_value=[job_id])
@@ -56,6 +59,9 @@ async def test_dispatch_timeout():
 async def test_result_deadline_timeout():
     """Verify result deadline timeout for tasks being executed."""
     engine = MagicMock()
+    engine.config.WATCHER_INTERVAL_SECONDS = 20
+    engine.config.WATCHER_LIMIT = 100
+    engine.config.INSTANCE_ID = "test-instance"
     # Task was picked up by a worker, but result deadline passed
     job_id = "expired-during-execution"
     engine.storage.get_timed_out_jobs = AsyncMock(return_value=[job_id])
@@ -150,6 +156,8 @@ async def test_s3_cleanup_on_timeout():
         JOB_MAX_RETRIES = 3
         WORKER_TIMEOUT_SECONDS = 300
         WATCHER_INTERVAL_SECONDS = 20
+        WATCHER_LIMIT = 100
+        INSTANCE_ID = "test-instance"
         REDIS_STREAM_BLOCK_MS = 0  # executor uses this
 
     mock_config = MockConfig()
@@ -321,6 +329,8 @@ async def test_reputation_impact_on_execution_timeout():
     mock_config.LOG_FORMAT = "text"
     mock_config.TZ = "UTC"
     mock_config.RATE_LIMITING_ENABLED = False
+    mock_config.INSTANCE_ID = "test-instance"
+    mock_config.WATCHER_LIMIT = 100
 
     engine = OrchestratorEngine(mock_storage, mock_config)
     engine.storage.save_job_state = AsyncMock()

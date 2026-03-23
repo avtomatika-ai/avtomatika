@@ -137,7 +137,7 @@ async def test_task_files_helper_methods(config):
     with (
         patch("avtomatika.s3.get_async", AsyncMock()) as mock_get,
         patch("pathlib.Path.exists", return_value=False),
-        patch("avtomatika.s3.aiopen", MagicMock()) as mock_aio_open,
+        patch("avtomatika.s3.aiopen") as mock_aio_open,
     ):
         # Helper methods like read_text call download() internally
         mock_resp = MagicMock()
@@ -164,7 +164,7 @@ async def test_task_files_helper_methods(config):
         patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.stat") as mock_stat,
-        patch("avtomatika.s3.aiopen", MagicMock()) as mock_aio_open,
+        patch("avtomatika.s3.aiopen") as mock_aio_open,
     ):
         mock_stat.return_value.st_size = 5
         mock_stat.return_value.st_mode = 0o100644  # Regular file
@@ -222,10 +222,14 @@ async def test_recursive_upload(config):
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.stat") as mock_stat,
         patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
-        patch("avtomatika.s3.aiopen", MagicMock()),
+        patch("avtomatika.s3.aiopen", MagicMock()) as mock_open,
     ):
         mock_stat.return_value.st_size = 10
         mock_stat.return_value.st_mode = 0o100644  # Regular file
+        mock_file = AsyncMock()
+        mock_file.read.return_value = b"data"
+        mock_open.return_value.__aenter__.return_value = mock_file
+
         await tf.upload("data")
         assert mock_put.call_count == 2
 

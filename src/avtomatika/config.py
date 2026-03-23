@@ -65,9 +65,10 @@ class Config:
         self.WATCHER_INTERVAL_SECONDS: int = int(
             getenv("WATCHER_INTERVAL_SECONDS", 20),
         )
+        self.WATCHER_LIMIT: int = int(getenv("WATCHER_LIMIT", 500))
         self.STRICT_EVENT_VALIDATION: bool = getenv("STRICT_EVENT_VALIDATION", "true").lower() == "true"
         self.EXECUTOR_MAX_CONCURRENT_JOBS: int = int(
-            getenv("EXECUTOR_MAX_CONCURRENT_JOBS", 100),
+            getenv("EXECUTOR_MAX_CONCURRENT_JOBS", 1000),
         )
 
         # Reputation settings
@@ -110,6 +111,7 @@ class Config:
 
         # Advanced Dispatching & Load Balancing
         self.DISPATCHER_SOFT_LIMIT: int = int(getenv("DISPATCHER_SOFT_LIMIT", 3))
+        self.DISPATCHER_MAX_CANDIDATES: int = int(getenv("DISPATCHER_MAX_CANDIDATES", 50))
 
         self.WORK_STEALING_ENABLED: bool = getenv("WORK_STEALING_ENABLED", "true").lower() == "true"
 

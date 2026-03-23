@@ -6,7 +6,7 @@ This document describes all HTTP endpoints provided by the Orchestrator server. 
 
 ## Authentication
 
--   **Client -> Orchestrator:** All requests to `/api/*` endpoints must contain the `X-Client-Token` header with the client token.
+-   **Client -> Orchestrator:** All requests to `/api/v1/*` endpoints must contain the `X-Client-Token` header with the client token.
 -   **Worker -> Orchestrator:** All requests to `/_worker/*` endpoints must contain the `X-Worker-Token` header with a valid worker token (individual or global).
 
 ---
@@ -24,7 +24,7 @@ These endpoints do not require authentication.
 ### Prometheus Metrics
 
 -   **Endpoint:** `GET /_public/metrics`
--   **Description:** Returns application metrics in a format compatible with Prometheus.
+-   **Description:** Returns application metrics in a format compatible with Prometheus. Includes loop lag monitoring.
 -   **Response (`200 OK`):** Text response with metrics.
 
 ### Webhook for "Human Approval"
@@ -48,13 +48,13 @@ These endpoints do not require authentication.
 
 ---
 
-## 2. Client Endpoints (`/api`)
+## 2. Client Endpoints (`/api/v1`)
 
 These endpoints are designed for external systems that initiate and monitor workflows. Requires `X-Client-Token` header.
 
 ### Create New Job
 
--   **Endpoint:** `POST /api/{api_version}/{blueprint_api_endpoint}`
+-   **Endpoint:** `POST /api/v1/{blueprint_api_endpoint}`
 -   **Example:** `POST /api/v1/jobs/simple_flow`
 -   **Description:** Creates and starts a new instance (Job) of the specified blueprint.
 -   **Request Body:**
@@ -67,65 +67,63 @@ These endpoints are designed for external systems that initiate and monitor work
     }
     ```
     *   `initial_data` (object, optional): Initial data for the job.
-    *   `webhook_url` (string, optional): URL to receive asynchronous notifications about job completion, failure, or quarantine.
-    *   `dispatch_timeout` (integer, optional): Maximum time in seconds a task can wait in the queue for a worker.
-    *   `result_timeout` (integer, optional): Absolute deadline in seconds for receiving the result since job creation.
+    *   `webhook_url` (string, optional): URL to receive asynchronous notifications.
+    *   `dispatch_timeout` (integer, optional): Maximum time in seconds a task can wait in queue.
+    *   `result_timeout` (integer, optional): Absolute deadline for the job.
 -   **Response (`202 Accepted`):** `{"status": "accepted", "job_id": "..."}`
--   **Response (`429 Too Many Requests`):** If the client or IP exceeds the configured rate limit.
 
 ### Get Job Status
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}`
--   **Description:** Returns the full current state of the specified job.
+-   **Description:** Returns the current state of the specified job.
+-   **Query Parameters:**
+    *   `fields` (string, optional): Comma-separated list of fields to return (e.g., `status,current_state`).
 -   **Response (`200 OK`):** JSON object with `Job` state.
--   **Response (`404 Not Found`):** If a job with such ID is not found.
 
 ### Get S3 Upload URL
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}/files/upload`
--   **Description:** Generates a temporary S3 presigned URL for uploading a file directly to the job's storage.
+-   **Description:** Generates a temporary S3 presigned URL for uploading a file directly.
 -   **Query Parameters:**
-    *   `filename` (string, required): Name of the file to be uploaded.
-    *   `expires_in` (integer, optional): Link validity in seconds. Default: `3600`.
+    *   `filename` (string, required): Name of the file.
+    *   `expires_in` (integer, optional): Link validity in seconds.
 -   **Response (`200 OK`):** `{"url": "...", "expires_in": 3600, "method": "PUT"}`
--   **Response (`501 Not Implemented`):** If S3 support is not enabled.
 
 ### Upload File (Direct Streaming)
 
 -   **Endpoint:** `PUT /api/v1/jobs/{job_id}/files/content/{filename}`
--   **Description:** Uploads a file directly to S3 via Orchestrator streaming proxy. Bypasses local disk and uses minimal RAM.
--   **Body:** Binary file content.
+-   **Description:** Uploads a file directly to S3 via Orchestrator streaming proxy.
 -   **Response (`200 OK`):** `{"status": "uploaded", "s3_uri": "..."}`
 
 ### Download File (Stable Link)
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}/files/download/{filename}`
--   **Description:** A stable link that automatically redirects to a fresh S3 presigned URL. Useful for browser downloads or as a permanent result link.
+-   **Description:** A stable link that redirects to a fresh S3 presigned URL.
 -   **Response (`302 Found`):** Redirects to the S3 URL.
 
 ### Cancel Running Task
 
 - **Endpoint**: `POST /api/v1/jobs/{job_id}/cancel`
 - **Description**: Initiates cancellation of a task being executed by a worker.
-- **Response (`200 OK`):** `{"status": "cancellation_request_sent"}` (if via WebSocket) or `{"status": "cancellation_request_accepted"}` (if via Redis flag).
+- **Response (`200 OK`):** `{"status": "cancellation_request_sent"}`
 
 ### Get Job History
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}/history`
--   **Description:** Returns the full event history for the specified job (if history storage is enabled).
+-   **Description:** Returns the full event history for the specified job.
 -   **Response (`200 OK`):** Array of event objects.
 
 ### Get Blueprint Graph
 
 -   **Endpoint:** `GET /api/v1/blueprints/{blueprint_name}/graph`
--   **Description:** Returns the blueprint structure in DOT format for visualization.
+-   **Description:** Returns the blueprint structure in DOT format.
 -   **Response (`200 OK`):** Text response in `text/vnd.graphviz` format.
 
 ### Get Active Workers List
 
 -   **Endpoint:** `GET /api/v1/workers`
 -   **Description:** Returns a list of all currently active workers.
--   **Response (`200 OK`):** Array of objects with worker information.
+-   **Response (`200 OK`):** Array of worker objects.
 
 ### Get Dashboard Data
 
@@ -136,19 +134,12 @@ These endpoints are designed for external systems that initiate and monitor work
 ### Get Skill Catalog (Marketplace)
 
 -   **Endpoint:** `GET /api/v1/workers/catalog`
--   **Description:** Returns an aggregated catalog of all unique skills available in the network, with their full contracts (schemas, statuses, prices).
--   **Response (`200 OK`):** JSON object where keys are skill names.
+-   **Description:** Returns an aggregated catalog of unique skills. Result is cached for 10 seconds.
+-   **Response (`200 OK`):** JSON object with skills.
 
 ---
 
 ## 3. Internal Endpoints for Workers (`/_worker`)
-...
-### Emit Generic Event (Bottom-Up)
-
--   **Endpoint:** `POST /_worker/events`
--   **Description:** Allows a worker to send any signal (event) to the Orchestrator.
--   **Request Body:** `WorkerEventPayload` (including `origin_worker_id` and `bubbling_chain`).
--   **Response (`200 OK`):** `{"status": "event_accepted"}`
 
 These endpoints are used by workers to register, receive tasks, and submit results. Requires `X-Worker-Token` header.
 
@@ -156,11 +147,14 @@ These endpoints are used by workers to register, receive tasks, and submit resul
 
 -   **Endpoint:** `POST /_worker/workers/register`
 -   **Description:** Registers a worker in the system.
--   **Request Body:** JSON object with full worker description (ID, supported skills, resources, etc.).
+-   **Request Body:** 
     ```json
     {
       "worker_id": "worker-123",
-      "supported_skills": ["video_processing", "audio_transcription"]
+      "supported_skills": [
+        {"name": "transcribe", "input_schema": {...}, "output_schema": {...}}
+      ],
+      "capabilities": {"gpu": true, "vram_gb": 16}
     }
     ```
 -   **Response (`200 OK`):** `{"status": "registered"}`
@@ -168,15 +162,13 @@ These endpoints are used by workers to register, receive tasks, and submit resul
 ### Heartbeat / Status Update
 
 -   **Endpoint:** `PATCH /_worker/workers/{worker_id}`
--   **Description:** Universal endpoint for confirming activity and updating state.
-    -   **Empty Body:** Acts as a lightweight "ping", only updates worker TTL.
-    -   **Request Body (JSON):** Updates worker data (status, load, available skills) and updates TTL.
--   **Response (`200 OK`):** `{"status": "ttl_refreshed"}` or JSON with updated worker state.
+-   **Description:** Confirms activity and updates state. Supports Jitter to distribute load.
+-   **Response (`200 OK`):** `{"status": "ok", "next_heartbeat_jitter_ms": 1500}`
 
 ### Get Next Task (Long-Polling)
 
 -   **Endpoint:** `GET /_worker/workers/{worker_id}/tasks/next`
--   **Description:** Worker requests the next task. Connection is held open if no tasks are available.
+-   **Description:** Worker requests the next task. Connection is held open if no tasks are available. Uses optimized Task Stealing.
 -   **Response (`200 OK`):** JSON object with task data.
 -   **Response (`204 No Content`):** Returned on timeout if no new tasks appeared.
 
@@ -191,18 +183,19 @@ These endpoints are used by workers to register, receive tasks, and submit resul
       "task_id": "...",
       "worker_id": "...",
       "status": "success",
-      "data": { "output": "..." },
-      "error": null
+      "data": { ... }
     }
     ```
--   **Response (`200 OK`):** 
-    - `{"status": "accepted", "transition": "..."}`: Result accepted and pipeline continues.
-    - `{"status": "ignored", "reason": "stale", "message": "..."}`: Task ID mismatch (job moved on).
-    - `{"status": "ignored", "reason": "late", "message": "..."}`: Result received after deadline/timeout.
-    - `{"status": "ignored", "reason": "cancelled", "message": "..."}`: Job was cancelled.
+-   **Response (`200 OK`):** `{"status": "accepted"}`
+
+### Emit Generic Event (Bottom-Up)
+
+-   **Endpoint:** `POST /_worker/events`
+-   **Description:** Allows a worker to send signals (progress, alerts).
+-   **Response (`200 OK`):** `{"status": "event_accepted"}`
 
 ### Establish WebSocket Connection
 
 - **Endpoint**: `GET /_worker/ws/{worker_id}`
-- **Description**: Establishes a WebSocket connection to receive real-time commands from the orchestrator (e.g., `cancel_task`).
+- **Description**: Real-time command channel.
 - **Protocol**: `WebSocket`

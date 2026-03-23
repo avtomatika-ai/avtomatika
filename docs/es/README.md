@@ -6,7 +6,7 @@
 [![Versión de PyPI](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
-Avtomatika es un motor potente y basado en estados para gestionar flujos de trabajo asíncronos complejos en Python. Proporciona un marco robusto para construir aplicaciones escalables y resilientes al separar la lógica del proceso de la lógica de ejecución.
+Avtomatika es un motor de alto rendimiento y basado en estados para gestionar flujos de trabajo asíncronos complejos en Python. Proporciona un marco robusto para construir aplicaciones escalables y resilientes al separar la lógica del proceso de la lógica de ejecución.
 
 Este documento sirve como una guía completa para desarrolladores que buscan construir pipelines (blueprints) e integrar el Orquestador en sus aplicaciones.
 
@@ -14,7 +14,7 @@ Este documento sirve como una guía completa para desarrolladores que buscan con
 - [Concepto Principal: Orquestador, Blueprints y Workers](#concepto-principal-orquestador-blueprints-y-workers)
 - [Instalación](#instalación)
 - [Inicio Rápido: Uso como Librería](#inicio-rápido-uso-como-librería)
-- [Conceptos Clave: JobContext y Actions](#conceptos-clave-jobcontext-y-actions)
+- [Conceptos Clave: JobContext y Actions](#conceptos-clave-jobcontext-and-actions)
 - [Recetario de Blueprints: Características Clave](#recetario-de-blueprints-características-clave)
   - [Transiciones Condicionales (.when())](#transiciones-condicionales-when)
   - [Delegar Tareas a Workers (dispatch_task)](#delegar-tareas-a-workers-dispatch_task)
@@ -26,7 +26,7 @@ Este documento sirve como una guía completa para desarrolladores que buscan con
 - [Configuración de Producción](#configuración-de-producción)
   - [Tolerancia a Fallos](#tolerancia-a-fallos)
   - [Backend de Almacenamiento](#backend-de-almacenamiento)
-  - [Observabilidad](#observabilidad)
+  - [Observabilidad](#observability)
 - [Guía para Contribuidores](#guía-para-contribuidores)
   - [Configuración del Entorno](#configuración-del-entorno)
   - [Ejecución de Pruebas](#ejecución-de-pruebas)
@@ -108,8 +108,6 @@ bp = Blueprint(
     api_endpoint="/jobs/my_flow"
 )
 
-> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
-
 # Usar inyección de dependencias para obtener solo los datos que necesitas.
 @bp.handler(is_start=True)
 async def start(job_id: str, initial_data: dict, actions: ActionFactory):
@@ -153,38 +151,32 @@ if __name__ == "__main__":
 
 El `OrchestratorEngine` ofrece dos formas de iniciar el servidor:
 
-*   **`engine.run()`**: Este es un método simple y **bloqueante**. Es útil para scripts dedicados donde el orquestador es el único componente principal. Se encarga de iniciar y detener el servidor por ti. No debes usar esto dentro de una función `async def` que sea parte de una aplicación más grande, ya que puede entrar en conflicto con el bucle de eventos.
+*   **`engine.run()`**: Este es un método simple y **bloqueante**. Se encarga de iniciar y detener el servidor por ti. No debes usar esto dentro de una función `async def` que sea parte de una aplicación más grande.
 
 *   **`await engine.start()`** y **`await engine.stop()`**: Estos son los métodos no bloqueantes para integrar el motor en una aplicación `asyncio` más grande.
     *   `start()` configura e inicia el servidor web en segundo plano.
     *   `stop()` apaga el servidor con elegancia y limpia los recursos.
-    El ejemplo de "Inicio Rápido" anterior demuestra la forma correcta de usar estos métodos.
-## Argumentos del Manejador e Inyección de Dependencias
+## Handler Arguments e Inyección de Dependencias
 
-Los manejadores de estado son el núcleo de la lógica de tu flujo de trabajo. Avtomatika proporciona un potente sistema de inyección de dependencias para que escribir manejadores sea limpio y eficiente.
+State handlers son el núcleo de la lógica de tu flujo de trabajo. Avtomatika proporciona un potente sistema de inyección de dependencias.
 
-En lugar de recibir un único objeto `context` grande, tu manejador puede pedir exactamente lo que necesita como argumentos de función. El motor los proporcionará automáticamente.
+> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
 
 Los siguientes argumentos se pueden inyectar por nombre:
 
 *   **Desde el contexto principal del trabajo:**
     *   `job_id` (str): El ID del trabajo actual.
-    *   `initial_data` (dict): Los datos con los que se creó el trabajo.
-    *   `state_history` (dict): Un diccionario para almacenar y pasar datos entre pasos. Los datos devueltos por los workers se fusionan automáticamente en este diccionario.
-    *   `actions` (ActionFactory): El objeto utilizado para decirle al orquestador qué hacer a continuación (por ejemplo, `actions.go_to(...)`).
-    *   `client` (ClientConfig): Información sobre el cliente API que inició el trabajo.
-    *   `data_stores` (SimpleNamespace): Acceso a recursos compartidos como conexiones de base de datos o cachés.
+    *   `initial_data` (dict): Los datos iniciales.
+    *   `state_history` (dict): Diccionario de datos entre pasos.
+    *   `actions` (ActionFactory): Control de flujo del orquestador.
+    *   `client` (ClientConfig): Información del cliente API.
+    *   `data_stores` (SimpleNamespace): Acceso a recursos compartidos.
 *   **Desde los resultados del worker:**
     *   Cualquier clave de un diccionario devuelto por un worker anterior se puede inyectar por nombre.
 
 ### Ejemplo: Inyección de Dependencias
 
-Esta es la forma recomendada de escribir manejadores.
-
 ```python
-# Un worker para esta tarea devolvió: {"output_path": "/videos/123.mp4", "duration": 95}
-# Este diccionario se fusionó automáticamente en `state_history`.
-
 @bp.handler
 async def publish_video(
     job_id: str,
@@ -198,83 +190,50 @@ async def publish_video(
 
 ### El Objeto `actions`
 
-Este es el argumento inyectado más importante. Le dice al orquestador qué hacer a continuación. **Solo se puede llamar a un** método de `actions` en un solo manejador.
-
 *   `actions.go_to("next_state")`: Mueve el trabajo a un nuevo estado.
 *   `actions.dispatch_task(...)`: Delega el trabajo a un Worker.
 *   `actions.dispatch_parallel(...)`: Ejecuta múltiples tareas a la vez.
-*   `actions.await_human_approval(...)`: Pausa el flujo de trabajo para recibir entrada externa.
-*   `actions.run_blueprint(...)`: Inicia un flujo de trabajo secundario.
+*   `actions.await_human_approval(...)`: Pausa para entrada externa.
+*   `actions.run_blueprint(...)`: Inicia un flujo secundario.
 
-### Compatibilidad con Versiones Anteriores: El Objeto `context`
-
-Para compatibilidad con versiones anteriores o si prefieres tener un solo objeto, aún puedes pedir `context`.
-
-```python
-# Este manejador es equivalente al de arriba.
-@bp.handler
-async def publish_video(context):
-    output_path = context.state_history.get("output_path")
-    duration = context.state_history.get("duration")
-
-    print(f"Job {context.job_id}: Publicando video en {output_path} ({duration}s).")
-    context.actions.go_to("complete")
-```
 ## Conceptos Clave: JobContext y Actions
 
 ### Arquitectura de Alto Rendimiento
 
 Avtomatika está diseñada para entornos de alta carga con miles de workers concurrentes.
 
-*   **Smart Dispatching (Despacho Inteligente)**: Enrutamiento de alto rendimiento utilizando Redis.
-    *   **Deep Schema Matching**: Prioriza a los workers cuyo `input_schema` coincide con los parámetros de la tarea, asegurando la compatibilidad antes del despacho.
-    *   **Overflow Strategy**: Desvía automáticamente la carga hacia trabajadores más costosos si los económicos están saturados (alcanzan el límite `queue_length > SOFT_LIMIT`).
-    *   **Hot Cache & Skill Awareness**: Prioriza a los workers que ya tienen modelos de IA específicos cargados en memoria.
-    *   **Work Stealing**: Los trabajadores inactivos pueden robar tareas de forma atómica de colegas sobrecargados, asegurando el máximo rendimiento.
-    *   **Load Balancing**: Emplea incrementos de carga optimistas para prevenir la sobrecarga de los workers.
+*   **Arquitectura de Alto Rendimiento**:
+    *   **Smart Dispatching**: Enrutamiento de alto rendimiento utilizando intersecciones de conjuntos en Redis.
+        *   **Deep Schema Matching**: Prioriza a los workers cuyos esquemas coinciden con la tarea.
+        *   **Overflow Strategy**: Desvío automático a workers costosos si los económicos están saturados.
+        *   **Work Stealing**: Los trabajadores inactivos pueden robar tareas atómicamente a velocidad O(1).
+        *   **Load Balancing**: Incrementos de carga optimistas entre latidos (heartbeats).
+    *   **Networking Eficiente**: TCP Keep-Alive y compresión Zstd/Gzip.
+    *   **Logging Asíncrono**: Procesamiento no bloqueante vía `QueueHandler`.
+    *   **IO Optimizado**: Serialización pesada en hilos e índices de DB para el historial.
 *   **Reputación Autoregulada**:
-    *   **Sistema de Penalizaciones**: Reducción inmediata de reputación por violaciones de contrato (`REPUTATION_PENALTY_CONTRACT_VIOLATION`) o fallos críticos.
-    *   **Bucle de Recuperación**: Pequeñas recompensas de reputación por cada tarea completada con éxito (`REPUTATION_REWARD_SUCCESS`), fomentando la calidad constante.
-    *   **Trusted Guard**: Ignora automáticamente a los holones con reputación por debajo de `REPUTATION_MIN_THRESHOLD`.
-*   **Seguridad de Confianza Cero**:
-    *   **mTLS (TLS Mutuo)**: Autenticación mutua entre el Orquestador y los Workers mediante certificados.
-    *   **STS (Servicio de Tokens de Seguridad)**: Mecanismo de rotación de tokens.
-    *   **Cadena de Identidad (Identity Chain)**: Rastreo transparente de la ruta de los eventos burbujeados a través de todos los niveles de la holarquía.
+    *   **Penalizaciones**: Reducción inmediata por violaciones de contrato (-0.2) o fallos (-0.05).
+    *   **Trusted Guard**: Parámetro `REPUTATION_MIN_THRESHOLD` para ignorar nodos poco fiables.
 *   **Arquitectura basada en Contratos**:
-    *   **Validación de API**: Validación estricta de `initial_data` contra los contratos de los Blueprints antes de la creación del trabajo.
-    *   **Validación de Resultados**: Verificación automática de los resultados de los workers contra su `output_schema` declarado.
-    *   **Catálogo de Red**: Mercado agregado en tiempo real de todas las habilidades y contratos únicos disponibles en la red.
-*   **Capa de Protocolo (`rxon`)**: Todas las interacciones se basan en un contrato estricto que garantiza la compatibilidad y la posibilidad de cambiar de transporte.
+    *   **Validación de API**: Verificación de `initial_data` antes de crear el trabajo.
+    *   **Validación de Resultados**: Verificación de las respuestas de los workers contra su esquema.
+*   **Heartbeats Bi-direccionales**: Canal de comunicación robusto con Jitter para evitar tormentas de peticiones.
+*   **Seguridad de Confianza Cero**: mTLS y STS para rotación de tokens de acceso.
 *   **E/S No Bloqueante**:
-    *   **Webhooks**: Enviados a través de una cola de fondo limitada, con soporte para retransisión de eventos de los workers.
+    *   **Webhooks**: Enviados vía un pool paralelo de workers de fondo.
     *   **Streaming S3**: Uso de memoria constante independientemente del tamaño del archivo.
 
 ## Recetario de Blueprints: Características Clave
 
 ### 1. Transiciones Condicionales (`.when()`)
 
-Usa `.when()` para crear ramas de lógica condicional. La cadena de condición es evaluada por el motor antes de llamar al manejador, por lo que aún usa el prefijo `context.`. El manejador en sí, sin embargo, puede usar inyección de dependencias.
-
 ```python
-# La condición `.when()` aún se refiere a `context`.
 @bp.handler().when("context.initial_data.type == 'urgent'")
 async def decision_step(actions):
     actions.go_to("urgent_processing")
-
-# El manejador predeterminado si ninguna condición `.when()` coincide.
-@bp.handler
-async def decision_step(actions):
-    actions.go_to("normal_processing")
 ```
 
-> **Nota sobre Limitaciones:** La versión actual de `.when()` utiliza un analizador simple con las siguientes limitaciones:
-> *   **Sin Atributos Anidados:** Solo puedes acceder a campos directos de `context.initial_data` o `context.state_history` (por ejemplo, `context.initial_data.field`). Los objetos anidados (por ejemplo, `context.initial_data.area.field`) no son compatibles.
-> *   **Solo Comparaciones Simples:** Solo se admiten los siguientes operadores: `==`, `!=`, `>`, `<`, `>=`, `<=`. No se permiten expresiones lógicas complejas con `AND`, `OR` o `NOT`.
-> *   **Tipos de Valor Limitados:** El analizador solo reconoce cadenas (entre comillas), enteros y flotantes. Los valores booleanos (`True`, `False`) y `None` no se analizan correctamente y se tratarán como cadenas.
-
 ### 2. Delegar Tareas a Workers (`dispatch_task`)
-
-Esta es la función principal para delegar trabajo. El orquestador pondrá en cola la tarea y esperará a que un worker la recoja y devuelva un resultado.
 
 ```python
 @bp.handler
@@ -282,332 +241,119 @@ async def transcode_video(initial_data, actions):
     actions.dispatch_task(
         task_type="video_transcoding",
         params={"input_path": initial_data.get("path")},
-        # Definir el siguiente paso basado en el estado de respuesta del worker
-        transitions={
-            "success": "publish_video",
-            "failure": "transcoding_failed",
-            "needs_review": "manual_review" # Ejemplo de un estado personalizado
-        }
+        transitions={"success": "publish_video", "failure": "retry"}
     )
 ```
-Si el worker devuelve un estado no listado en `transitions`, el trabajo pasará automáticamente a un estado fallido.
 
 ### 3. Ejecución Paralela y Agregación (Fan-out/Fan-in)
 
-Ejecuta múltiples tareas simultáneamente y reúne sus resultados.
-
 ```python
-# 1. Fan-out: Despachar múltiples tareas para ser agregadas en un solo estado
-@bp.handler
-async def process_files(initial_data, actions):
-    tasks_to_dispatch = [
-        {"task_type": "file_analysis", "params": {"file": file}}
-        for file in initial_data.get("files", [])
-    ]
-    # Usa dispatch_parallel para enviar todas las tareas a la vez.
-    # Todas las tareas exitosas conducirán implícitamente al estado 'aggregate_into'.
-    actions.dispatch_parallel(
-        tasks=tasks_to_dispatch,
-        aggregate_into="aggregate_results"
-    )
+actions.dispatch_parallel(tasks=tasks_to_dispatch, aggregate_into="aggregate_results")
 
-# 2. Fan-in: Recopilar resultados usando el decorador @aggregator
 @bp.aggregator
 async def aggregate_results(aggregation_results, state_history, actions):
-    # Este manejador solo se ejecutará DESPUÉS de que TODAS las tareas
-    # despachadas por dispatch_parallel estén completas.
-
-    # aggregation_results es un diccionario de {task_id: result_dict}
     summary = [res.get("data") for res in aggregation_results.values()]
     state_history["summary"] = summary
-    actions.go_to("processing_complete")
+    actions.go_to("complete")
 ```
 
 ### 4. Inyección de Dependencias (DataStore)
 
-Proporcionar a los manejadores acceso a recursos externos (como una caché o cliente de BD).
-
 ```python
-import redis.asyncio as redis
+bp = Blueprint("bp", data_stores={"cache": redis_client})
 
-# 1. Inicializar y registrar tu DataStore
-redis_client = redis.Redis(decode_responses=True)
-bp = Blueprint(
-    "blueprint_with_datastore",
-    data_stores={"cache": redis_client}
-)
-
-# 2. Usarlo en un manejador mediante inyección de dependencias
 @bp.handler
 async def get_from_cache(data_stores):
-    # Acceder al redis_client por el nombre "cache"
     user_data = await data_stores.cache.get("user:123")
-    print(f"Usuario desde caché: {user_data}")
 ```
 
-### 5. Programador Nativo (Native Scheduler)
+### 5. Programador Nativo (Scheduler)
 
-Avtomatika incluye un programador distribuido integrado. Te permite activar blueprints periódicamente (intervalo, diario, semanal, mensual) sin herramientas externas como cron.
-
-*   **Configuración:** Definida en `schedules.toml`.
-*   **Conciencia de Zona Horaria:** Soporta configuración global de zona horaria (por ejemplo, `TZ="Europe/Madrid"`).
-*   **Soporte de Expiración:** Soporta `dispatch_timeout` y `result_timeout` para asegurar que las tareas no se ejecuten o completen demasiado tarde.
-*   **Bloqueo Distribuido:** Seguro para ejecutar con múltiples instancias del orquestador; se garantiza que los trabajos se ejecuten solo una vez por intervalo utilizando bloqueos distribuidos (Redis/Memoria).
+*   **Configuración:** `schedules.toml`.
+*   **Bloqueo Distribuido:** Seguro para múltiples instancias vía Redis.
 
 ```toml
-# ejemplo de schedules.toml
 [nightly_backup]
 blueprint = "backup_flow"
 daily_at = "02:00"
-dispatch_timeout = 60 # Falla si ningún worker la recoge en 1 minuto
+dispatch_timeout = 60
 ```
 
 ### 6. Notificaciones Webhook
 
-El orquestador puede enviar notificaciones asíncronas a un sistema externo cuando un trabajo se completa, falla o entra en cuarentena. Esto elimina la necesidad de que los clientes consulten constantemente la API para actualizaciones de estado.
+Notificaciones asíncronas para `job_finished`, `job_failed` o `job_quarantined`.
 
-### 7. Descarga de Carga Útil en S3 (S3 Payload Offloading)
+### 7. Descarga de Carga Útil en S3
 
-El orquestador proporciona soporte de primera clase para manejar archivos grandes a través de almacenamiento compatible con S3, impulsado por la biblioteca de alto rendimiento `obstore` (enlaces de Rust).
-
-*   **Seguridad de Memoria (Streaming)**: Utiliza streaming para cargas y descargas, permitiendo el procesamiento de archivos más grandes que la RAM disponible sin errores OOM.
-*   **Modo Gestionado**: El Orquestador gestiona el ciclo de vida del archivo (limpieza automática de objetos S3 y archivos temporales locales al finalizar el trabajo).
-*   **Inyección de Dependencias**: Usa el argumento `task_files` en tus manejadores para leer/escribir datos fácilmente.
-*   **Soporte de Directorios**: Soporta descarga y carga recursiva de directorios completos.
+*   **Streaming**: Uso eficiente de memoria vía `obstore` (Rust).
+*   **Gestionado**: Limpieza automática de objetos S3.
 
 ```python
 @bp.handler
 async def process_data(task_files, actions):
-    # Descarga por streaming de un archivo grande
     local_path = await task_files.download("large_dataset.csv")
-    
-    # ... procesar datos ...
-    
-    # Subir resultados
     await task_files.write_json("results.json", {"status": "done"})
-    
     actions.go_to("finished")
 ```
 
-## Configuración de Producción
-*   **Eventos:**
-    *   `job_finished`: El trabajo alcanzó un estado final exitoso.
-    *   `job_failed`: El trabajo falló (por ejemplo, debido a un error o entrada inválida).
-    *   `job_quarantined`: El trabajo fue movido a cuarentena después de fallos repetidos.
+## Grupos de API y Versiones
+
+Todos los endpoints externos están prefijados con `/api/v1/`.
 
 **Ejemplo de Solicitud:**
 ```json
 POST /api/v1/jobs/my_flow
 {
-    "initial_data": {
-        "video_url": "..."
-    },
+    "initial_data": { "video_url": "..." },
     "webhook_url": "https://my-app.com/webhooks/avtomatika",
-    "dispatch_timeout": 30,
-    "result_timeout": 120
-}
-```
-
-**Ejemplo de Carga Útil del Webhook:**
-```json
-{
-    "event": "job_finished",
-    "job_id": "123e4567-e89b-12d3-a456-426614174000",
-    "status": "finished",
-    "result": {
-        "output_path": "/videos/result.mp4"
-    },
-    "error": null
+    "dispatch_timeout": 30
 }
 ```
 
 ## Configuración de Producción
 
-El comportamiento del orquestador se puede configurar a través de variables de entorno. Además, cualquier parámetro de configuración cargado desde variables de entorno se puede anular programáticamente en el código de tu aplicación después de que se haya inicializado el objeto `Config`. Esto proporciona flexibilidad para diferentes escenarios de implementación y prueba.
-
-**Importante:** El sistema emplea una **validación estricta** para los archivos de configuración (`clients.toml`, `workers.toml`) al inicio. Si un archivo de configuración no es válido (por ejemplo, TOML mal formado, campos obligatorios faltantes), la aplicación **fallará rápidamente** y saldrá con un error, en lugar de iniciarse en un estado parcialmente roto. Esto garantiza la seguridad y la integridad de la implementación.
-
 ### Archivos de Configuración
 
-Para gestionar el acceso y la configuración de los workers de forma segura, Avtomatika utiliza archivos de configuración TOML.
+-   **`clients.toml`**: Clientes API, tokens y cuotas.
+-   **`workers.toml`**: Tokens individuales para workers.
+-   **`schedules.toml`**: Tareas periódicas.
 
--   **`clients.toml`**: Define los clientes API, sus tokens, planes y cuotas.
-    ```toml
-    [client_premium]
-    token = "secret-token-123"
-    plan = "premium"
-    ```
--   **`workers.toml`**: Define tokens individuales para workers para mejorar la seguridad.
-    ```toml
-    [gpu-worker-01]
-    token = "worker-secret-456"
-    ```
--   **`schedules.toml`**: Define tareas periódicas (tipo CRON) para el programador nativo.
-    ```toml
-    [nightly_backup]
-    blueprint = "backup_flow"
-    daily_at = "02:00"
-    ```
-
-Para especificaciones detalladas y ejemplos, consulta la [**Guía de Configuración**](docs/es/configuration.md).
-
-### Tolerancia a Fallos
-
-El orquestador tiene mecanismos integrados para manejar fallos basados en el campo `error.code` en la respuesta de un worker.
-
-*   **TRANSIENT_ERROR**: Un error temporal (por ejemplo, fallo de red). El orquestador reintentará automáticamente la tarea varias veces.
-*   **RESOURCE_EXHAUSTED_ERROR / TIMEOUT_ERROR / INTERNAL_ERROR**: Tratados como errores transitorios y reintentados.
-*   **PERMANENT_ERROR**: Un error permanente. La tarea será enviada inmediatamente a cuarentena.
-*   **SECURITY_ERROR / DEPENDENCY_ERROR**: Tratados como errores permanentes (por ejemplo, violación de seguridad o modelo faltante). Cuarentena inmediata.
-*   **INVALID_INPUT_ERROR**: Un error en los datos de entrada. Todo el pipeline (Job) se moverá inmediatamente al estado fallido.
-
-### Garantías de Seguridad y Estabilidad
-
-El orquestador incluye varios mecanismos de grado empresarial para garantizar la integridad del sistema:
-
-*   **Retroceso Exponencial (Exponential Backoff):** Los bucles principales (`JobExecutor`, `Watcher`) implementan automáticamente una estrategia de retroceso exponencial cuando ocurren fallos de infraestructura (por ejemplo, cortes de Redis), asegurando que el sistema se recupere solo sin abrumar los recursos.
-*   **Protección contra Secuestro de Trabajos (Job Hijacking):** La aplicación estricta de la propiedad garantiza que solo el worker asignado a una tarea pueda enviar su resultado. Los intentos no autorizados son bloqueados y registrados como incidentes de seguridad.
-*   **Protección contra Bucles Infinitos:** El ajuste `MAX_TRANSITIONS_PER_JOB` (por defecto 100) termina automáticamente los blueprints que entran en ciclos lógicos, previniendo el agotamiento de recursos.
-*   **Protección contra Resultados Obsoletos:** El sistema ignora automáticamente los resultados de tareas que ya han expirado o han sido re-despachadas, garantizando la coherencia del estado.
-
-### Seguimiento del Progreso
-
-Los workers pueden informar el progreso de ejecución en tiempo real (0-100%) y mensajes de estado. Esta información es persistida automáticamente por el Orquestador y expuesta a través de la API de Estado del Trabajo (`GET /api/v1/jobs/{job_id}`).
+Para más detalles, consulta la [**Guía de Configuración**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/configuration.md).
 
 ### Concurrencia y Rendimiento
 
-Para prevenir la sobrecarga del sistema durante el tráfico alto, el Orquestador implementa un mecanismo de contrapresión para su lógica interna de procesamiento de trabajos.
-
-*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limita el número de manejadores de trabajos que se ejecutan simultáneamente dentro del proceso del Orquestador (predeterminado: `100`). Si se alcanza este límite, los nuevos trabajos permanecen en la cola de Redis hasta que haya un espacio disponible. Esto asegura que el bucle de eventos permanezca receptivo incluso con una acumulación masiva de trabajos pendientes.
-
-### Alta Disponibilidad y Bloqueo Distribuido
-
-La arquitectura soporta escalado horizontal. Múltiples instancias del Orquestador pueden ejecutarse detrás de un balanceador de carga.
-
-*   **API Sin Estado:** La API no tiene estado; todo el estado se persiste en Redis.
-*   **Identidad de Instancia:** Cada instancia debe tener un `INSTANCE_ID` único (por defecto es el nombre del host) para el manejo correcto de los grupos de consumidores de Redis Streams.
-*   **Bloqueo Distribuido:** Los procesos en segundo plano (`Watcher`, `ReputationCalculator`) utilizan bloqueos distribuidos (vía Redis `SET NX`) para coordinar y prevenir condiciones de carrera cuando hay múltiples instancias activas.
-
-### Log y Observabilidad
-
-Avtomatika está diseñada para pilas de observabilidad modernas (ELK, Loki, Prometheus).
-
-*   **Log Estructurado:** Por defecto, los logs se emiten en formato JSON, lo que facilita su análisis e indexación. Se puede cambiar a texto mediante `LOG_FORMAT="text"`.
-*   **Conciencia de Zona Horaria:** Todas las marcas de tiempo de los logs respetan la variable de entorno `TZ` configurada globalmente.
-*   **Trazabilidad:** Los logs incluyen `job_id`, `worker_id` y `task_id` para un seguimiento completo de extremo a extremo.
-*   **Métricas:** Las métricas de Prometheus están disponibles en `/_public/metrics`, incluido un contador específico `orchestrator_ratelimit_blocked_total` para rastrear solicitudes bloqueadas.
-
-### Limitación de Velocidad (Rate Limiting)
-
-El Orquestador incluye un limitador de velocidad granular integrado basado en Redis para proteger contra abusos y DDoS.
-
-*   **Protección Granular:** Los límites se aplican por Token de Cliente (para clientes API) o por ID de Worker (para workers).
-*   **Consciente del Contexto:** Se aplican diferentes límites a diferentes operaciones:
-    *   **Latidos (Heartbeats):** Límite más alto (por defecto 120/min) para permitir actualizaciones de estado frecuentes.
-    *   **Sondeo (Polling):** Límite moderado (por defecto 60/min) para la obtención de tareas.
-    *   **API General:** Límite predeterminado (por defecto 100/min) para otras operaciones.
-*   **Aplicación Global:** El middleware se aplica globalmente, protegiendo todos los puntos de entrada, incluidas la API de Worker y la API de Cliente.
-
-### Backend de Almacenamiento
-
-Por defecto, el motor utiliza almacenamiento en memoria. Para producción, debes configurar almacenamiento persistente a través de variables de entorno.
-
-*   **Redis (StorageBackend)**: Para almacenar estados actuales de trabajos (serializados con `msgpack`) y gestionar colas de tareas (usando Redis Streams con grupos de consumidores).
-    *   Instalar:
-        ```bash
-        pip install "avtomatika[redis]"
-        ```
-    *   Configurar:
-        ```bash
-        export REDIS_HOST=tu_host_redis
-        ```
-
-*   **PostgreSQL/SQLite (HistoryStorage)**: Para archivar el historial de trabajos completados.
-    *   Instalar:
-        ```bash
-        pip install "avtomatika[history]"
-        ```
-    *   Configurar:
-        ```bash
-        export HISTORY_DATABASE_URI=...
-        ```
-        *   SQLite: `sqlite:///ruta/a/history.db`
-        *   PostgreSQL: `postgresql://user:pass@host/db`
-
-### Carga Dinámica de Blueprints
-
-Avtomatika admite la carga automática de blueprints desde un directorio. Esto le permite implementar y actualizar la lógica de su flujo de trabajo simplemente copiando archivos de Python sin cambiar el código central del orquestador.
-
-*   **Configurar**: Establezca la variable de entorno `BLUEPRINTS_DIR` con la ruta que contiene sus archivos de blueprint.
-*   **Cómo funciona**: Al inicio, el motor escanea el directorio en busca de todos los archivos `.py`, los importa y registra automáticamente cualquier instancia de `Blueprint` encontrada.
-
-### Seguridad
-
-El orquestador utiliza tokens para autenticar solicitudes API.
-
-*   **Autenticación de Cliente**: Todos los clientes API deben proporcionar un token en el encabezado `X-Client-Token`. El orquestador valida este token contra las configuraciones de clientes.
-*   **Autenticación de Worker**: Los workers deben proporcionar un token en el encabezado `X-Worker-Token`.
-    *   `GLOBAL_WORKER_TOKEN`: Puedes establecer un token global para todos los workers usando esta variable de entorno. Para desarrollo y pruebas, por defecto es `"secure-worker-token"`.
-    *   **Tokens Individuales**: Para producción, se recomienda definir tokens individuales para cada worker en un archivo de configuración separado y proporcionar su ruta a través de la variable de entorno `WORKERS_CONFIG_PATH`. Los tokens de este archivo se almacenan en un formato hash por seguridad.
-
-> **Nota sobre Recarga Dinámica:** El archivo de configuración de workers se puede recargar sin reiniciar el orquestador enviando una solicitud `POST` autenticada al punto final `/api/v1/admin/reload-workers`. Esto permite actualizaciones dinámicas de tokens de workers.
-
-### Modo Holon Puro
-Para entornos de alta seguridad o cuando se opera como un Holon Compuesto dentro de una HLN, puedes deshabilitar la API pública de cliente.
-*   **Habilitar/Deshabilitar**: Establece `ENABLE_CLIENT_API="false"` (por defecto: `true`).
-*   **Efecto**: El Orquestador dejará de escuchar en `/api/v1/jobs/...`. Solo aceptará tareas a través del Protocolo de Worker (RXON) de su padre.
+*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Límite de manejadores internos (default: `1000`).
+*   **`WATCHER_LIMIT`**: Reacción ante таймауты por ciclo (default: `500`).
+*   **`DISPATCHER_MAX_CANDIDATES`**: Límite de chequeos de cumplimiento (default: `50`).
 
 ### Observabilidad
 
-Cuando se instala con la dependencia de telemetría, el sistema proporciona automáticamente:
+*   **Structured JSON Logging**: Vía `QueueHandler` no bloqueante.
+*   **Métricas**: En `/_public/metrics`, con prefijo `orchestrator_` y `orchestrator_loop_lag_seconds`.
 
-*   **Métricas de Prometheus**: Disponibles en el punto final `/_public/metrics`.
-*   **Rastreo Distribuido**: Compatible con OpenTelemetry y sistemas como Jaeger o Zipkin.
+### Capa de Almacenamiento
+
+*   **Redis**: Estados (`msgpack`) y colas (Streams).
+*   **PostgreSQL/SQLite**: Historial con índices optimizados.
+
+### Modo Holon Puro
+Establece `ENABLE_CLIENT_API="false"` para deshabilitar la API pública y solo aceptar tareas vía RXON.
+
 ## Guía para Contribuidores
 
-### Configuración del Entorno
-
-*   Clona el repositorio.
-*   **Para desarrollo local**, instala primero el paquete de protocolo:
-    ```bash
-    pip install -e ../rxon
-    ```
-*   Luego instala el motor en modo editable con todas las dependencias:
-    ```bash
-    pip install -e ".[all,test]"
-    ```
-*   Asegúrate de tener instaladas las dependencias del sistema, como `graphviz`.
-    *   Debian/Ubuntu:
-        ```bash
-        sudo apt-get install graphviz
-        ```
-    *   macOS (Homebrew):
-        ```bash
-        brew install graphviz
-        ```
-
-### Ejecución de Pruebas
-
-Para ejecutar el conjunto de pruebas de `avtomatika`:
 ```bash
+pip install -e ../rxon
+pip install -e ".[all,test]"
 pytest tests/
 ```
 
 ### Documentación API Interactiva
-
-Avtomatika proporciona una página de documentación API interactiva integrada (similar a Swagger UI) que se genera automáticamente en función de tus blueprints registrados.
-
-*   **Punto final:** `/_public/docs`
-*   **Características:**
-    *   **Lista de todos los puntos finales del sistema:** Documentación detallada para grupos de API Públicos, Protegidos y de Worker.
-    *   **Documentación Dinámica de Blueprints:** Genera y lista automáticamente la documentación para todos los blueprints registrados en el motor, incluyendo sus puntos finales API específicos.
-    *   **Pruebas Interactivas:** Te permite probar llamadas a la API directamente desde el navegador. Puedes proporcionar tokens de autenticación, parámetros y cuerpos de solicitud para ver respuestas reales del servidor.
+Disponible en `/_public/docs`.
 
 ## Documentación Detallada
 
-Para profundizar en el sistema, consulta los siguientes documentos:
-
-- [**Guía de Arquitectura**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/architecture.md): Una descripción detallada de los componentes del sistema y sus interacciones.
-- [**Referencia de API**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/api_reference.md): Especificación completa de la API HTTP.
-- [**Guía de Despliegue**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/deployment.md): Instrucciones para desplegar con Gunicorn/Uvicorn y NGINX.
-- [**Recetario**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/README.md): Ejemplos y mejores prácticas para crear blueprints.
+- [**Guía de Arquitectura**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/architecture.md)
+- [**Referencia de API**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/api_reference.md)
+- [**Guía de Configuración**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/configuration.md)
+- [**Guía de Despliegue**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/deployment.md)
+- [**Cookbook**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/README.md)

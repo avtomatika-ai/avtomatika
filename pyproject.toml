@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b19"
+version = "1.0b20"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -85,6 +85,8 @@ markers = [
 ]
 filterwarnings = [
     "ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited:RuntimeWarning",
+    "ignore:coroutine 'test_webhook_sender_concurrency.<locals>.slow_post' was never awaited:RuntimeWarning",
+    "ignore:coroutine 'AsyncMockMixin' was never awaited:RuntimeWarning",
 ]
 
 [tool.ruff]

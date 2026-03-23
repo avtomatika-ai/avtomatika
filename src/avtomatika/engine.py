@@ -122,7 +122,7 @@ class OrchestratorEngine:
         blueprint.validate()
         self.blueprints[blueprint.name] = blueprint
 
-        # HLN Shell-Stacking: Orchestrator REST API acts as a Web Shell for the logic
+        # REST API acts as a Web Shell for the logic
         from rxon.schema import extract_skill_contract
 
         from .utils.schema import orchestrator_extract_json_schema
@@ -271,8 +271,9 @@ class OrchestratorEngine:
                 async for msg in ws:
                     if msg.type == WSMsgType.TEXT:
                         try:
-                            data = msg.json()
-                            # HLN UNIFICATION: WebSocket messages are generic events
+                            import orjson
+
+                            data = orjson.loads(msg.data)
                             await self.worker_service.process_worker_event(auth_worker_id, data)
                         except Exception as e:
                             logger.error(f"Error processing WebSocket message from {auth_worker_id}: {e}")
@@ -299,13 +300,15 @@ class OrchestratorEngine:
             known_field_names = {f.name for f in fields(cls)}
             filtered_data = {k: v for k, v in data.items() if k in known_field_names}
             return cls(**filtered_data)
-
         return data
 
     async def on_startup(self, app: web.Application) -> None:
         if not await self.storage.ping():
             logger.critical("Failed to connect to Storage Backend (Redis). Exiting.")
             raise RuntimeError("Storage Backend is unavailable.")
+
+        await self.storage.initialize()
+        await self._setup_history_storage()
 
         try:
             from opentelemetry.instrumentation.aiohttp_client import (
@@ -314,13 +317,13 @@ class OrchestratorEngine:
 
             AioHttpClientInstrumentor().instrument()
         except ImportError:
-            logger.info(
+            logger.debug(
                 "opentelemetry-instrumentation-aiohttp-client not found. AIOHTTP client instrumentation is disabled."
             )
-        await self._setup_history_storage()
+
         await self.history_storage.start()
 
-        # HLN Sync: Ensure all registered blueprint contracts are in storage
+        # Ensure all registered blueprint contracts are in storage
         for bp_name, contract in self.blueprint_contracts.items():
             await self.storage.save_blueprint_contract(bp_name, contract)
 
@@ -376,12 +379,30 @@ class OrchestratorEngine:
         app[REPUTATION_CALCULATOR_TASK_KEY] = create_task(app[REPUTATION_CALCULATOR_KEY].run())
         app[HEALTH_CHECKER_TASK_KEY] = create_task(app[HEALTH_CHECKER_KEY].run())
         app[SCHEDULER_TASK_KEY] = create_task(app[SCHEDULER_KEY].run())
+        self._loop_lag_task = create_task(self._monitor_loop_lag())
 
         await self.rxon_listener.start(self.handle_rxon_message)
+
+    async def _monitor_loop_lag(self) -> None:
+        """Monitors event loop lag and updates the Prometheus metric."""
+        import time
+        from asyncio import CancelledError, sleep
+
+        try:
+            while True:
+                start = time.time()
+                await sleep(1.0)
+                lag = time.time() - start - 1.0
+                metrics.loop_lag_seconds.set({}, max(0.0, lag))
+        except CancelledError:
+            pass
 
     async def on_shutdown(self, app: web.Application) -> None:
         logger.info("Shutdown sequence started.")
         await self.rxon_listener.stop()
+
+        if hasattr(self, "_loop_lag_task"):
+            self._loop_lag_task.cancel()
 
         app[EXECUTOR_KEY].stop()
         app[WATCHER_KEY].stop()
@@ -433,6 +454,9 @@ class OrchestratorEngine:
         await app[HTTP_SESSION_KEY].close()
         logger.info("HTTP session closed.")
         logger.info("Shutdown sequence finished.")
+        from .logging_config import stop_logging
+
+        stop_logging()
 
     async def create_background_job(
         self,

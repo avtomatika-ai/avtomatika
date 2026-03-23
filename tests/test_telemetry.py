@@ -14,9 +14,17 @@ from src.avtomatika.telemetry import TELEMETRY_ENABLED, setup_telemetry
 @pytest.mark.skipif(not TELEMETRY_ENABLED, reason="opentelemetry-sdk not installed")
 def test_setup_telemetry_enabled():
     """Tests that telemetry is set up correctly when the SDK is installed."""
-    with patch("opentelemetry.trace.set_tracer_provider") as mock_set_provider:
-        tracer = setup_telemetry()
-        assert mock_set_provider.called
+    from opentelemetry.sdk.trace import TracerProvider
+
+    class MockProvider(TracerProvider):
+        pass
+
+    mock_provider = MockProvider()
+    with patch("opentelemetry.trace.get_tracer_provider", return_value=mock_provider):
+        with patch("opentelemetry.trace.set_tracer_provider") as mock_set_provider:
+            tracer = setup_telemetry()
+            # If get_tracer_provider returns mock_provider, setup_telemetry skips init
+            assert not mock_set_provider.called
         assert tracer is not None
 
 

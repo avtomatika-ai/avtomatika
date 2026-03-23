@@ -32,6 +32,49 @@ class Dispatcher:
         self.storage = storage
         self.config = config
         self._round_robin_indices: dict[str, int] = defaultdict(int)
+        self._worker_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._worker_cache_ttl = 2.0
+
+    async def _get_workers_cached(self, worker_ids: list[str]) -> list[dict[str, Any]]:
+        """Gets worker info from memory cache or Redis."""
+        import time
+
+        now = time.time()
+
+        # 1. Identify what's missing or expired in cache
+        to_fetch_ids = []
+        result_map = {}
+
+        unique_ids = list(set(worker_ids))
+        for wid in unique_ids:
+            if wid in self._worker_cache:
+                expiry, data = self._worker_cache[wid]
+                if now < expiry:
+                    result_map[wid] = data
+                    continue
+            to_fetch_ids.append(wid)
+
+        if to_fetch_ids:
+            # 2. Fetch missing from Redis
+            fetched = await self.storage.get_workers(to_fetch_ids)
+            # 3. Update cache
+            for w in fetched:
+                wid = w["worker_id"]
+                self._worker_cache[wid] = (now + self._worker_cache_ttl, w)
+                result_map[wid] = w
+
+        # 4. Periodically clean up cache
+        if len(self._worker_cache) > 5000:
+            expired_keys = [k for k, v in self._worker_cache.items() if now > v[0]]
+            for k in expired_keys:
+                del self._worker_cache[k]
+            # If still over limit, clear half of the cache (LRU-like simple approach)
+            if len(self._worker_cache) > 5000:
+                keys_to_del = list(self._worker_cache.keys())[:2500]
+                for k in keys_to_del:
+                    del self._worker_cache[k]
+
+        return [result_map[wid] for wid in worker_ids if wid in result_map]
 
     @staticmethod
     def _check_worker_compliance(
@@ -59,7 +102,7 @@ class Dispatcher:
 
             for req_dev in required_devices:
                 req_type = req_dev.get("type")
-                # HLN: resource identifier can be passed in multiple formats
+                # resource identifier can be passed in multiple formats
                 req_id = req_dev.get("id") or req_dev.get("unit_id")
                 found_match = False
 
@@ -156,7 +199,7 @@ class Dispatcher:
                     if actual_value != expected_value:
                         return False, f"skill_param_mismatch: {field} (expected {expected_value}, got {actual_value})"
 
-            # HLN Smart Matching: Check if current params match worker's input_schema
+            # Check if current params match worker's input_schema
             if params_to_check := requirements.get("params"):
                 input_schema = target_skill.get("input_schema")
                 if input_schema:
@@ -166,7 +209,7 @@ class Dispatcher:
                     if not is_valid:
                         return False, f"schema_validation_failed: {error_msg}"
 
-            # HLN Smart Matching: Check if worker supports all required output statuses
+            # Check if worker supports all required output statuses
             if transitions := requirements.get("transitions"):
                 worker_statuses = target_skill.get("output_statuses")
                 if worker_statuses:
@@ -219,7 +262,7 @@ class Dispatcher:
         if len(cheapest_workers) == 1:
             return cheapest_workers[0]
 
-        # HLN TIE-BREAKING: If costs are equal, pick the one with better reputation
+        # If costs are equal, pick the one with better reputation
         return max(cheapest_workers, key=lambda w: w.get("reputation", 1.0))
 
     async def _select_round_robin(
@@ -331,7 +374,7 @@ class Dispatcher:
         if "transitions" not in resource_requirements:
             resource_requirements["transitions"] = task_info.get("transitions") or {}
 
-        # HLN OPTIMIZATION: Hot Cache and Hot Skill awareness
+        # Hot Cache and Hot Skill awareness
         params = task_info.get("params") or {}
         resource_hint = params.get("resource_hint") or params.get("model_name")
         capable_workers = []
@@ -339,30 +382,32 @@ class Dispatcher:
         hot_skill_ids = await self.storage.find_workers_by_hot_skill(task_type)
         if hot_skill_ids:
             logger.info(f"HLN: Found {len(hot_skill_ids)} HOT workers for skill '{task_type}'.")
-            capable_workers = await self.storage.get_workers(hot_skill_ids)
-            from . import metrics
+            capable_workers = await self._get_workers_cached(hot_skill_ids)
+            if capable_workers:
+                from . import metrics
 
-            metrics.tasks_hot_dispatched_total.inc(
-                {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"}
-            )
+                metrics.tasks_hot_dispatched_total.inc(
+                    {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"}
+                )
 
         if not capable_workers and resource_hint:
             hot_ids = await self.storage.find_hot_workers(task_type, resource_hint)
             if hot_ids:
-                logger.info(f"HLN: Found {len(hot_ids)} HOT workers with resource '{resource_hint}' loaded.")
-                capable_workers = await self.storage.get_workers(hot_ids)
-                from . import metrics
+                capable_workers = await self._get_workers_cached(hot_ids)
+                if capable_workers:
+                    logger.info(f"HLN: Found {len(hot_ids)} HOT workers with resource '{resource_hint}' loaded.")
+                    from . import metrics
 
-                metrics.tasks_hot_dispatched_total.inc(
-                    {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_cache"}
-                )
+                    metrics.tasks_hot_dispatched_total.inc(
+                        {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_cache"}
+                    )
 
         if not capable_workers:
             candidate_ids = await self.storage.find_workers_for_skill(task_type)
             if not candidate_ids:
                 logger.warning(f"No idle workers found for task '{task_type}'")
                 raise RuntimeError(f"No suitable workers for task type '{task_type}'")
-            capable_workers = await self.storage.get_workers(candidate_ids)
+            capable_workers = await self._get_workers_cached(candidate_ids)
 
         logger.debug(f"Found {len(capable_workers)} capable workers for task '{task_type}'")
 
@@ -373,10 +418,19 @@ class Dispatcher:
             compliant_workers = []
             rejection_reasons: dict[str, int] = defaultdict(int)
 
+            # Optimization - only check up to DISPATCHER_MAX_CANDIDATES
+            max_candidates = getattr(self.config, "DISPATCHER_MAX_CANDIDATES", 50)
+            if not isinstance(max_candidates, int):
+                max_candidates = 50
+            candidate_count = 0
+
             for w in capable_workers:
                 is_valid, reason = self._check_worker_compliance(w, resource_requirements, task_type)
                 if is_valid:
                     compliant_workers.append(w)
+                    candidate_count += 1
+                    if candidate_count >= max_candidates:
+                        break
                 else:
                     rejection_reasons[reason or "unknown"] += 1
 
@@ -409,10 +463,9 @@ class Dispatcher:
                 )
             capable_workers = cost_compliant_workers
 
-        # HLN REPUTATION FILTER: Ignore workers below the threshold
-        try:
-            min_reputation = float(self.config.REPUTATION_MIN_THRESHOLD)
-        except (TypeError, ValueError):
+        # Ignore workers below the threshold
+        min_reputation = getattr(self.config, "REPUTATION_MIN_THRESHOLD", 0.0)
+        if not isinstance(min_reputation, (int, float)):
             min_reputation = 0.0
 
         def get_rep(w: dict[str, Any]) -> float:
@@ -460,7 +513,7 @@ class Dispatcher:
         task_id = task_info.get("task_id") or job_id
         priority = task_info.get("priority", 0.0)
 
-        # HLN: Deadline propagation (absolute timestamp)
+        # Deadline propagation (absolute timestamp)
         # We prefer result_deadline if set, otherwise we don't send it (worker will use its local timeout)
         deadline = job_state.get("result_deadline")
 
@@ -479,7 +532,7 @@ class Dispatcher:
         try:
             await self.storage.enqueue_task_for_worker(worker_id, payload, priority)
 
-            # HLN SCALABILITY: Optimistically increment load to prevent overloading
+            # Optimistically increment load to prevent overloading
             # the worker before the next heartbeat arrives.
             await self.storage.increment_worker_load(worker_id)
 

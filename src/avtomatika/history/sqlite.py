@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS worker_history (
 """
 
 CREATE_JOB_ID_INDEX = "CREATE INDEX IF NOT EXISTS idx_job_id ON job_history(job_id);"
+CREATE_WORKER_ID_INDEX = "CREATE INDEX IF NOT EXISTS idx_worker_id_ts ON job_history(worker_id, timestamp);"
 
 
 class SQLiteHistoryStorage(HistoryStorageBase):
@@ -70,6 +71,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             await self._conn.execute(CREATE_JOB_HISTORY_TABLE)
             await self._conn.execute(CREATE_WORKER_HISTORY_TABLE)
             await self._conn.execute(CREATE_JOB_ID_INDEX)
+            await self._conn.execute(CREATE_WORKER_ID_INDEX)
             await self._conn.commit()
             logger.info(f"SQLite history storage initialized at {self._db_path}")
         except Error as e:

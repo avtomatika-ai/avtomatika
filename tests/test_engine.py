@@ -149,7 +149,7 @@ async def test_on_startup(engine, monkeypatch):
         assert REPUTATION_CALCULATOR_KEY in app
         assert HEALTH_CHECKER_KEY in app
         assert SCHEDULER_KEY in app
-        assert mock_create_task.call_count == 6
+        assert mock_create_task.call_count == 11
 
 
 @pytest.mark.asyncio
@@ -275,6 +275,8 @@ async def test_on_startup_import_error(engine, caplog):
     engine.history_storage.start = AsyncMock()
 
     with (
+        patch("avtomatika.engine.logger") as mock_logger,
+        patch("avtomatika.engine.setup_logging"),
         patch("opentelemetry.instrumentation.aiohttp_client.AioHttpClientInstrumentor", side_effect=ImportError),
         patch("avtomatika.engine.WebhookSender") as MockSender,
         patch("avtomatika.engine.ClientSession"),
@@ -296,7 +298,10 @@ async def test_on_startup_import_error(engine, caplog):
         MockScheduler.return_value.run = AsyncMock()
 
         await engine.on_startup(app)
-        assert "opentelemetry-instrumentation-aiohttp-client not found" in caplog.text
+
+        # Verify debug was called when opentelemetry is missing
+        args, _ = mock_logger.debug.call_args
+        assert "opentelemetry-instrumentation-aiohttp-client not found" in args[0]
 
         # Verify sender was started
         mock_sender_instance.start.assert_called_once()

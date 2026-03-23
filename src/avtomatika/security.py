@@ -6,6 +6,7 @@
 
 
 from hashlib import sha256
+from time import time
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
@@ -15,6 +16,11 @@ from .constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
 from .storage.base import StorageBackend
 
 Handler = Callable[[web.Request], Awaitable[web.Response]]
+
+
+# HLN Optimization: Cache token hashes to avoid repeated SHA256 computation
+# Format: {token: (expiry, hashed_token)}
+_TOKEN_HASH_CACHE: dict[str, tuple[float, str]] = {}
 
 
 async def verify_worker_auth(
@@ -41,7 +47,26 @@ async def verify_worker_auth(
     if not token:
         raise PermissionError(f"Missing {AUTH_HEADER_WORKER} header or client certificate")
 
-    hashed_provided_token = sha256(token.encode()).hexdigest()
+    # Use cache for hash computation with 60s TTL
+    now = time()
+    if token in _TOKEN_HASH_CACHE:
+        expiry, hashed_provided_token = _TOKEN_HASH_CACHE[token]
+        if now > expiry:
+            del _TOKEN_HASH_CACHE[token]
+            hashed_provided_token = sha256(token.encode()).hexdigest()
+            _TOKEN_HASH_CACHE[token] = (now + 60.0, hashed_provided_token)
+    else:
+        hashed_provided_token = sha256(token.encode()).hexdigest()
+        if len(_TOKEN_HASH_CACHE) >= 10000:
+            # Simple cleanup of expired items if cache is full
+            expired_keys = [k for k, v in _TOKEN_HASH_CACHE.items() if now > v[0]]
+            for k in expired_keys:
+                del _TOKEN_HASH_CACHE[k]
+            # If still full, clear entirely to prevent unbound growth
+            if len(_TOKEN_HASH_CACHE) >= 10000:
+                _TOKEN_HASH_CACHE.clear()
+
+        _TOKEN_HASH_CACHE[token] = (now + 60.0, hashed_provided_token)
 
     # STS Access Token
     token_worker_id = await storage.verify_worker_access_token(hashed_provided_token)

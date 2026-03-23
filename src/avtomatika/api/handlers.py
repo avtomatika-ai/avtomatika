@@ -107,6 +107,12 @@ async def get_job_status_handler(request: web.Request) -> web.Response:
     job_state = await engine.storage.get_job_state(job_id)
     if not job_state:
         return json_response({"error": "Job not found"}, status=404)
+    fields_param = request.query.get("fields")
+    if fields_param:
+        requested_fields = {f.strip() for f in fields_param.split(",")}
+        requested_fields.add("id")
+        job_state = {k: v for k, v in job_state.items() if k in requested_fields}
+
     return json_response(job_state, status=200)
 
 
@@ -157,8 +163,18 @@ async def get_workers_handler(request: web.Request) -> web.Response:
     return json_response(workers)
 
 
+# HLN Cache for worker catalog
+_WORKER_CATALOG_CACHE: dict[str, Any] = {"data": None, "expires_at": 0.0}
+
+
 async def get_worker_catalog_handler(request: web.Request) -> web.Response:
     """Aggregates all unique skills and their contracts from online workers."""
+    from time import monotonic
+
+    now = monotonic()
+    if _WORKER_CATALOG_CACHE["data"] is not None and now < _WORKER_CATALOG_CACHE["expires_at"]:
+        return json_response(_WORKER_CATALOG_CACHE["data"])
+
     engine = request.app[ENGINE_KEY]
     workers = await engine.storage.get_available_workers()
 
@@ -194,6 +210,9 @@ async def get_worker_catalog_handler(request: web.Request) -> web.Response:
     for item in catalog.values():
         item["worker_types"] = list(item["worker_types"])
         item["average_reputation"] = round(item.pop("total_reputation") / item["providers_count"], 4)
+
+    _WORKER_CATALOG_CACHE["data"] = catalog
+    _WORKER_CATALOG_CACHE["expires_at"] = now + 10.0  # 10s cache
 
     return json_response(catalog)
 

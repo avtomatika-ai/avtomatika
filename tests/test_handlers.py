@@ -240,3 +240,46 @@ async def test_docs_handler_not_found(engine, request_mock):
     with patch("importlib.resources.read_text", side_effect=FileNotFoundError):
         response = await docs_handler(request_mock)
         assert response.status == 500
+
+
+@pytest.mark.asyncio
+async def test_api_field_filtering(engine, request_mock):
+    """Checks that GET /api/v1/jobs/{id}?fields=... filters the response."""
+    from avtomatika.api.handlers import get_job_status_handler
+
+    job_id = "j1"
+    await engine.storage.save_job_state(
+        job_id, {"id": job_id, "status": "finished", "result": "data", "secret": "hide-me"}
+    )
+
+    request_mock.match_info.get.return_value = job_id
+    request_mock.query = {"fields": "status,result"}
+
+    with patch("avtomatika.api.handlers.json_response") as mock_json:
+        await get_job_status_handler(request_mock)
+
+        # Should only contain id (always), status, and result
+        filtered_data = mock_json.call_args[0][0]
+        assert filtered_data == {"id": job_id, "status": "finished", "result": "data"}
+        assert "secret" not in filtered_data
+
+
+@pytest.mark.asyncio
+async def test_worker_catalog_cache(engine, request_mock):
+    """Checks that the worker catalog is cached."""
+    from avtomatika.api.handlers import _WORKER_CATALOG_CACHE, get_worker_catalog_handler
+
+    # Mock storage to track calls
+    engine.storage.get_available_workers = AsyncMock(return_value=[])
+
+    # Clear cache
+    _WORKER_CATALOG_CACHE["data"] = None
+    _WORKER_CATALOG_CACHE["expires_at"] = 0
+
+    # First call
+    await get_worker_catalog_handler(request_mock)
+    assert engine.storage.get_available_workers.call_count == 1
+
+    # Second call
+    await get_worker_catalog_handler(request_mock)
+    assert engine.storage.get_available_workers.call_count == 1  # Cached

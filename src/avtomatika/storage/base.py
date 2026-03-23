@@ -14,6 +14,11 @@ class StorageBackend(ABC):
     Defines the interface that all stores must implement.
     """
 
+    async def initialize(self) -> None:
+        """Performs any necessary initialization for the storage backend."""
+        # Optional initialization for backends
+        return None
+
     @abstractmethod
     async def get_job_state(self, job_id: str) -> dict[str, Any] | None:
         """Get the full state of a job by its ID.
@@ -371,6 +376,10 @@ class StorageBackend(ABC):
 
     async def get_str(self, key: str) -> str | None:
         """Gets a simple string value from storage."""
+        raise NotImplementedError
+
+    async def mget(self, keys: list[str]) -> list[str | None]:
+        """Gets multiple string values from storage in a single call."""
         raise NotImplementedError
 
     async def set_str(self, key: str, value: str, ttl: int | None = None) -> None:

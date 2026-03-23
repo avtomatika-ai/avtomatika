@@ -65,6 +65,7 @@ The file consists of sections, where the section name must **exactly match** the
 ### Security Features
 *   At startup, Orchestrator calculates SHA-256 hash of the token and stores only the hash in memory (Redis). The original token is not stored anywhere.
 *   Upon incoming request from a worker, the hash of the provided token is compared with the stored one.
+*   **Performance Optimization:** Token hashes are cached in Orchestrator memory to minimize CPU usage during frequent heartbeats.
 
 ### Example
 
@@ -165,13 +166,15 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Interval for updating worker TTL (used for health checks). | `60` |
 | `JOB_MAX_RETRIES` | Maximum number of retries for transient task failures. | `3` |
 | `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
+| `WATCHER_LIMIT` | Maximum number of timed-out jobs processed per single Watcher cycle. | `500` |
 | `STRICT_EVENT_VALIDATION` | If `true`, Orchestrator will reject worker events not declared in their schemas. | `true` |
 | `REPUTATION_MIN_THRESHOLD` | Minimum reputation score for a worker to be considered for dispatching. | `0.3` |
 | `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Reputation penalty for data contract violation. | `0.2` |
 | `REPUTATION_PENALTY_TASK_FAILURE` | Reputation penalty for critical or permanent task failure. | `0.05` |
 | `REPUTATION_REWARD_SUCCESS` | Reputation reward for each successfully completed task. | `0.001` |
-| `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `100` |
+| `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `1000` |
 | `DISPATCHER_SOFT_LIMIT` | **Overflow Strategy:** Maximum number of tasks in a worker's private queue before dispatching to more expensive candidates. | `3` |
+| `DISPATCHER_MAX_CANDIDATES` | Maximum number of suitable workers checked by Dispatcher during compliance filtering. | `50` |
 | `WORK_STEALING_ENABLED` | **Work Stealing:** If `true`, idle workers can atomically steal tasks from heavily loaded colleagues. | `true` |
 | `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
 | `RATE_LIMITING_ENABLED` | Enable rate limiting middleware. | `true` |

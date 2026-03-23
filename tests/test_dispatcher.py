@@ -323,3 +323,45 @@ class TestDispatcherStrategies:
         called_args, _ = mock_storage.enqueue_task_for_worker.call_args
         dispatched_worker_id = called_args[0]
         assert dispatched_worker_id == worker_B["worker_id"]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_worker_cache(dispatcher, mock_storage):
+    """Checks that Dispatcher caches worker data to avoid redundant Redis hits."""
+    mock_storage.get_workers.return_value = [{"worker_id": "w1", "reputation": 1.0}]
+
+    # First call - should hit storage
+    workers1 = await dispatcher._get_workers_cached(["w1"])
+    assert len(workers1) == 1
+    assert mock_storage.get_workers.call_count == 1
+
+    # Second call - should hit cache
+    workers2 = await dispatcher._get_workers_cached(["w1"])
+    assert len(workers2) == 1
+    assert mock_storage.get_workers.call_count == 1  # Still 1
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_candidates_limit(mock_storage, mock_config):
+    """Checks that Dispatcher limits compliance checks via DISPATCHER_MAX_CANDIDATES."""
+    mock_config.DISPATCHER_MAX_CANDIDATES = 2
+    dispatcher = Dispatcher(mock_storage, mock_config)
+
+    # Mock compliance check to always return True
+    dispatcher._check_worker_compliance = MagicMock(return_value=(True, None))
+
+    # 10 capable workers
+    capable_workers = [{"worker_id": f"w{i}"} for i in range(10)]
+    mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in capable_workers]
+    mock_storage.get_workers.return_value = capable_workers
+
+    job_state = {"id": "j1", "blueprint_name": "b1", "tracing_context": {}}
+    task_info = {"type": "t1", "resource_requirements": {"cpu": 1}}
+
+    from contextlib import suppress
+
+    with suppress(Exception):
+        await dispatcher.dispatch(job_state, task_info)
+
+    # Should be called exactly 2 times because limit is 2 and they all comply
+    assert dispatcher._check_worker_compliance.call_count == 2

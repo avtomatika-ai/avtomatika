@@ -5,6 +5,8 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 try:
@@ -84,3 +86,26 @@ class TestRedisStorage(StorageTestSuite):
         # Task index should be clean
         task_index_exists = await storage._redis.sismember("orchestrator:index:workers:task:task_a", worker_id)
         assert not task_index_exists
+
+
+async def test_redis_storage_lua_merge(storage):
+    """Checks that update_worker_status uses Lua merge for simple updates."""
+    worker_id = "lua-worker"
+    info = {
+        "worker_id": worker_id,
+        "status": "idle",
+        "supported_skills": [{"name": "task_a"}],
+    }
+    await storage.register_worker(worker_id, info, 60)
+
+    # We mock _eval_lua to verify it's called
+    with patch.object(storage, "_eval_lua", AsyncMock(wraps=storage._eval_lua)) as mock_eval:
+        # Update metadata only (should use Lua merge path)
+        await storage.update_worker_status(worker_id, {"metadata": {"load": 0.5}}, 60)
+
+        # Verify it was called
+        assert mock_eval.called
+
+        # Verify the update actually worked
+        updated_info = await storage.get_worker_info(worker_id)
+        assert updated_info["metadata"]["load"] == 0.5

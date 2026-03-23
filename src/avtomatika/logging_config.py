@@ -7,11 +7,15 @@
 
 from datetime import datetime
 from logging import DEBUG, Formatter, StreamHandler, getLogger
+from logging.handlers import QueueHandler, QueueListener
+from queue import Queue
 from sys import stdout
 from typing import Any, Literal, Optional
 from zoneinfo import ZoneInfo
 
 from pythonjsonlogger import json
+
+_LOG_LISTENER: Optional[QueueListener] = None
 
 
 class TimezoneFormatter(Formatter):
@@ -62,10 +66,14 @@ class TimezoneJsonFormatter(json.JsonFormatter):
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: str = "UTC") -> None:
     """Configures structured logging for the entire application."""
-    logger = getLogger("avtomatika")
-    logger.setLevel(log_level)
+    global _LOG_LISTENER
+    if _LOG_LISTENER:
+        _LOG_LISTENER.stop()
 
-    handler = StreamHandler(stdout)
+    # Use QueueHandler to avoid blocking the Event Loop during I/O
+    log_queue: Queue = Queue(-1)
+
+    # 1. Base formatting
     formatter: Formatter
     if log_format.lower() == "json":
         formatter = TimezoneJsonFormatter(
@@ -78,29 +86,33 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: st
             tz_name=tz_name,
         )
 
-    handler.setFormatter(formatter)
+    # 2. Setup actual destination handler
+    stream_handler = StreamHandler(stdout)
+    stream_handler.setFormatter(formatter)
 
-    # Avoid duplicating handlers
-    if not logger.handlers:
-        logger.addHandler(handler)
+    # 3. Setup Listener to process the queue in a background thread
+    _LOG_LISTENER = QueueListener(log_queue, stream_handler)
+    _LOG_LISTENER.start()
 
-    # Configure the root logger to see logs from libraries (aiohttp, etc.)
+    # 4. Attach QueueHandler to loggers
+    queue_handler = QueueHandler(log_queue)
+
+    logger = getLogger("avtomatika")
+    logger.setLevel(log_level)
+    # Clear existing handlers to avoid duplicates during re-configuration
+    # But ONLY if we don't have a QueueHandler already
+    if not any(isinstance(h, QueueHandler) for h in logger.handlers):
+        logger.addHandler(queue_handler)
+
     root_logger = getLogger()
     root_logger.setLevel(DEBUG)
+    if not any(isinstance(h, QueueHandler) for h in root_logger.handlers):
+        root_logger.addHandler(queue_handler)
 
-    if not root_logger.handlers:
-        root_handler = StreamHandler(stdout)
-        root_formatter = TimezoneFormatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            tz_name=tz_name,
-        )
-        root_handler.setFormatter(root_formatter)
-        root_logger.addHandler(root_handler)
-    else:
-        for h in root_logger.handlers:
-            h.setFormatter(
-                TimezoneFormatter(
-                    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                    tz_name=tz_name,
-                )
-            )
+
+def stop_logging() -> None:
+    """Stops the background logging listener."""
+    global _LOG_LISTENER
+    if _LOG_LISTENER:
+        _LOG_LISTENER.stop()
+        _LOG_LISTENER = None

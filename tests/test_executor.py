@@ -249,7 +249,7 @@ async def test_process_job_handler_backward_compatibility(job_executor):
 
     @bp.handler("start", is_start=True)
     async def old_style_handler(context, actions):
-        handler_mock(context, actions)
+        await handler_mock(context, actions)
         actions.go_to("end")
 
     @bp.handler("end", is_end=True)

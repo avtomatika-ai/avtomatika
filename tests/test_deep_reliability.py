@@ -106,37 +106,40 @@ async def test_infinite_loop_prevention(config, redis_storage):
     engine.setup()
     await engine.on_startup(engine.app)
 
-    # Set a very small limit for testing
-    config.MAX_TRANSITIONS_PER_JOB = 5
+    try:
+        # Set a very small limit for testing
+        config.MAX_TRANSITIONS_PER_JOB = 5
 
-    executor = JobExecutor(engine, engine.history_storage)
+        executor = JobExecutor(engine, engine.history_storage)
 
-    job_id = "looping-job"
-    await redis_storage.save_job_state(
-        job_id,
-        {
-            "id": job_id,
-            "blueprint_name": "loop_bp",
-            "current_state": "start",
-            "status": JOB_STATUS_RUNNING,
-            "initial_data": {},
-        },
-    )
-    await redis_storage.enqueue_job(job_id)
+        job_id = "looping-job"
+        await redis_storage.save_job_state(
+            job_id,
+            {
+                "id": job_id,
+                "blueprint_name": "loop_bp",
+                "current_state": "start",
+                "status": JOB_STATUS_RUNNING,
+                "initial_data": {},
+            },
+        )
+        await redis_storage.enqueue_job(job_id)
 
-    # Process several times
-    for _ in range(7):  # 1 (start->loop) + 5 (loop->loop) = 6. 7th should fail.
-        result = await redis_storage.dequeue_job()
-        if result:
-            jid, mid = result
-            await executor._process_job(jid, mid)
-            await redis_storage.ack_job(mid)
+        # Process several times
+        for _ in range(7):  # 1 (start->loop) + 5 (loop->loop) = 6. 7th should fail.
+            result = await redis_storage.dequeue_job()
+            if result:
+                jid, mid = result
+                await executor._process_job(jid, mid)
+                await redis_storage.ack_job(mid)
 
-    # Check final state
-    final_state = await redis_storage.get_job_state(job_id)
-    assert final_state["status"] == JOB_STATUS_FAILED
-    assert "infinite loop" in final_state["error_message"].lower()
-    assert final_state["transition_count"] == 5
+        # Check final state
+        final_state = await redis_storage.get_job_state(job_id)
+        assert final_state["status"] == JOB_STATUS_FAILED
+        assert "infinite loop" in final_state["error_message"].lower()
+        assert final_state["transition_count"] == 5
+    finally:
+        await engine.on_shutdown(engine.app)
 
 
 @pytest.mark.asyncio
@@ -200,15 +203,18 @@ async def test_race_condition_protection(config, redis_storage):
     engine = OrchestratorEngine(redis_storage, config)
     engine.setup()
     await engine.on_startup(engine.app)
-    executor = JobExecutor(engine, engine.history_storage)
+    try:
+        executor = JobExecutor(engine, engine.history_storage)
 
-    job_id = "race-job"
-    # Set to terminal state
-    await redis_storage.save_job_state(job_id, {"id": job_id, "blueprint_name": "any", "status": "finished"})
+        job_id = "race-job"
+        # Set to terminal state
+        await redis_storage.save_job_state(job_id, {"id": job_id, "blueprint_name": "any", "status": "finished"})
 
-    # Try to process
-    with patch("avtomatika.executor.logger.warning") as mock_log:
-        await executor._process_job(job_id, "some-msg-id")
-        # Should have returned early because status is terminal
-        mock_log.assert_called_with(ANY)
-        assert "terminal state" in mock_log.call_args[0][0]
+        # Try to process
+        with patch("avtomatika.executor.logger.warning") as mock_log:
+            await executor._process_job(job_id, "some-msg-id")
+            # Should have returned early because status is terminal
+            mock_log.assert_called_with(ANY)
+            assert "terminal state" in mock_log.call_args[0][0]
+    finally:
+        await engine.on_shutdown(engine.app)

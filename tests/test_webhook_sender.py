@@ -79,3 +79,47 @@ async def test_webhook_sender_retry_failure(mocker):
     assert success is False
     assert mock_session.post.call_count == 2
     assert mock_sleep.call_count == 1  # Called once between retry 1 and 2
+
+
+@pytest.mark.asyncio
+async def test_webhook_sender_concurrency():
+    """Checks that WebhookSender can process multiple webhooks concurrently."""
+    import asyncio
+    import time
+
+    mock_session = AsyncMock(spec=ClientSession)
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.release = AsyncMock()
+
+    # Properly mock async context manager for post with delay
+    class MockPostContext:
+        async def __aenter__(self):
+            await asyncio.sleep(0.2)
+            return mock_response
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    mock_session.post.side_effect = lambda *args, **kwargs: MockPostContext()
+
+    sender = WebhookSender(mock_session, worker_count=5)
+    sender.start()
+
+    start_time = time.time()
+    payload = WebhookPayload(event="test", job_id="j1", status="ok")
+
+    # Send 5 webhooks
+    for i in range(5):
+        await sender.send(f"http://test{i}.com", payload)
+
+    # Wait for them to be processed
+    await sender._queue.join()
+    duration = time.time() - start_time
+
+    # If they were sequential, it would take 5 * 0.2 = 1.0s
+    # With 5 workers, it should take ~0.2s (+ overhead)
+    assert duration < 0.5
+    assert mock_session.post.call_count == 5
+
+    await sender.stop()

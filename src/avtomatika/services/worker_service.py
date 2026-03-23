@@ -68,7 +68,7 @@ class WorkerService:
         from rxon.models import WorkerRegistration
         from rxon.utils import to_dict
 
-        # HLN Contract Validation: Ensure worker meets the protocol registration requirements
+        # Ensure worker meets the protocol registration requirements
         try:
             validated_reg = self.engine._from_dict(WorkerRegistration, worker_data)
             # Re-serialize to dict to ensure standard structure and types in storage
@@ -158,7 +158,7 @@ class WorkerService:
         from rxon.models import TaskResult
         from rxon.utils import to_dict
 
-        # HLN Contract Validation: Ensure result matches protocol TaskResult
+        # Ensure result matches protocol TaskResult
         try:
             validated_res = self.engine._from_dict(TaskResult, result_payload)
             # Normalize to dict for storage consistency
@@ -190,7 +190,7 @@ class WorkerService:
                 "message": f"Job {job_id} not found (expired or deleted).",
             }
 
-        # HLN SECURITY: Verify that the worker submitting the result is the one assigned to the task
+        # Verify that the worker submitting the result is the one assigned to the task
         task_worker_id = job_state.get("task_worker_id")
         if task_worker_id and task_worker_id != authenticated_worker_id:
             logger.critical(
@@ -255,7 +255,7 @@ class WorkerService:
         result_status = result_payload.get("status", TASK_STATUS_SUCCESS)
         worker_data_content = result_payload.get("data")
 
-        # HLN Marketplace Enrichment: Find the exact skill definition used
+        # Find the exact skill definition used
         skill_snapshot = None
         if authenticated_worker_id:
             try:
@@ -628,7 +628,7 @@ class WorkerService:
             response_data: dict[str, Any] = {"status": "ok"}
 
             if update_data:
-                # HLN Optimization: Traffic reduction
+                # Use hash match to avoid redundant skill updates
                 new_hash = update_data.get("skills_hash")
                 current_worker = await self.storage.get_worker_info(worker_id)
 
@@ -680,6 +680,12 @@ class WorkerService:
 
                         if cancel_task_ids:
                             response_data[HB_RESP_CANCEL_TASKS] = cancel_task_ids
+
+                # HLN: Heartbeat Jitter to prevent "Thundering Herd" after Orchestrator restart
+                # This tells the worker to slightly shift its next heartbeat.
+                import random
+
+                response_data["next_heartbeat_jitter_ms"] = random.randint(-2000, 2000)
 
                 return response_data
             else:
