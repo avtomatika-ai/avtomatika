@@ -59,7 +59,6 @@ from .constants import (
     JOB_STATUS_ERROR,
     JOB_STATUS_FAILED,
     JOB_STATUS_FINISHED,
-    JOB_STATUS_PENDING,
     JOB_STATUS_QUARANTINED,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_PARALLEL,
@@ -112,7 +111,7 @@ class JobExecutor:
             if "retry_count" not in job_state:
                 job_state["retry_count"] = 0
 
-            # HLN SAFETY: Detect infinite loops in blueprints
+            # Detect infinite loops in blueprints
             transition_count = job_state.get("transition_count", 0) + 1
 
             max_transitions = 100
@@ -246,9 +245,13 @@ class JobExecutor:
                     job_state["state_history"] = context.state_history
                     job_state["aggregation_results"] = context.aggregation_results
 
-                    # HLN GHOST SIGNALING: Process events emitted by the blueprint
+                    # Process events emitted by the blueprint
                     if action_factory.pending_events:
-                        for event_type, payload in action_factory.pending_events:
+                        for event_type, payload, event_security, event_metadata in action_factory.pending_events:
+                            # Inherit security and metadata from job state if not explicitly overridden
+                            final_security = event_security or job_state.get("security")
+                            final_metadata = event_metadata or job_state.get("metadata")
+
                             # Blueprints (Ghosts) emit events through their shell
                             event_data = {
                                 "event_id": str(uuid4()),
@@ -260,6 +263,8 @@ class JobExecutor:
                                 "target_job_id": job_id,
                                 "trace_context": tracing_context,
                                 "timestamp": monotonic(),
+                                "security": final_security,
+                                "metadata": final_metadata,
                             }
                             if self.engine.worker_service:
                                 await self.engine.worker_service.process_worker_event("ghost", event_data)
@@ -293,6 +298,7 @@ class JobExecutor:
                             duration_ms,
                         )
                     elif job_state["current_state"] in blueprint.end_states:
+                        logger.info(f"DEBUG: Job {job_id} end state detected: {job_state['current_state']}")
                         status = JOB_STATUS_FINISHED if job_state["current_state"] == "finished" else JOB_STATUS_FAILED
                         await self._handle_terminal_reached(job_state, status, duration_ms)
 
@@ -326,7 +332,10 @@ class JobExecutor:
 
         job_state["status"] = status
 
-        # CONTRACT VALIDATION: Check final output against blueprint's output_schema
+        # Resume parent job if this was a sub-job
+        await self._check_and_resume_parent(job_state)
+
+        # Check final output against blueprint's output_schema
         if status == JOB_STATUS_FINISHED:
             contract = self.engine.blueprint_contracts.get(job_state["blueprint_name"], {})
             output_schema = contract.get("output_schema")
@@ -344,7 +353,7 @@ class JobExecutor:
 
         await self.storage.save_job_state(job_id, job_state)
 
-        # HLN Bridge: Notify subscribers about job completion
+        # Notify subscribers about job completion
         if self.engine.on_job_finished:
             await gather(*[cb(job_id, status, job_state) for cb in self.engine.on_job_finished], return_exceptions=True)
 
@@ -456,7 +465,7 @@ class JobExecutor:
         blueprint_name = sub_blueprint_info["blueprint_name"]
         initial_data = sub_blueprint_info["initial_data"]
 
-        # CONTRACT VALIDATION: Check child blueprint input contract
+        # Check child blueprint input contract
         contract = self.engine.blueprint_contracts.get(blueprint_name, {})
         input_schema = contract.get("input_schema")
         if input_schema:
@@ -468,31 +477,25 @@ class JobExecutor:
                 await self._handle_failure(parent_job_state, error, duration_ms)
                 return
 
-        child_job_id = str(uuid4())
-
-        await self.history_storage.log_job_event(
-            {
-                "job_id": parent_job_id,
-                "state": parent_job_state.get("current_state"),
-                "event_type": "sub_blueprint_started",
-                "duration_ms": duration_ms,
-                "next_state": sub_blueprint_info.get("blueprint_name"),
-                "context_snapshot": parent_job_state,
-            },
-        )
-
-        child_job_state = {
-            "id": child_job_id,
-            "blueprint_name": sub_blueprint_info["blueprint_name"],
-            "current_state": "start",
-            "initial_data": sub_blueprint_info["initial_data"],
-            "status": JOB_STATUS_PENDING,
-            "parent_job_id": parent_job_id,
-            "dispatch_timeout": sub_blueprint_info.get("dispatch_timeout"),
-            "result_timeout": sub_blueprint_info.get("result_timeout"),
-        }
-        await self.storage.save_job_state(child_job_id, child_job_state)
-        await self.storage.enqueue_job(child_job_id)
+        try:
+            child_job_id = await self.engine.create_background_job(
+                blueprint_name=blueprint_name,
+                initial_data=initial_data,
+                source=f"parent:{parent_job_id}",
+                tracing_context=parent_job_state.get("tracing_context"),
+                data_metadata=parent_job_state.get("data_metadata"),
+                parent_job_id=parent_job_id,
+                dispatch_timeout=sub_blueprint_info.get("dispatch_timeout"),
+                result_timeout=sub_blueprint_info.get("result_timeout"),
+                security=parent_job_state.get("security"),
+                metadata=parent_job_state.get("metadata"),
+            )
+        except Exception as e:
+            error_msg = f"Failed to dispatch sub-job: {e}"
+            logger.error(error_msg)
+            error = RuntimeError(error_msg)
+            await self._handle_failure(parent_job_state, error, duration_ms)
+            return
 
         parent_job_state["status"] = "waiting_for_sub_job"
         parent_job_state["child_job_id"] = child_job_id
@@ -538,6 +541,8 @@ class JobExecutor:
                 "task_id": branch_id,
                 "job_id": job_id,
                 "tracing_context": job_state.get("tracing_context", {}),
+                "security": job_state.get("security"),
+                "metadata": job_state.get("metadata"),
                 **task_info,
             }
 
@@ -634,37 +639,41 @@ class JobExecutor:
         """Checks if a completed job was a sub-job. If so, it resumes the parent
         job, passing the success/failure outcome of the child.
         """
-        parent_job_id = child_job_state.get("parent_job_id")
-        if not parent_job_id:
-            return  # Not a sub-job.
+        try:
+            parent_job_id = child_job_state.get("parent_job_id")
+            child_job_id = child_job_state["id"]
 
-        child_job_id = child_job_state["id"]
-        logger.info(
-            f"Sub-job {child_job_id} finished. Resuming parent job {parent_job_id}.",
-        )
-        parent_job_state = await self.storage.get_job_state(parent_job_id)
-        if not parent_job_state:
-            logger.error(
-                f"Parent job {parent_job_id} not found for child {child_job_id}.",
+            if not parent_job_id:
+                return  # Not a sub-job.
+
+            logger.info(
+                f"Sub-job {child_job_id} finished. Resuming parent job {parent_job_id}.",
             )
-            return
+            parent_job_state = await self.storage.get_job_state(parent_job_id)
+            if not parent_job_state:
+                logger.error(
+                    f"Parent job {parent_job_id} not found for child {child_job_id}.",
+                )
+                return
 
-        child_outcome = "success" if child_job_state["current_state"] == JOB_STATUS_FINISHED else "failure"
-        transitions = parent_job_state.get("current_task_transitions", {})
-        next_state = transitions.get(child_outcome, "failed")
+            child_outcome = "success" if child_job_state["current_state"] == JOB_STATUS_FINISHED else "failure"
+            transitions = parent_job_state.get("current_task_transitions", {})
+            next_state = transitions.get(child_outcome, "failed")
 
-        if "state_history" not in parent_job_state:
-            parent_job_state["state_history"] = {}
-        parent_job_state["state_history"][f"sub_job_{child_job_id}_result"] = {
-            "outcome": child_outcome,
-            "final_state": child_job_state.get("current_state"),
-            "error_message": child_job_state.get("error_message"),
-        }
+            if "state_history" not in parent_job_state:
+                parent_job_state["state_history"] = {}
+            parent_job_state["state_history"][f"sub_job_{child_job_id}_result"] = {
+                "outcome": child_outcome,
+                "final_state": child_job_state.get("current_state"),
+                "error_message": child_job_state.get("error_message"),
+            }
 
-        parent_job_state["current_state"] = next_state
-        parent_job_state["status"] = JOB_STATUS_RUNNING
-        await self.storage.save_job_state(parent_job_id, parent_job_state)
-        await self.storage.enqueue_job(parent_job_id)
+            parent_job_state["current_state"] = next_state
+            parent_job_state["status"] = JOB_STATUS_RUNNING
+            await self.storage.save_job_state(parent_job_id, parent_job_state)
+            await self.storage.enqueue_job(parent_job_id)
+        except Exception as e:
+            logger.exception(f"CRITICAL ERROR in _check_and_resume_parent: {e}")
 
     @staticmethod
     def _handle_task_completion(task: Task) -> None:

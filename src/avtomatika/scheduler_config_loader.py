@@ -22,6 +22,8 @@ class ScheduledJobConfig:
     time: str | None = None
     dispatch_timeout: int | None = None
     result_timeout: int | None = None
+    security: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 def load_schedules_from_file(file_path: str) -> list[ScheduledJobConfig]:
@@ -50,6 +52,8 @@ def load_schedules_from_file(file_path: str) -> list[ScheduledJobConfig]:
                 time=config.get("time"),
                 dispatch_timeout=config.get("dispatch_timeout"),
                 result_timeout=config.get("result_timeout"),
+                security=config.get("security"),
+                metadata=config.get("metadata"),
             )
         )
     return schedules

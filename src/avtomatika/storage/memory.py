@@ -6,9 +6,9 @@
 
 
 from asyncio import CancelledError, Lock, PriorityQueue, Queue, QueueEmpty, wait_for
-from asyncio import TimeoutError as AsyncTimeoutError
+from collections.abc import Callable
 from time import monotonic
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 from .base import StorageBackend
 
@@ -131,7 +131,7 @@ class MemoryStorage(StorageBackend):
             if isinstance(task_payload, dict):
                 return task_payload
             return None
-        except (AsyncTimeoutError, CancelledError):
+        except (TimeoutError, CancelledError):
             async with self._lock:
                 worker_info = self._workers.get(worker_id)
                 if not worker_info:
@@ -324,7 +324,7 @@ class MemoryStorage(StorageBackend):
 
             self._job_queue.task_done()
             return job_id, "memory-msg-id"
-        except AsyncTimeoutError:
+        except TimeoutError:
             return None
 
     async def ack_job(self, message_id: str) -> None:

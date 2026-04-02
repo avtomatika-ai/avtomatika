@@ -99,8 +99,7 @@ async def test_late_result_handling():
     history = MagicMock()
     config = MagicMock()
     engine = MagicMock()
-    # Mock _from_dict to return the data itself for testing
-    engine._from_dict.side_effect = lambda cls, data: data
+    # engine._from_dict is no longer used, we use rxon.utils.from_dict directly
 
     service = WorkerService(storage, history, config, engine)
 
@@ -383,6 +382,7 @@ async def test_sub_blueprint_timeout_propagation():
     from avtomatika.executor import JobExecutor
 
     engine = MagicMock()
+    engine.create_background_job = AsyncMock()
     storage = MagicMock()
     storage.save_job_state = AsyncMock()
     storage.enqueue_job = AsyncMock()
@@ -397,9 +397,11 @@ async def test_sub_blueprint_timeout_propagation():
 
     await executor._handle_run_blueprint(parent_job, sub_info, 0)
 
-    # Verify created child job state
-    # Second call to save_job_state (first for child, second for parent update)
-    child_state = storage.save_job_state.call_args_list[0][0][1]
-    assert child_state["blueprint_name"] == "child_bp"
-    assert child_state["dispatch_timeout"] == 33
-    assert child_state["result_timeout"] == 99
+    # Verify created child job call
+    # The new implementation calls create_background_job directly
+    engine.create_background_job.assert_called_once()
+    kwargs = engine.create_background_job.call_args.kwargs
+    assert kwargs["blueprint_name"] == "child_bp"
+    assert kwargs["dispatch_timeout"] == 33
+    assert kwargs["result_timeout"] == 99
+    assert kwargs["parent_job_id"] == "parent-1"

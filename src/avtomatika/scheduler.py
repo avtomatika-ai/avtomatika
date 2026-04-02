@@ -129,7 +129,7 @@ class Scheduler:
 
     async def _trigger_job(self, job: ScheduledJobConfig) -> None:
         try:
-            # CONTRACT VALIDATION: Check scheduled job input
+            # Check scheduled job input
             contract = self.engine.blueprint_contracts.get(job.blueprint, {})
             input_schema = contract.get("input_schema")
             if input_schema:
@@ -148,6 +148,8 @@ class Scheduler:
                 source=f"scheduler:{job.name}",
                 dispatch_timeout=job.dispatch_timeout,
                 result_timeout=job.result_timeout,
+                security=job.security,
+                metadata=job.metadata,
             )
         except Exception as e:
             logger.error(f"Failed to create background job {job.name}: {e}")

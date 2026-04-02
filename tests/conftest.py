@@ -11,6 +11,8 @@ import sys
 # Ensure src is in python path for correct import resolution
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 import pytest_asyncio
 from aiohttp.web import AppKey
@@ -28,6 +30,17 @@ from avtomatika.engine import ENGINE_KEY, OrchestratorEngine
 from avtomatika.storage.base import StorageBackend
 from avtomatika.storage.memory import MemoryStorage
 from avtomatika.storage.redis import RedisStorage
+
+
+@pytest.fixture(autouse=True)
+def _mock_verify_zero_trust(request):
+    if "test_worker_security_new.py" in request.node.fspath.strpath:
+        yield
+        return
+
+    with patch("avtomatika.services.worker_service.WorkerService._verify_zero_trust", new_callable=AsyncMock) as m:
+        yield m
+
 
 # Define AppKeys globally for tests
 STORAGE_KEY = AppKey("storage", StorageBackend)

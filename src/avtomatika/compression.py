@@ -5,9 +5,9 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from collections.abc import Awaitable, Callable
 from gzip import GzipFile
 from io import BytesIO
-from typing import Awaitable, Callable
 
 from aiohttp import web
 from zstandard import ZstdCompressor

@@ -10,12 +10,12 @@ from logging import DEBUG, Formatter, StreamHandler, getLogger
 from logging.handlers import QueueHandler, QueueListener
 from queue import Queue
 from sys import stdout
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from pythonjsonlogger import json
 
-_LOG_LISTENER: Optional[QueueListener] = None
+_LOG_LISTENER: QueueListener | None = None
 
 
 class TimezoneFormatter(Formatter):
@@ -23,8 +23,8 @@ class TimezoneFormatter(Formatter):
 
     def __init__(
         self,
-        fmt: Optional[str] = None,
-        datefmt: Optional[str] = None,
+        fmt: str | None = None,
+        datefmt: str | None = None,
         style: Literal["%", "{", "$"] = "%",
         validate: bool = True,
         *,
@@ -36,7 +36,7 @@ class TimezoneFormatter(Formatter):
     def converter(self, timestamp: float) -> datetime:  # type: ignore[override]
         return datetime.fromtimestamp(timestamp, self.tz)
 
-    def formatTime(self, record: Any, datefmt: Optional[str] = None) -> str:
+    def formatTime(self, record: Any, datefmt: str | None = None) -> str:
         dt = self.converter(record.created)
         if datefmt:
             s = dt.strftime(datefmt)
@@ -55,7 +55,7 @@ class TimezoneJsonFormatter(json.JsonFormatter):
         super().__init__(*args, **kwargs)
         self.tz = ZoneInfo(tz_name)
 
-    def formatTime(self, record: Any, datefmt: Optional[str] = None) -> str:
+    def formatTime(self, record: Any, datefmt: str | None = None) -> str:
         # Override formatTime to use timezone-aware datetime
         dt = datetime.fromtimestamp(record.created, self.tz)
         if datefmt:

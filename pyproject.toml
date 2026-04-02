@@ -11,12 +11,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b20"
+version = "1.0b21"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "Dmitrii Gagarin aka madgagarin", email = "madgagarin@gmail.com"},
+    { name = "Dmitrii Gagarin aka madgagarin", email = "madgagarin@gmail.com" },
 ]
 keywords = ["orchestrator", "state-machine", "workflow", "distributed", "ai", "llm", "rxon", "hln"]
 classifiers = [
@@ -27,8 +27,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "rxon==1.0b5",
-    "aiohttp~=3.12",
+    "rxon==1.0b7",
+    "aiohttp~=3.13.2",
     "python-json-logger~=4.0",
     "graphviz~=0.21",
     "zstandard~=0.24",
@@ -95,7 +95,12 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "A", "SIM", "C4", "PLC2401"]
+select = ["E", "W", "F", "I", "B", "A", "SIM", "C4", "PLC2401", "UP", "TID"]
+ignore = ["TID252"]
+
+[tool.ruff.lint.pyupgrade]
+# Enforce native union types (X | Y) instead of Union/Optional
+keep-runtime-typing = false
 
 [tool.ruff.lint.isort]
 known-first-party = ["avtomatika"]

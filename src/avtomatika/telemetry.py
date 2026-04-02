@@ -51,7 +51,7 @@ def setup_telemetry(service_name: str = "avtomatika") -> Any:
         logger.info("opentelemetry-sdk not found. Telemetry is disabled.")
         return trace.get_tracer(__name__)
 
-    # HLN Optimization: Avoid re-initializing if provider is already set
+    # Avoid re-initializing if provider is already set
     # This prevents "Overriding of current TracerProvider is not allowed" warnings
     from opentelemetry.sdk.trace import TracerProvider
 

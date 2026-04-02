@@ -226,39 +226,19 @@ async def publish_video(context):
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **High Performance Architecture**:
-    *   **Smart Dispatching**: High-performance routing using Redis Set intersections.
-        *   **Deep Schema Matching**: Prioritizes workers whose `input_schema` matches the specific task parameters.
-        *   **Overflow Strategy**: Automatically spills load to more expensive workers if the cheaper ones are saturated (`queue_length > SOFT_LIMIT`).
-        *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
-        *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues at O(1) speed.
-        *   **Load Balancing**: Employs optimistic load incrementing to prevent worker overloading between heartbeats.
-    *   **Efficient Networking**: TCP Keep-Alive and Zstd/Gzip response compression.
-    *   **Asynchronous Logging**: Non-blocking log processing via background `QueueHandler`.
-    *   **Offloaded IO**: Heavy serialization and database indices optimize history throughput.
+*   **Standardized Holon Matching (RXON v1.0b7)**:
+    *   **Unified Matching**: Migrated to the formalized `rxon` matching logic. All resource checks (CPU, RAM, GPU, custom properties) are now strictly governed by the HLN protocol standard.
+    *   **Smart Numeric Comparison**: Automatically performs **GE (Greater or Equal)** checks for numbers (e.g., minimum VRAM or RAM), ensuring flexible but reliable dispatching.
+    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
+    *   **Overflow Strategy**: Automatically spills load to more expensive workers if cheaper ones are saturated.
+    *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues at O(1) speed.
 *   **Self-Regulating Reputation**:
     *   **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
     *   **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
-    *   **Trusted Guard**: Configurable `REPUTATION_MIN_THRESHOLD` to automatically ignore unreliable holons.
-*   **Contract-First Architecture**:
-    *   **API Validation**: Strict validation of job `initial_data` against blueprint contracts before job creation.
-    *   **Result Validation**: Automatic verification of worker results against their declared `output_schema`.
-    *   **Ghost Signaling**: Blueprints can emit custom events via `actions.send_event()`, following the same strict validation rules.
-*   **Network Visibility**:
-    *   **Skill Catalog**: Aggregated real-time marketplace of all unique skills and contracts available in the grid.
-    *   **Global Registry**: Contracts are stored in Redis for cluster-wide consistency.
-*   **Bi-directional Heartbeats**: A robust feedback loop where the orchestrator sends urgent commands directly in response to optimized heartbeats with Jitter.
-*   **Zero Trust Security**:
-    *   **mTLS (Mutual TLS)**: Mutual authentication between Orchestrator and Workers using certificates.
-    *   **STS (Security Token Service)**: Token rotation mechanism with short-lived access tokens.
-    *   **Identity Extraction**: Automatically maps Certificate Common Name (CN) to Worker ID.
-*   **Data Integrity**:
-    *   **End-to-End Validation**: Automatic verification of file size and ETag (hash) during S3 transfers.
-    *   **Audit Trail**: File metadata is logged in history for full traceability.
-*   **Protocol Layer**: Built on top of `rxon`, a strict contract defining interactions, ensuring forward compatibility and allowing transport evolution (e.g., to gRPC).
-*   **Non-Blocking I/O**:
-    *   **Webhooks**: Sent via a parallel background worker pool.
-    *   **S3 Streaming**: Constant memory usage regardless of file size.
+*   **Contract-First & Zero Trust**:
+    *   **Identity Chain Verification**: Validates the entire bubbling path for events in deep holarchies.
+    *   **mTLS & STS**: Mutual authentication and short-lived token rotation for secure communication.
+    *   **Signature Support**: Ready for protocol-level digital signatures for end-to-end task verification.
 
 ## Blueprint Cookbook: Key Features
 

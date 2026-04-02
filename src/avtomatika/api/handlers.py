@@ -5,9 +5,10 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from collections.abc import Callable
 from importlib import resources
 from logging import getLogger
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from aiohttp import web
@@ -51,12 +52,14 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
             webhook_url = request_body.get("webhook_url")
             dispatch_timeout = request_body.get("dispatch_timeout")
             result_timeout = request_body.get("result_timeout")
+            security = request_body.get("security")
+            metadata = request_body.get("metadata")
         except Exception:
             return json_response({"error": "Invalid JSON body"}, status=400)
 
         client_config = request["client_config"]
 
-        # CONTRACT VALIDATION: Validate initial_data against blueprint's input_schema
+        # Validate initial_data against blueprint's input_schema
         contract = engine.blueprint_contracts.get(blueprint.name, {})
         input_schema = contract.get("input_schema")
         if input_schema:
@@ -83,10 +86,23 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
             "webhook_url": webhook_url,
             "dispatch_timeout": dispatch_timeout,
             "result_timeout": result_timeout,
+            "security": security,
+            "metadata": metadata,
         }
         await engine.storage.save_job_state(job_id, job_state)
 
-        # HLN RELIABILITY: Immediately start watching for dispatch timeout
+        # Log creation to history
+        await engine.history_storage.log_job_event(
+            {
+                "job_id": job_id,
+                "state": "pending",
+                "event_type": "job_created",
+                "context_snapshot": job_state,
+                "metadata": {"source": "api", "client": client_config.get("token")},
+            }
+        )
+
+        # Immediately start watching for dispatch timeout
         from time import monotonic
 
         if dispatch_timeout:
@@ -163,7 +179,7 @@ async def get_workers_handler(request: web.Request) -> web.Response:
     return json_response(workers)
 
 
-# HLN Cache for worker catalog
+# Cache for worker catalog
 _WORKER_CATALOG_CACHE: dict[str, Any] = {"data": None, "expires_at": 0.0}
 
 
@@ -250,6 +266,8 @@ async def human_approval_webhook_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json(loads=loads)
         decision = data.get("decision")
+        security = data.get("security")
+        metadata = data.get("metadata")
         if not decision:
             return json_response({"error": "decision is required in body"}, status=400)
     except Exception:
@@ -263,8 +281,16 @@ async def human_approval_webhook_handler(request: web.Request) -> web.Response:
     next_state = transitions.get(decision)
     if not next_state:
         return json_response({"error": f"Invalid decision '{decision}' for this job"}, status=400)
+
     job_state["current_state"] = next_state
     job_state["status"] = JOB_STATUS_RUNNING
+
+    # Propagate security and metadata from human decision
+    if security:
+        job_state["security"] = security
+    if metadata:
+        job_state.setdefault("metadata", {}).update(metadata)
+
     await engine.storage.save_job_state(job_id, job_state)
     await engine.storage.enqueue_job(job_id)
     return json_response({"status": "approval_received", "job_id": job_id})

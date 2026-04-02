@@ -21,15 +21,14 @@ async def test_register_worker_invalid_id():
     config = Config()
     engine = MagicMock()
     engine.app = {}  # Mock app dictionary for S3 service lookup
-    # Mock _from_dict to return the data itself for testing
-    engine._from_dict.side_effect = lambda cls, data: data
+    # engine._from_dict is no longer used, we use rxon.utils.from_dict directly
 
     service = WorkerService(storage, history, config, engine)
 
     invalid_payload = {"worker_id": "bad/worker/id", "worker_type": "cpu", "supported_skills": []}
 
     with pytest.raises(ValueError, match="Invalid worker_id"):
-        await service.register_worker(invalid_payload)
+        await service.register_worker(invalid_payload, "bad/worker/id")
 
     # Ensure storage was not called
     storage.register_worker.assert_not_called()
@@ -43,15 +42,14 @@ async def test_register_worker_valid_id():
     config = Config()
     engine = MagicMock()
     engine.app = {}
-    # Mock _from_dict to return the data itself for testing
-    engine._from_dict.side_effect = lambda cls, data: data
+    # engine._from_dict is no longer used, we use rxon.utils.from_dict directly
 
     service = WorkerService(storage, history, config, engine)
 
     valid_payload = {"worker_id": "good-worker-id_123", "worker_type": "cpu", "supported_skills": []}
 
     # Should not raise exception
-    await service.register_worker(valid_payload)
+    await service.register_worker(valid_payload, "good-worker-id_123")
 
     # Ensure storage was called correctly
     storage.register_worker.assert_called_once()

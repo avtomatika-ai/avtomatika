@@ -81,107 +81,43 @@ class Dispatcher:
         worker: dict[str, Any],
         requirements: dict[str, Any],
         task_type: str | None = None,
+        parsed_resources: Any | None = None,
+        parsed_artifacts: list[Any] | None = None,
     ) -> tuple[bool, str | None]:
-        """Checks if a worker meets requirements using standard RXON Resource types."""
-        worker_resources = worker.get("resources", {}) or {}
+        """Checks if a worker meets requirements using standardized RXON matching."""
+        from rxon.models import InstalledArtifact, Resources
+        from rxon.utils import from_dict
 
-        # 0. High-level Resource Checks (RAM, CPU)
-        if req_ram := requirements.get("resources", {}).get("ram_gb"):
-            worker_ram = worker_resources.get("ram_gb", 0.0)
-            if worker_ram < req_ram:
-                return False, f"insufficient_ram: {worker_ram} < {req_ram}"
+        # 1. Check Resources (CPU, RAM, GPU, etc.)
+        if parsed_resources is not None:
+            worker_res_dict = worker.get("resources")
+            if not worker_res_dict:
+                return False, "missing_worker_resources"
 
-        if req_cpu := requirements.get("resources", {}).get("cpu_cores"):
-            worker_cpu = worker_resources.get("cpu_cores", 0)
-            if worker_cpu < req_cpu:
-                return False, f"insufficient_cpu: {worker_cpu} < {req_cpu}"
+            worker_resources = from_dict(Resources, worker_res_dict)
 
-        # 1. Generic Hardware & Device Checks
-        if required_devices := requirements.get("resources", {}).get("devices"):
-            worker_devices = worker_resources.get("devices") or []
+            if not worker_resources.matches(parsed_resources):
+                return False, "resource_mismatch"
 
-            for req_dev in required_devices:
-                req_type = req_dev.get("type")
-                # resource identifier can be passed in multiple formats
-                req_id = req_dev.get("id") or req_dev.get("unit_id")
-                found_match = False
+        # 2. Check Installed Artifacts (Models, Datasets)
+        if parsed_artifacts is not None:
+            worker_artifacts_raw = worker.get("installed_artifacts", [])
+            worker_artifacts = [from_dict(InstalledArtifact, a) for i, a in enumerate(worker_artifacts_raw or [])]
 
-                for w_dev in worker_devices:
-                    if w_dev.get("type") == req_type:
-                        # 1. Match by ID if requested
-                        w_id = w_dev.get("id") or w_dev.get("unit_id")
-                        id_match = not req_id or str(req_id) == str(w_id)
+            for req_art in parsed_artifacts:
+                if not any(wa.matches(req_art) for wa in worker_artifacts):
+                    return False, f"missing_artifact: {req_art.name}"
 
-                        # 2. Match by Model if specified
-                        model_match = not req_dev.get("model") or req_dev["model"] in w_dev.get("model", "")
+        # 3. Check Installed Software (Environment)
+        if required_software := requirements.get("installed_software"):
+            worker_sw = worker.get("installed_software", {}) or {}
+            for sw_name, sw_version in required_software.items():
+                if sw_name not in worker_sw:
+                    return False, f"missing_software: {sw_name}"
+                if sw_version != "any" and worker_sw[sw_name] != sw_version:
+                    return False, f"software_version_mismatch: {sw_name} ({worker_sw[sw_name]} != {sw_version})"
 
-                        # 3. Match Generic Properties (Universal Logic)
-                        # We iterate over all other fields in req_dev and look for them in w_dev.properties
-                        props_match = True
-                        w_props = w_dev.get("properties", {}) or {}
-
-                        # Ignore standard fields we already matched
-                        SKIP_FIELDS = {"type", "model", "id", "unit_id"}
-
-                        for key, req_val in req_dev.items():
-                            if key in SKIP_FIELDS:
-                                continue
-
-                            w_val = w_props.get(key)
-                            if w_val is None:
-                                props_match = False
-                                break
-
-                            # Smart Numeric Comparison: if both are numbers, check >= (Greater/Equal)
-                            if isinstance(req_val, (int, float)) and isinstance(w_val, (int, float)):
-                                if w_val < req_val:
-                                    props_match = False
-                                    break
-                            # String/Equality check
-                            elif w_val != req_val:
-                                props_match = False
-                                break
-
-                        if id_match and model_match and props_match:
-                            found_match = True
-                            break
-
-                if not found_match:
-                    return False, f"missing_resource: {req_type} (id={req_id}, model={req_dev.get('model')})"
-
-        if required_artifacts := requirements.get("installed_artifacts"):
-            # Flexible matching for artifacts (can be strings or dicts with requirements)
-            worker_artifacts = worker.get("installed_artifacts", [])
-
-            for req in required_artifacts:
-                req_name = req if isinstance(req, str) else req.get("name")
-                req_ver = None if isinstance(req, str) else req.get("version")
-
-                found_artifact = False
-                for w_art in worker_artifacts:
-                    if w_art.get("name") == req_name:
-                        # Version check (if requested)
-                        if req_ver and w_art.get("version") != req_ver:
-                            continue
-
-                        # Property matching (if requested)
-                        if isinstance(req, dict) and (req_props := req.get("properties")):
-                            w_props = w_art.get("properties", {}) or {}
-                            props_match = True
-                            for pk, pv in req_props.items():
-                                if w_props.get(pk) != pv:
-                                    props_match = False
-                                    break
-                            if not props_match:
-                                continue
-
-                        found_artifact = True
-                        break
-
-                if not found_artifact:
-                    return False, f"missing_artifact: {req_name}"
-
-        # 2. Flexible Skill Parameter Checks
+        # 4. Flexible Skill Parameter Checks
         if task_type:
             target_skill = None
             for skill in worker.get("supported_skills", []):
@@ -222,7 +158,8 @@ class Dispatcher:
                         missing = required_custom - supported_set
                         if missing:
                             return False, f"unsupported_output_statuses: {sorted(missing)}"
-        # 3. Custom 'extra' capabilities match
+
+        # 5. Custom 'extra' capabilities match
         if extra_reqs := requirements.get("extra_requirements"):
             worker_extra = worker.get("capabilities", {}).get("extra", {})
             for key, req_value in extra_reqs.items():
@@ -424,8 +361,34 @@ class Dispatcher:
                 max_candidates = 50
             candidate_count = 0
 
+            # Pre-parse requirements to avoid O(N) parsing overhead
+            parsed_resources = None
+            if req_res_dict := resource_requirements.get("resources"):
+                from rxon.models import Resources
+                from rxon.utils import from_dict
+
+                parsed_resources = from_dict(Resources, req_res_dict)
+
+            parsed_artifacts = None
+            if required_artifacts := resource_requirements.get("installed_artifacts"):
+                from rxon.models import InstalledArtifact
+                from rxon.utils import from_dict
+
+                parsed_artifacts = []
+                for req_raw in required_artifacts:
+                    if isinstance(req_raw, str):
+                        parsed_artifacts.append(InstalledArtifact(name=req_raw))
+                    else:
+                        parsed_artifacts.append(from_dict(InstalledArtifact, req_raw))
+
             for w in capable_workers:
-                is_valid, reason = self._check_worker_compliance(w, resource_requirements, task_type)
+                is_valid, reason = self._check_worker_compliance(
+                    w,
+                    resource_requirements,
+                    task_type,
+                    parsed_resources=parsed_resources,
+                    parsed_artifacts=parsed_artifacts,
+                )
                 if is_valid:
                     compliant_workers.append(w)
                     candidate_count += 1
@@ -526,6 +489,8 @@ class Dispatcher:
             "params_metadata": filtered_metadata if filtered_metadata else None,
             "priority": priority,
             "deadline": deadline,
+            "security": job_state.get("security"),
+            "metadata": job_state.get("metadata"),
         }
         inject(payload["tracing_context"], context=job_state.get("tracing_context"))
 

@@ -22,6 +22,8 @@ class WebhookPayload:
     status: str
     result: dict[str, Any] | None = None
     error: str | None = None
+    security: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class WebhookSender:

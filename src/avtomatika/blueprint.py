@@ -5,10 +5,11 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from collections.abc import Callable
 from logging import getLogger
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
-from typing import Any, Callable, NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 from .datastore import AsyncDictStore
 

@@ -187,7 +187,7 @@ async def test_scheduler_run_exits_if_no_schedule(scheduler):
     # Using wait_for to ensure it doesn't hang (it should return instantly)
     try:
         await asyncio.wait_for(scheduler.run(), timeout=0.1)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("Scheduler.run() did not exit immediately when no schedules were present.")
 
     assert scheduler._running is False

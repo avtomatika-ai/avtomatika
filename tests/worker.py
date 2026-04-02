@@ -64,7 +64,7 @@ async def poll_for_tasks(app):
                     asyncio.create_task(handle_task(app, task))
                 elif resp.status != 204:
                     print(f"Error polling for tasks. Status: {resp.status}")
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue  # Normal for long polling
         except Exception as e:
             print(f"Exception while polling for tasks: {e}")

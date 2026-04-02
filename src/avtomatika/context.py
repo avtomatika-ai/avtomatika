@@ -27,7 +27,7 @@ class ActionFactory:
         self._task_to_dispatch_val: dict[str, Any] | None = None
         self._sub_blueprint_to_run_val: dict[str, Any] | None = None
         self._parallel_tasks_to_dispatch_val: dict[str, Any] | None = None
-        self._pending_events: list[tuple[str, dict[str, Any]]] = []
+        self._pending_events: list[tuple[str, dict[str, Any], Any, Any]] = []
 
     def _check_for_existing_action(self) -> None:
         """
@@ -64,13 +64,13 @@ class ActionFactory:
         return self._parallel_tasks_to_dispatch_val
 
     @property
-    def pending_events(self) -> list[tuple[str, dict[str, Any]]]:
+    def pending_events(self) -> list[tuple[str, dict[str, Any], Any, Any]]:
         return self._pending_events
 
-    def send_event(self, event_type: str, payload: dict[str, Any]) -> None:
+    def send_event(self, event_type: str, payload: dict[str, Any], security: Any = None, metadata: Any = None) -> None:
         """Emits a generic event from the blueprint logic."""
         logger.debug(f"Job {self._job_id}: Ghost emitting event '{event_type}'")
-        self._pending_events.append((event_type, payload))
+        self._pending_events.append((event_type, payload, security, metadata))
 
     def dispatch_parallel(self, tasks: list[dict[str, Any]], aggregate_into: str) -> None:
         """
@@ -110,7 +110,7 @@ class ActionFactory:
         self._check_for_existing_action()
         logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}'")
 
-        # HLN: If resource_hint is provided, inject it into params for the Dispatcher
+        # If resource_hint is provided, inject it into params for the Dispatcher
         if resource_hint:
             params["resource_hint"] = resource_hint
 

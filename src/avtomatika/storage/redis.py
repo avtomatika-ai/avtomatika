@@ -6,11 +6,13 @@
 
 
 from asyncio import CancelledError, get_running_loop
+from collections.abc import Callable
 from logging import getLogger
 from os import getenv
 from socket import gethostname
-from typing import Any, Callable, cast
+from typing import Any, cast
 
+import msgpack
 from msgpack import packb, unpackb
 from redis import Redis, WatchError
 from redis.exceptions import NoScriptError, ResponseError
@@ -168,11 +170,48 @@ class RedisStorage(StorageBackend):
 
     @staticmethod
     def _unpack(data: bytes) -> Any:
+        if not data:
+            return None
         try:
-            return unpackb(data, raw=False)
+            res = unpackb(data, raw=False)
+            # Beta 20 Fix: Deep normalization to handle Redis Lua cmsgpack artifacts
+            return RedisStorage._normalize_unpacked(res)
         except Exception as e:
             logger.error(f"Failed to unpack msgpack data: {e}")
             return None
+
+    @staticmethod
+    def _normalize_unpacked(data: Any) -> Any:
+        """
+        Recursively ensures that nested msgpack-encoded bytes (from Redis Lua)
+        are properly restored to their original structures.
+        """
+        if isinstance(data, dict):
+            return {k: RedisStorage._normalize_unpacked(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [RedisStorage._normalize_unpacked(i) for i in data]
+        elif isinstance(data, bytes):
+            # If we find bytes that look like a packed msgpack collection, unpack them.
+            # Standard msgpack map/array headers start with 0x80-0x8f or 0x90-0x9f etc.
+            try:
+                # We only attempt to unpack if it's not too large and looks like a collection
+                # to avoid accidental unpacking of small binary blobs.
+                if len(data) > 0 and (data[0] & 0xF0 in (0x80, 0x90, 0xD0, 0xDE, 0xDF)):
+                    # Use strict_map_key=False to allow Lua's potentially non-string keys,
+                    # but require it to successfully parse the ENTIRE byte string.
+                    unpacker = msgpack.Unpacker(strict_map_key=False, raw=False)
+                    unpacker.feed(data)
+                    unpacked = unpacker.unpack()
+                    # Ensure there are no trailing bytes left over, which would mean
+                    # it was just a binary string that happened to start with a valid msgpack prefix.
+                    for _ in unpacker:
+                        raise ValueError("Trailing data found, not a pure msgpack collection")
+
+                    if isinstance(unpacked, (dict, list)):
+                        return RedisStorage._normalize_unpacked(unpacked)
+            except Exception:
+                pass
+        return data
 
     async def _pack_async(self, data: Any) -> bytes:
         """Packs data, using executor only for large payloads."""
@@ -758,6 +797,8 @@ class RedisStorage(StorageBackend):
         return []
 
     async def enqueue_job(self, job_id: str) -> None:
+        if not self._group_created:
+            await self.initialize()
         # Cap stream length to prevent memory leaks in Redis.
         await self._redis.xadd(self._stream_key, {"job_id": job_id}, maxlen=100000, approximate=True)
 
@@ -786,6 +827,16 @@ class RedisStorage(StorageBackend):
             return None
         except CancelledError:
             return None
+        except ResponseError as e:
+            if "NOGROUP" in str(e):
+                logger.warning("Redis stream group lost. Re-initializing...")
+                self._group_created = False
+                try:
+                    await self.initialize()
+                except Exception as e2:
+                    logger.error(f"Failed to re-initialize Redis group: {e2}")
+                return None
+            raise e
 
     async def ack_job(self, message_id: str) -> None:
         await self._redis.xack(self._stream_key, self._group_name, message_id)

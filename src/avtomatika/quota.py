@@ -5,7 +5,8 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from aiohttp import web
 

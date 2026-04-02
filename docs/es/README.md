@@ -202,12 +202,14 @@ async def publish_video(
 
 Avtomatika está diseñada para entornos de alta carga con miles de workers concurrentes.
 
-*   **Arquitectura de Alto Rendimiento**:
-    *   **Smart Dispatching**: Enrutamiento de alto rendimiento utilizando intersecciones de conjuntos en Redis.
-        *   **Deep Schema Matching**: Prioriza a los workers cuyos esquemas coinciden con la tarea.
-        *   **Overflow Strategy**: Desvío automático a workers costosos si los económicos están saturados.
-        *   **Work Stealing**: Los trabajadores inactivos pueden robar tareas atómicamente a velocidad O(1).
-        *   **Load Balancing**: Incrementos de carga optimistas entre latidos (heartbeats).
+*   **Smart Matching Unificado (RXON v1.0b7)**:
+    *   **Matching Unificado**: Migración a la lógica de selección formalizada de `rxon`. Todos los recursos (CPU, RAM, GPU, etc.) se rigen estrictamente por el estándar del protocolo HLN.
+    *   **Comparación Numérica Inteligente**: Realiza automáticamente verificaciones **GE (Mayor o Igual)** para números.
+    *   **Hot Cache y Skills**: Prioriza workers que ya tienen modelos de IA específicos cargados.
+    *   **Deep Schema Matching**: Prioriza a los workers cuyos esquemas coinciden con la tarea.
+    *   **Overflow Strategy**: Desvío automático a workers costosos si los económicos están saturados.
+    *   **Work Stealing**: Los trabajadores inactivos pueden robar tareas atómicamente a velocidad O(1).
+    *   **Load Balancing**: Incrementos de carga optimistas entre latidos (heartbeats).
     *   **Networking Eficiente**: TCP Keep-Alive y compresión Zstd/Gzip.
     *   **Logging Asíncrono**: Procesamiento no bloqueante vía `QueueHandler`.
     *   **IO Optimizado**: Serialización pesada en hilos e índices de DB para el historial.
@@ -218,7 +220,9 @@ Avtomatika está diseñada para entornos de alta carga con miles de workers conc
     *   **Validación de API**: Verificación de `initial_data` antes de crear el trabajo.
     *   **Validación de Resultados**: Verificación de las respuestas de los workers contra su esquema.
 *   **Heartbeats Bi-direccionales**: Canal de comunicación robusto con Jitter para evitar tormentas de peticiones.
-*   **Seguridad de Confianza Cero**: mTLS y STS para rotación de tokens de acceso.
+*   **Seguridad de Confianza Cero**: 
+    *   **Verificación de Cadena de Identidad**: Valida la ruta completa ("bubbling path") para eventos en holarquías profundas mediante firmas digitales.
+    *   **mTLS y STS**: mTLS y STS para rotación de tokens de acceso.
 *   **E/S No Bloqueante**:
     *   **Webhooks**: Enviados vía un pool paralelo de workers de fondo.
     *   **Streaming S3**: Uso de memoria constante independientemente del tamaño del archivo.

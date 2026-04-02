@@ -5,9 +5,10 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from time import time
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from aiohttp import web
 
@@ -18,7 +19,7 @@ from .storage.base import StorageBackend
 Handler = Callable[[web.Request], Awaitable[web.Response]]
 
 
-# HLN Optimization: Cache token hashes to avoid repeated SHA256 computation
+# Cache token hashes to avoid repeated SHA256 computation
 # Format: {token: (expiry, hashed_token)}
 _TOKEN_HASH_CACHE: dict[str, tuple[float, str]] = {}
 

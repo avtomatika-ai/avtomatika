@@ -61,14 +61,23 @@ Avtomatika is optimized for maximum throughput and low latency:
     *   Critical sections (Heartbeat merge, load increment, work stealing) are implemented as **Lua scripts** in Redis.
     *   Uses **EVALSHA** to minimize network overhead by caching scripts on the Redis server.
 
-3.  **Scalable Algorithms**:
-    *   **O(1) Worker Lookup**: Uses Redis Set intersections (`SINTER`) to find idle workers.
-    *   **O(1) Work Stealing**: Randomly samples a subset of workers (`SRANDMEMBER`) to steal tasks from, avoiding full index scans.
+3.  **Scalable Algorithms & Protocols**:
+    *   **Standardized Holon Matching**: Uses the formalized `rxon` protocol logic for matching task requirements to holon resources. Supports **Smart Numeric Comparison (GE)** for any property (RAM, VRAM, custom metrics).
+    *   **S3 Hash Consistency**: Strict verification of S3 configuration compatibility between Orchestrator and Worker during registration to prevent "split-brain" storage issues.
+    *   **Deep Normalization (Beta 20 Fix)**: To ensure 100% data integrity between Python and Redis Lua, the storage layer implements recursive msgpack unpacking. This prevents 'hanging' issues caused by nested binary artifacts.
+    *   **O(1) Work Stealing**: Randomly samples a subset of workers to steal tasks from, avoiding full index scans.
     *   **Batching**: Schedulers use `MGET` to check multiple job intervals in a single round-trip.
 
 4.  **Backpressure & Resilience**:
     *   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Configurable semaphore (default 1000) limits active job handlers.
-    *   **Heartbeat Jitter**: Prevents "Thundering Herd" effects after orchestrator restarts by staggering worker check-ins.
+    *   **Heartbeat Jitter**: Prevents "Thundering Herd" effects after orchestrator restarts by staggering worker check-ins (fully supported by SDK).
+
+## Security (Zero Trust Architecture)
+
+Avtomatika implements a multi-layered security model:
+*   **Identity Chain Verification**: Every signal (Registration, Task Result, Event) is cryptographically verified using HMAC-SHA256 signatures in the `SecurityContext`. We don't just trust the last sender; we verify the origin.
+*   **mTLS (Mutual TLS)**: Mandatory mutual authentication between Orchestrator and Workers using certificates.
+*   **STS (Security Token Service)**: Automatic rotation of short-lived access tokens via the `/_worker/auth/token` endpoint.
 
 ## Key Orchestrator Components
 

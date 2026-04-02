@@ -139,35 +139,96 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
 
 class TestDispatcherFiltering:
     def test_check_worker_compliance_gpu_success(self, dispatcher):
+        from rxon.models import Resources
+        from rxon.utils import from_dict
+
         requirements = {"resources": {"devices": [{"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}]}}
-        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        parsed_resources = from_dict(Resources, requirements["resources"])
+        is_compliant, _ = dispatcher._check_worker_compliance(
+            GPU_WORKER, requirements, parsed_resources=parsed_resources
+        )
         assert is_compliant is True
 
     def test_check_worker_compliance_gpu_fail_model(self, dispatcher):
+        from rxon.models import Resources
+        from rxon.utils import from_dict
+
         requirements = {"resources": {"devices": [{"type": "gpu", "model": "RTX 3090"}]}}
-        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        parsed_resources = from_dict(Resources, requirements["resources"])
+        is_compliant, _ = dispatcher._check_worker_compliance(
+            GPU_WORKER, requirements, parsed_resources=parsed_resources
+        )
         assert is_compliant is False
 
     def test_check_worker_compliance_model_success(self, dispatcher):
+        from rxon.models import InstalledArtifact
+
         requirements = {"installed_artifacts": ["stable-diffusion-1.5"]}
-        is_compliant, _ = dispatcher._check_worker_compliance(GPU_WORKER, requirements)
+        parsed_artifacts = [InstalledArtifact(name="stable-diffusion-1.5")]
+        is_compliant, _ = dispatcher._check_worker_compliance(
+            GPU_WORKER, requirements, parsed_artifacts=parsed_artifacts
+        )
         assert is_compliant is True
 
     def test_check_worker_compliance_artifact_properties_success(self, dispatcher):
+        from rxon.models import InstalledArtifact
+        from rxon.utils import from_dict
+
         worker = {
             "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "int8"}}]
         }
         requirements = {"installed_artifacts": [{"name": "test-model", "properties": {"quantization": "int8"}}]}
-        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements)
+        parsed_artifacts = [from_dict(InstalledArtifact, requirements["installed_artifacts"][0])]
+        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements, parsed_artifacts=parsed_artifacts)
         assert is_compliant is True
 
     def test_check_worker_compliance_artifact_properties_failure(self, dispatcher):
+        from rxon.models import InstalledArtifact
+        from rxon.utils import from_dict
+
         worker = {
             "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "fp16"}}]
         }
         requirements = {"installed_artifacts": [{"name": "test-model", "properties": {"quantization": "int8"}}]}
-        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements)
+        parsed_artifacts = [from_dict(InstalledArtifact, requirements["installed_artifacts"][0])]
+        is_compliant, _ = dispatcher._check_worker_compliance(worker, requirements, parsed_artifacts=parsed_artifacts)
         assert is_compliant is False
+
+    def test_check_worker_compliance_missing_resources(self, dispatcher):
+        from rxon.models import Resources
+        from rxon.utils import from_dict
+
+        # Test case: worker is missing resources completely
+        worker_no_res = {"worker_id": "test"}
+        parsed_resources = from_dict(Resources, {"cpu": {"cores": 2}})
+        is_compliant, reason = dispatcher._check_worker_compliance(
+            worker_no_res, {"resources": {"cpu": {"cores": 2}}}, parsed_resources=parsed_resources
+        )
+        assert is_compliant is False
+        assert reason == "missing_worker_resources"
+
+    def test_check_worker_compliance_skip_parsing(self, dispatcher):
+        # Test case: parsed_resources is None, so resources check is skipped even if requirements has 'resources'.
+        # Since backward compatibility is removed, it should NOT parse them from 'requirements'.
+        requirements = {"resources": {"devices": [{"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}]}}
+        # But wait! The current implementation of `_check_worker_compliance` ONLY checks resources
+        # `if parsed_resources is not None:`
+        # So if we don't pass `parsed_resources`, it will skip resource validation completely
+        # and return True if no other requirements fail.
+        is_compliant, reason = dispatcher._check_worker_compliance(CPU_WORKER, requirements)
+        assert is_compliant is True
+
+    def test_check_worker_compliance_invalid_artifact(self, dispatcher):
+        from rxon.models import InstalledArtifact
+
+        worker = {"installed_artifacts": [{"name": "v1"}]}
+        requirements = {"installed_artifacts": ["v2"]}
+        parsed_artifacts = [InstalledArtifact(name="v2")]
+        is_compliant, reason = dispatcher._check_worker_compliance(
+            worker, requirements, parsed_artifacts=parsed_artifacts
+        )
+        assert is_compliant is False
+        assert reason == "missing_artifact: v2"
 
     @pytest.mark.asyncio
     async def test_dispatch_filters_by_gpu_from_action_factory(

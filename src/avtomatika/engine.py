@@ -5,12 +5,11 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import create_task, gather, get_running_loop, wait_for
-from dataclasses import fields, is_dataclass
+from collections.abc import Awaitable, Callable
 from logging import getLogger
 from time import monotonic
-from typing import Any, Awaitable, Callable, Optional, cast
+from typing import Any
 from uuid import uuid4
 
 from aiohttp import ClientSession, web
@@ -101,7 +100,7 @@ class OrchestratorEngine:
 
         self.app = web.Application(middlewares=middlewares)
         self.app[ENGINE_KEY] = self
-        self.worker_service: Optional[WorkerService] = None
+        self.worker_service: WorkerService | None = None
         self._setup_done = False
         self.webhook_sender: WebhookSender
         self.dispatcher: Dispatcher
@@ -242,7 +241,7 @@ class OrchestratorEngine:
                 warning = f"Protocol version mismatch! Orchestrator: {PROTOCOL_VERSION}, Worker: {worker_version}."
                 logger.warning(f"Worker {worker_id_hint}: {warning}")
 
-            await self.worker_service.register_worker(payload)
+            await self.worker_service.register_worker(payload, auth_worker_id)
             return {"status": "registered", "version": PROTOCOL_VERSION, "warning": warning}
 
         elif message_type == "poll":
@@ -282,25 +281,6 @@ class OrchestratorEngine:
             finally:
                 await self.ws_manager.unregister(auth_worker_id)
             return None
-
-    @staticmethod
-    def _from_dict(cls: type, data: Any) -> Any:
-        if not data:
-            return None
-        if isinstance(data, cls):
-            return data
-        if not isinstance(data, dict):
-            return data
-
-        if hasattr(cls, "_fields"):
-            fields_list = cast(Any, cls)._fields
-            filtered_data = {k: v for k, v in data.items() if k in fields_list}
-            return cls(**filtered_data)
-        elif is_dataclass(cls):
-            known_field_names = {f.name for f in fields(cls)}
-            filtered_data = {k: v for k, v in data.items() if k in known_field_names}
-            return cls(**filtered_data)
-        return data
 
     async def on_startup(self, app: web.Application) -> None:
         if not await self.storage.ping():
@@ -447,7 +427,7 @@ class OrchestratorEngine:
                 timeout=10.0,
             )
             logger.info("Background tasks gathered successfully.")
-        except AsyncTimeoutError:
+        except TimeoutError:
             logger.error("Timed out waiting for background tasks to shut down.")
 
         logger.info("Closing HTTP session...")
@@ -467,6 +447,9 @@ class OrchestratorEngine:
         data_metadata: dict[str, Any] | None = None,
         dispatch_timeout: int | None = None,
         result_timeout: int | None = None,
+        security: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        parent_job_id: str | None = None,
     ) -> str:
         """Creates a job directly, bypassing the HTTP API layer.
         Useful for internal schedulers and triggers.
@@ -482,6 +465,8 @@ class OrchestratorEngine:
             "params": {"source": source},
         }
 
+        from rxon.utils import to_dict
+
         job_state = {
             "id": job_id,
             "blueprint_name": blueprint.name,
@@ -494,6 +479,9 @@ class OrchestratorEngine:
             "data_metadata": data_metadata or {},
             "dispatch_timeout": dispatch_timeout,
             "result_timeout": result_timeout,
+            "security": to_dict(security) if security else None,
+            "metadata": metadata or {},
+            "parent_job_id": parent_job_id,
         }
         await self.storage.save_job_state(job_id, job_state)
 
@@ -572,6 +560,8 @@ class OrchestratorEngine:
             status=job_state["status"],
             result=job_state.get("state_history"),  # Or specific result
             error=job_state.get("error_message"),
+            security=job_state.get("security"),
+            metadata=job_state.get("metadata"),
         )
 
         # Run in background to not block the main flow

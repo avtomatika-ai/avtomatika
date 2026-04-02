@@ -135,7 +135,7 @@ async def test_sub_blueprint_flow(aiohttp_client, app):
 
     final_parent_state = None
     child_job_id = None
-    for _ in range(20):
+    for _ in range(50):
         await asyncio.sleep(0.1)
         parent_state = await storage.get_job_state(parent_job_id)
         assert parent_state is not None

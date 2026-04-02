@@ -30,7 +30,7 @@ async def test_handle_rxon_register(engine):
     context = {"token": engine.config.GLOBAL_WORKER_TOKEN}
 
     await engine.handle_rxon_message("register", payload, context)
-    engine.worker_service.register_worker.assert_called_once_with(payload)
+    engine.worker_service.register_worker.assert_called_once_with(payload, "w1")
 
 
 @pytest.mark.asyncio
