@@ -12,13 +12,17 @@ from aiohttp import web
 from rxon.constants import COMMAND_CANCEL_TASK
 
 from avtomatika.api.handlers import (
+    _WORKER_CATALOG_CACHE,
     cancel_job_handler,
     docs_handler,
     get_blueprint_graph_handler,
+    get_job_status_handler,
     get_jobs_handler,
+    get_worker_catalog_handler,
     human_approval_webhook_handler,
 )
 from avtomatika.app_keys import ENGINE_KEY
+from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.engine import OrchestratorEngine
 from avtomatika.storage.memory import MemoryStorage
@@ -44,7 +48,6 @@ def engine(storage, config):
     engine.ws_manager.handle_message = AsyncMock()
     engine.ws_manager.send_command = AsyncMock()
 
-    # Mock WebhookSender
     engine.webhook_sender = AsyncMock()
     engine.webhook_sender.send = AsyncMock()
     engine.webhook_sender.start = MagicMock()
@@ -118,7 +121,6 @@ async def test_cancel_job_ws_fails(engine, request_mock, caplog):
     )
     await engine.storage.register_worker(worker_id, {"worker_id": worker_id, "capabilities": {"websockets": True}}, 60)
 
-    # Setup WS manager mock
     engine.ws_manager.send_command.return_value = False
 
     request_mock.match_info.get.return_value = job_id
@@ -218,8 +220,6 @@ async def test_get_jobs_invalid_params(engine, request_mock):
 
 @pytest.mark.asyncio
 async def test_docs_handler_injection(engine, request_mock):
-    from avtomatika.blueprint import Blueprint
-
     bp = Blueprint(name="test_bp", api_endpoint="/jobs/test", api_version="v1")
 
     @bp.handler("start", is_start=True)
@@ -245,7 +245,6 @@ async def test_docs_handler_not_found(engine, request_mock):
 @pytest.mark.asyncio
 async def test_api_field_filtering(engine, request_mock):
     """Checks that GET /api/v1/jobs/{id}?fields=... filters the response."""
-    from avtomatika.api.handlers import get_job_status_handler
 
     job_id = "j1"
     await engine.storage.save_job_state(
@@ -267,9 +266,6 @@ async def test_api_field_filtering(engine, request_mock):
 @pytest.mark.asyncio
 async def test_worker_catalog_cache(engine, request_mock):
     """Checks that the worker catalog is cached."""
-    from avtomatika.api.handlers import _WORKER_CATALOG_CACHE, get_worker_catalog_handler
-
-    # Mock storage to track calls
     engine.storage.get_available_workers = AsyncMock(return_value=[])
 
     # Clear cache

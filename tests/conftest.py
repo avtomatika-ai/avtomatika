@@ -34,7 +34,8 @@ from avtomatika.storage.redis import RedisStorage
 
 @pytest.fixture(autouse=True)
 def _mock_verify_zero_trust(request):
-    if "test_worker_security_new.py" in request.node.fspath.strpath:
+    excluded_files = ["test_worker_security_new.py", "test_rxon_b8_features.py"]
+    if any(ef in request.node.fspath.strpath for ef in excluded_files):
         yield
         return
 

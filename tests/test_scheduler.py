@@ -33,7 +33,6 @@ def storage():
 @pytest.fixture
 def engine(storage, config):
     engine = OrchestratorEngine(storage, config)
-    # Mock blueprints
     engine.blueprints = {"test_bp": MagicMock(), "interval_bp": MagicMock()}
     engine.blueprints["test_bp"].name = "test_bp"
     engine.blueprints["interval_bp"].name = "interval_bp"
@@ -80,14 +79,12 @@ async def test_scheduler_interval_job(scheduler, engine):
     job = ScheduledJobConfig(name="interval_job", blueprint="interval_bp", input_data={}, interval_seconds=10)
     scheduler.schedules = [job]
 
-    # Mock engine.create_background_job
     engine.create_background_job = AsyncMock()
 
     with patch("avtomatika.storage.memory.monotonic") as mock_monotonic:
         start_mono = 1000.0
         mock_monotonic.return_value = start_mono
 
-        # 1. First run: No last_run in storage, should trigger
         now_tz = datetime(2023, 1, 1, 12, 0, 0, tzinfo=ZoneInfo("UTC"))
         await scheduler._process_job(job, now_tz)
 
@@ -96,13 +93,11 @@ async def test_scheduler_interval_job(scheduler, engine):
 
         engine.create_background_job.reset_mock()
 
-        # 2. Second run: Only 5 seconds passed, should NOT trigger (last_run check)
         mock_monotonic.return_value = start_mono + 5.0
         now_tz_2 = datetime(2023, 1, 1, 12, 0, 5, tzinfo=ZoneInfo("UTC"))
         await scheduler._process_job(job, now_tz_2)
         engine.create_background_job.assert_not_called()
 
-        # 3. Third run: 15 seconds passed, lock should be expired (mono + 15), trigger
         mock_monotonic.return_value = start_mono + 15.0
         now_tz_3 = datetime(2023, 1, 1, 12, 0, 15, tzinfo=ZoneInfo("UTC"))
         await scheduler._process_job(job, now_tz_3)
@@ -117,23 +112,19 @@ async def test_scheduler_daily_job(scheduler, engine):
 
     engine.create_background_job = AsyncMock()
 
-    # 1. Wrong time
     now_wrong = datetime(2023, 1, 1, 8, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_wrong)
     engine.create_background_job.assert_not_called()
 
-    # 2. Right time
     now_right = datetime(2023, 1, 1, 9, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_right)
     engine.create_background_job.assert_called_once()
 
     engine.create_background_job.reset_mock()
 
-    # 3. Right time again (same day), should NOT trigger due to lock
     await scheduler._process_job(job, now_right)
     engine.create_background_job.assert_not_called()
 
-    # 4. Right time (next day), should trigger
     now_next_day = datetime(2023, 1, 2, 9, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_next_day)
     engine.create_background_job.assert_called_once()
@@ -148,12 +139,10 @@ async def test_scheduler_weekly_job(scheduler, engine):
     scheduler.timezone = ZoneInfo("UTC")
     engine.create_background_job = AsyncMock()
 
-    # 1. Right time, wrong day (Sunday, 2023-01-01)
     now_sun = datetime(2023, 1, 1, 10, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_sun)
     engine.create_background_job.assert_not_called()
 
-    # 2. Right time, right day (Monday, 2023-01-02)
     now_mon = datetime(2023, 1, 2, 10, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_mon)
     engine.create_background_job.assert_called_once()
@@ -168,12 +157,10 @@ async def test_scheduler_monthly_job(scheduler, engine):
     scheduler.timezone = ZoneInfo("UTC")
     engine.create_background_job = AsyncMock()
 
-    # 1. Right time, wrong date (Jan 2nd)
     now_2nd = datetime(2023, 1, 2, 12, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_2nd)
     engine.create_background_job.assert_not_called()
 
-    # 2. Right time, right date (Jan 15th)
     now_15th = datetime(2023, 1, 15, 12, 0, 0, tzinfo=ZoneInfo("UTC"))
     await scheduler._process_job(job, now_15th)
     engine.create_background_job.assert_called_once()
@@ -197,11 +184,9 @@ async def test_scheduler_run_exits_if_no_schedule(scheduler):
 async def test_memory_storage_locks():
     storage = MemoryStorage()
 
-    # Test set_nx_ttl
     assert await storage.set_nx_ttl("lock1", "val1", 10) is True
     assert await storage.set_nx_ttl("lock1", "val2", 10) is False
     assert await storage.get_str("lock1") == "val1"
 
-    # Test set_str and get_str
     await storage.set_str("key1", "val_str", 10)
     assert await storage.get_str("key1") == "val_str"

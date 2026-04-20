@@ -5,6 +5,8 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
+import time
 from unittest.mock import AsyncMock
 
 import pytest
@@ -84,9 +86,6 @@ async def test_webhook_sender_retry_failure(mocker):
 @pytest.mark.asyncio
 async def test_webhook_sender_concurrency():
     """Checks that WebhookSender can process multiple webhooks concurrently."""
-    import asyncio
-    import time
-
     mock_session = AsyncMock(spec=ClientSession)
     mock_response = AsyncMock()
     mock_response.status = 200

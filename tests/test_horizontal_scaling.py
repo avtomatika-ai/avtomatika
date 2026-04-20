@@ -11,8 +11,12 @@ import logging
 import pytest
 from fakeredis import aioredis as fake_redis
 
+from avtomatika.app_keys import SCHEDULER_KEY
+from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.engine import OrchestratorEngine
+from avtomatika.scheduler import Scheduler
+from avtomatika.scheduler_config_loader import ScheduledJobConfig
 from avtomatika.storage.redis import RedisStorage
 
 # Configure logging to verify locks
@@ -26,10 +30,8 @@ async def test_horizontal_scaling_scheduler_locks():
     Verifies that multiple Orchestrator instances connected to the same Redis
     do not duplicate scheduled jobs due to distributed locking.
     """
-    # 1. Shared Infrastructure (The "Network")
     shared_redis = fake_redis.FakeRedis(decode_responses=False)
 
-    # 2. Setup Multiple Instances (Nodes)
     num_nodes = 3
     engines = []
 
@@ -45,7 +47,6 @@ async def test_horizontal_scaling_scheduler_locks():
         # Hack: Inject a blueprint directly to avoid full setup overhead if not needed
         # but create_background_job needs it.
         # We will mock the blueprint registration.
-        from avtomatika.blueprint import Blueprint
 
         bp = Blueprint("scheduled_bp")
 
@@ -58,11 +59,8 @@ async def test_horizontal_scaling_scheduler_locks():
 
         engines.append(engine)
 
-    # 3. Setup Scheduler on all nodes
     # We manually trigger the scheduler logic to verify locking without waiting for real time
     # or relying on the full background loop which might be slow.
-
-    from avtomatika.scheduler_config_loader import ScheduledJobConfig
 
     test_job = ScheduledJobConfig(
         name="test_concurrent_job",
@@ -71,7 +69,6 @@ async def test_horizontal_scaling_scheduler_locks():
         input_data={},
     )
 
-    # 4. Simulate Concurrent Execution
     # All nodes try to trigger the same job at the same "time"
 
     async def try_trigger(eng):
@@ -82,8 +79,6 @@ async def test_horizontal_scaling_scheduler_locks():
         scheduler = eng.app.get("avtomatika_scheduler")  # Setup hasn't run, so this might be missing
         # Let's manually init scheduler since we didn't call engine.setup() fully
         if not scheduler:
-            from avtomatika.scheduler import Scheduler
-
             scheduler = Scheduler(eng)
 
         # Manually invoke the locking logic we want to test
@@ -96,12 +91,9 @@ async def test_horizontal_scaling_scheduler_locks():
             return True
         return False
 
-    from avtomatika.app_keys import SCHEDULER_KEY
-
     # Run setup to initialize internal components (like app keys)
     for eng in engines:
         # Minimal setup manually
-        from avtomatika.scheduler import Scheduler
 
         eng.app[SCHEDULER_KEY] = Scheduler(eng)
         await eng.storage.ping()  # Ensure connection
@@ -109,7 +101,6 @@ async def test_horizontal_scaling_scheduler_locks():
     # Fire all triggers concurrently
     results = await asyncio.gather(*[try_trigger(eng) for eng in engines])
 
-    # 5. Assertions
     successful_triggers = sum(results)
 
     print(f"Nodes attempted trigger: {num_nodes}")
@@ -132,16 +123,13 @@ async def test_horizontal_scaling_watcher_locks():
     """
     shared_redis = fake_redis.FakeRedis(decode_responses=False)
 
-    # Setup 2 nodes
     node1_storage = RedisStorage(shared_redis, consumer_name="node-1")
     node2_storage = RedisStorage(shared_redis, consumer_name="node-2")
 
-    # Add a "stuck" job
     job_id = "stuck-job-1"
     # Add to watched set with timestamp 0 (expired long ago)
     await node1_storage.add_job_to_watch(job_id, 0)
 
-    # Verify it's there
     pending = await node1_storage.get_timed_out_jobs(limit=10)
     assert len(pending) == 1
     assert pending[0] == job_id
@@ -167,7 +155,6 @@ async def test_horizontal_scaling_watcher_locks():
                 await storage.release_lock(lock_key, node_name)
         return processed
 
-    # Run concurrently
     results = await asyncio.gather(watcher_tick(node1_storage, "node-1"), watcher_tick(node2_storage, "node-2"))
 
     node1_processed = results[0]

@@ -86,9 +86,9 @@ async def verify_worker_auth(
         raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
 
     # Individual Token for specific worker
-    expected_token_hash = await storage.get_worker_token(worker_id_hint)
-    if expected_token_hash:
-        if hashed_provided_token == expected_token_hash:
+    expected_token = await storage.get_worker_token(worker_id_hint)
+    if expected_token:
+        if token == expected_token:
             return worker_id_hint
         raise PermissionError("Unauthorized: Invalid individual worker token")
 

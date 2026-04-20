@@ -9,7 +9,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from rxon.models import TaskResult, WorkerEventPayload, WorkerRegistration
+from rxon.models import Heartbeat, TaskResult, WorkerEventPayload, WorkerRegistration
 from rxon.security import sign_payload
 from rxon.utils import to_dict
 
@@ -143,8 +143,6 @@ async def test_heartbeat_full_object_signature(worker_service, config, storage):
     worker_id = "worker-1"
     await storage.register_worker(worker_id, {"worker_id": worker_id}, 60)
 
-    from rxon.models import Heartbeat
-
     hb = Heartbeat(worker_id=worker_id, status="ready", timestamp=time.time())
 
     signature = sign_pure(hb, config.GLOBAL_WORKER_TOKEN)
@@ -190,8 +188,43 @@ async def test_missing_signature_rejected(worker_service, config):
     reg = WorkerRegistration(worker_id=worker_id, timestamp=time.time())
     reg_dict = to_dict(reg)
     # Intentionally omitted security dict
-    with pytest.raises(PermissionError, match="Missing required cryptographic signature"):
+    with pytest.raises(PermissionError, match="Missing required security context"):
         await worker_service.register_worker(reg_dict, worker_id)
+
+
+@pytest.mark.asyncio
+async def test_timestamp_boundary_conditions(worker_service, config):
+    """Boundary test: 60s is OK, 61s is REJECTED."""
+    worker_id = "boundary-worker"
+
+    ts_60 = time.time() - 60
+    reg_60 = WorkerRegistration(worker_id=worker_id, timestamp=ts_60)
+    sig_60 = sign_pure(reg_60, config.GLOBAL_WORKER_TOKEN)
+    reg_dict_60 = to_dict(reg_60)
+    reg_dict_60["security"] = {"signature": sig_60, "signer_id": worker_id}
+
+    # Should not raise
+    await worker_service.register_worker(reg_dict_60, worker_id)
+
+    ts_61 = time.time() - 61
+    reg_61 = WorkerRegistration(worker_id=worker_id, timestamp=ts_61)
+    sig_61 = sign_pure(reg_61, config.GLOBAL_WORKER_TOKEN)
+    reg_dict_61 = to_dict(reg_61)
+    reg_dict_61["security"] = {"signature": sig_61, "signer_id": worker_id}
+
+    with pytest.raises(PermissionError, match="Message timestamp expired"):
+        await worker_service.register_worker(reg_dict_61, worker_id)
+
+
+@pytest.mark.asyncio
+async def test_mandatory_timestamp_all_workers(worker_service):
+    """Verify that timestamp is mandatory even if no secret is set (Zero Trust policy)."""
+    worker_id = "no-token-worker"
+    # Registration WITHOUT timestamp
+    payload = {"worker_id": worker_id}
+
+    with pytest.raises(PermissionError, match="Missing required timestamp"):
+        await worker_service.register_worker(payload, worker_id)
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ import asyncio
 import os
 import uuid
 
+import aiohttp
 from aiohttp import web
 
 from avtomatika.constants import AUTH_HEADER_WORKER
@@ -137,8 +138,6 @@ async def status(request):
 
 
 async def on_startup(app):
-    import aiohttp
-
     app["client_session"] = aiohttp.ClientSession()
     app["poller"] = asyncio.create_task(poll_for_tasks(app))
     app["register"] = asyncio.create_task(register_with_avtomatika(app))

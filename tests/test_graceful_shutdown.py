@@ -14,6 +14,7 @@ from src.avtomatika.app_keys import (
     EXECUTOR_TASK_KEY,
     HEALTH_CHECKER_KEY,
     HEALTH_CHECKER_TASK_KEY,
+    HTTP_SESSION_KEY,
     REPUTATION_CALCULATOR_KEY,
     REPUTATION_CALCULATOR_TASK_KEY,
     SCHEDULER_KEY,
@@ -30,7 +31,6 @@ async def test_graceful_shutdown_waits_for_tasks():
     Tests that on_shutdown calls stop() on services and waits for tasks to complete
     instead of cancelling them immediately (for Executor and Scheduler).
     """
-    # Mock storage and config
     storage = AsyncMock()
     storage.ping.return_value = True
     config = MagicMock()
@@ -43,7 +43,6 @@ async def test_graceful_shutdown_waits_for_tasks():
     config.LOG_FORMAT = "text"
     config.TZ = "UTC"
 
-    # Initialize engine
     engine = OrchestratorEngine(storage, config)
     app = engine.app
 
@@ -81,7 +80,6 @@ async def test_graceful_shutdown_waits_for_tasks():
 
     app[EXECUTOR_TASK_KEY] = executor_task
     app[WATCHER_TASK_KEY] = watcher_task
-    # Mock others as done tasks
     done_task = asyncio.create_task(asyncio.sleep(0))
     await done_task
     app[REPUTATION_CALCULATOR_TASK_KEY] = done_task
@@ -95,30 +93,24 @@ async def test_graceful_shutdown_waits_for_tasks():
     engine.app[REPUTATION_CALCULATOR_KEY] = MagicMock()
     engine.app[HEALTH_CHECKER_KEY] = MagicMock()
 
-    # Mock ws_manager and webhook_sender
     engine.ws_manager = AsyncMock()
     engine.webhook_sender = MagicMock()
     engine.webhook_sender.stop = AsyncMock()
 
-    # Mock rxon listener
     engine.rxon_listener = AsyncMock()
 
     # Trigger shutdown
     # We need to mock HTTP_SESSION_KEY to avoid actual cleanup error
-    from src.avtomatika.app_keys import HTTP_SESSION_KEY
 
     app[HTTP_SESSION_KEY] = AsyncMock()
 
     await engine.on_shutdown(app)
 
-    # Verify Executor finished naturally
     assert executor_finished.is_set()
     assert executor_task.done()
     assert not executor_task.cancelled()
 
-    # Verify Watcher was cancelled
     assert watcher_cancelled.is_set()
 
-    # Verify stop() methods were called
     engine.app[EXECUTOR_KEY].stop.assert_called_once()
     engine.app[SCHEDULER_KEY].stop.assert_called_once()

@@ -5,9 +5,13 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from rxon.models import InstalledArtifact, Resources
+from rxon.utils import from_dict
+from src.avtomatika.context import ActionFactory
 from src.avtomatika.dispatcher import Dispatcher
 
 # --- Sample Worker Data ---
@@ -87,7 +91,6 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
     task_info = {"type": "test_task", "params": {"x": 1}}
     await dispatcher.dispatch(job_state, task_info)
 
-    # Assertions
     mock_storage.find_workers_for_skill.assert_called_once_with("test_task")
     mock_storage.get_workers.assert_called_once_with(["worker-123"])
     mock_storage.enqueue_task_for_worker.assert_called_once()
@@ -139,9 +142,6 @@ async def test_dispatch_sends_priority(dispatcher, mock_storage):
 
 class TestDispatcherFiltering:
     def test_check_worker_compliance_gpu_success(self, dispatcher):
-        from rxon.models import Resources
-        from rxon.utils import from_dict
-
         requirements = {"resources": {"devices": [{"type": "gpu", "model": "NVIDIA T4", "memory_gb": 16}]}}
         parsed_resources = from_dict(Resources, requirements["resources"])
         is_compliant, _ = dispatcher._check_worker_compliance(
@@ -150,9 +150,6 @@ class TestDispatcherFiltering:
         assert is_compliant is True
 
     def test_check_worker_compliance_gpu_fail_model(self, dispatcher):
-        from rxon.models import Resources
-        from rxon.utils import from_dict
-
         requirements = {"resources": {"devices": [{"type": "gpu", "model": "RTX 3090"}]}}
         parsed_resources = from_dict(Resources, requirements["resources"])
         is_compliant, _ = dispatcher._check_worker_compliance(
@@ -161,8 +158,6 @@ class TestDispatcherFiltering:
         assert is_compliant is False
 
     def test_check_worker_compliance_model_success(self, dispatcher):
-        from rxon.models import InstalledArtifact
-
         requirements = {"installed_artifacts": ["stable-diffusion-1.5"]}
         parsed_artifacts = [InstalledArtifact(name="stable-diffusion-1.5")]
         is_compliant, _ = dispatcher._check_worker_compliance(
@@ -171,9 +166,6 @@ class TestDispatcherFiltering:
         assert is_compliant is True
 
     def test_check_worker_compliance_artifact_properties_success(self, dispatcher):
-        from rxon.models import InstalledArtifact
-        from rxon.utils import from_dict
-
         worker = {
             "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "int8"}}]
         }
@@ -183,9 +175,6 @@ class TestDispatcherFiltering:
         assert is_compliant is True
 
     def test_check_worker_compliance_artifact_properties_failure(self, dispatcher):
-        from rxon.models import InstalledArtifact
-        from rxon.utils import from_dict
-
         worker = {
             "installed_artifacts": [{"name": "test-model", "version": "2.0", "properties": {"quantization": "fp16"}}]
         }
@@ -195,14 +184,11 @@ class TestDispatcherFiltering:
         assert is_compliant is False
 
     def test_check_worker_compliance_missing_resources(self, dispatcher):
-        from rxon.models import Resources
-        from rxon.utils import from_dict
-
         # Test case: worker is missing resources completely
         worker_no_res = {"worker_id": "test"}
-        parsed_resources = from_dict(Resources, {"cpu": {"cores": 2}})
+        parsed_resources = from_dict(Resources, {"properties": {"cpu_cores": 2}})
         is_compliant, reason = dispatcher._check_worker_compliance(
-            worker_no_res, {"resources": {"cpu": {"cores": 2}}}, parsed_resources=parsed_resources
+            worker_no_res, {"resources": {"properties": {"cpu_cores": 2}}}, parsed_resources=parsed_resources
         )
         assert is_compliant is False
         assert reason == "missing_worker_resources"
@@ -219,8 +205,6 @@ class TestDispatcherFiltering:
         assert is_compliant is True
 
     def test_check_worker_compliance_invalid_artifact(self, dispatcher):
-        from rxon.models import InstalledArtifact
-
         worker = {"installed_artifacts": [{"name": "v1"}]}
         requirements = {"installed_artifacts": ["v2"]}
         parsed_artifacts = [InstalledArtifact(name="v2")]
@@ -236,14 +220,11 @@ class TestDispatcherFiltering:
         dispatcher,
         mock_storage,
     ):
-        from src.avtomatika.context import ActionFactory
-
         workers = [GPU_WORKER, CPU_WORKER]
         mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
         mock_storage.get_workers.return_value = workers
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
-        # 1. Simulate a blueprint handler creating an action
         actions = ActionFactory("job-1")
         actions.dispatch_task(
             task_type="image_generation",
@@ -253,10 +234,8 @@ class TestDispatcherFiltering:
         )
         task_info = actions.task_to_dispatch
 
-        # 2. Dispatch the task
         await dispatcher.dispatch({"id": "job-1", "tracing_context": {}}, task_info)
 
-        # 3. Assert that the task was queued for the correct worker
         mock_storage.enqueue_task_for_worker.assert_called_once()
         called_args, _ = mock_storage.enqueue_task_for_worker.call_args
         dispatched_worker_id = called_args[0]
@@ -306,7 +285,6 @@ class TestDispatcherFiltering:
         mock_storage.enqueue_task_for_worker = AsyncMock()
 
         job_state = {"id": "job-max-cost-test", "tracing_context": {}}
-        # 1. Set max_cost that allows only the cheap worker
         task_info_pass = {"type": "test_task", "max_cost": 0.02}
 
         await dispatcher.dispatch(job_state, task_info_pass)
@@ -314,7 +292,6 @@ class TestDispatcherFiltering:
         called_args, _ = mock_storage.enqueue_task_for_worker.call_args
         assert called_args[0] == cheapest_worker["worker_id"]
 
-        # 2. Set max_cost that does not allow any worker
         task_info_fail = {"type": "test_task", "max_cost": 0.005}
         with pytest.raises(RuntimeError) as excinfo:
             await dispatcher.dispatch(job_state, task_info_fail)
@@ -418,8 +395,6 @@ async def test_dispatcher_candidates_limit(mock_storage, mock_config):
 
     job_state = {"id": "j1", "blueprint_name": "b1", "tracing_context": {}}
     task_info = {"type": "t1", "resource_requirements": {"cpu": 1}}
-
-    from contextlib import suppress
 
     with suppress(Exception):
         await dispatcher.dispatch(job_state, task_info)

@@ -5,9 +5,11 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import gzip
 from unittest.mock import Mock
 
 import pytest
+import src.avtomatika.compression
 import zstandard
 from aiohttp import web
 from src.avtomatika.compression import _compress_gzip, compression_middleware
@@ -90,8 +92,6 @@ async def test_gzip_compression_occurs():
     response = await compression_middleware(request, handler)
     assert response.headers["Content-Encoding"] == "gzip"
 
-    import gzip
-
     decompressed_body = gzip.decompress(response.body)
     assert decompressed_body == large_body
 
@@ -111,8 +111,6 @@ async def test_compression_failure_returns_original_response():
             raise ValueError("Compression failed!")
 
         # Monkeypatch the function
-        import src.avtomatika.compression
-
         src.avtomatika.compression._compress_gzip = failing_compress_gzip
 
         async def handler(req):
@@ -123,6 +121,4 @@ async def test_compression_failure_returns_original_response():
         assert response.body == large_body
     finally:
         # Restore the original function
-        import src.avtomatika.compression
-
         src.avtomatika.compression._compress_gzip = original_compress

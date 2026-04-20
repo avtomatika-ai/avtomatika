@@ -6,9 +6,19 @@
 [![Versión de PyPI](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
-Avtomatika es un motor de alto rendimiento y basado en estados para gestionar flujos de trabajo asíncronos complejos en Python. Proporciona un marco robusto para construir aplicaciones escalables y resilientes al separar la lógica del proceso de la lógica de ejecución.
+**Avtomatika** es un orquestador de alto rendimiento basado en máquinas de estados, diseñado para gestionar flujos de trabajo de IA de larga duración y tareas distribuidas. Actúa como el núcleo de una **Red Lógica Jerárquica (HLN)**, coordinando **Holones** (workers) a través del protocolo **RXON**.
+
+## 🚀 Características Principales
+
+- **State-Machine Driven**: Blueprints declarativos en Python para lógica compleja.
+- **Almacenamiento Redis de Alto Rendimiento**: Indexación **ZSET** para gestión atómica de workers y serialización **Msgpack**.
+- **Seguridad Zero Trust**: Autenticación obligatoria de workers y **Protección contra Reenvío** (ventana de tiempo de 60s).
+- **Almacenamiento de Blobs Enchufable**: Soporte completo para S3 a través de la interfaz `BlobProvider` (potenciado por `obstore`).
+- **Lógica Jerárquica**: Soporte para blueprints hijos (Ghosts) y ejecución paralela con agregación de resultados.
+- **Observability**: Seguimiento distribuido con **OpenTelemetry** y métricas en tiempo real.
 
 Este documento sirve como una guía completa para desarrolladores que buscan construir pipelines (blueprints) e integrar el Orquestador en sus aplicaciones.
+
 
 ## Tabla de Contenidos
 - [Concepto Principal: Orquestador, Blueprints y Workers](#concepto-principal-orquestador-blueprints-y-workers)

@@ -8,7 +8,6 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiohttp import web
 from rxon.models import TokenResponse
 
 from avtomatika.config import Config
@@ -38,19 +37,16 @@ async def test_issue_token_no_mtls(engine):
     """Test that STS endpoint via RxonListener rejects requests without mTLS."""
     context = {"raw_request": MagicMock(), "token": "some-token", "worker_id_hint": "worker-1"}
 
-    # engine.py raises HTTPUnauthorized (401) when verify_worker_auth raises PermissionError
-    with pytest.raises(web.HTTPUnauthorized):
+    # verify_worker_auth now raises PermissionError directly, which is unhandled in engine.py
+    # until it reaches HttpListener (which is not used in this manual direct call test)
+    with pytest.raises(PermissionError):
         await engine.handle_rxon_message("sts_token", payload=None, context=context)
 
     # The message comes from PermissionError raised in verify_worker_auth (no mtls cert -> token check)
     # verify_worker_auth raises PermissionError("Unauthorized: No valid token found") if token doesn't match
     # Wait, in the code:
-    # 1. mTLS check. if cert_identity...
-    # 2. Token check.
     # In engine.py:
     # elif message_type == "sts_token":
-    #    if cert_identity is None:
-    #         raise web.HTTPForbidden(text="Unauthorized: mTLS certificate required...")
 
     # Ah! Engine check happens AFTER verify_worker_auth.
     # So verify_worker_auth MUST succeed first (e.g. by token) for the engine check to be reached?

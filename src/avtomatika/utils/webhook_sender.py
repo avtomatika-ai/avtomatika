@@ -24,6 +24,7 @@ class WebhookPayload:
     error: str | None = None
     security: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    timestamp: float | None = None
 
 
 class WebhookSender:

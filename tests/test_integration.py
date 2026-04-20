@@ -6,7 +6,6 @@
 
 
 import asyncio
-import hashlib
 import json
 import os
 from typing import Any
@@ -306,9 +305,7 @@ def make_valid_worker_payload(worker_id: str, **kwargs) -> dict[str, Any]:
         "worker_type": "test-worker",
         "supported_skills": [{"name": "test"}],
         "resources": {
-            "max_concurrent_tasks": 10,
-            "cpu_cores": 4,
-            "ram_gb": 8.0,
+            "properties": {"cpu_cores": 4, "ram_gb": 8.0},
         },
         "installed_software": {"python": "3.11"},
         "installed_artifacts": [],
@@ -337,9 +334,7 @@ async def test_worker_registration_with_full_data(aiohttp_client, app):
             {"name": "video_montage"},
         ],
         resources={
-            "max_concurrent_tasks": 1,
-            "cpu_cores": 8,
-            "ram_gb": 32.0,
+            "properties": {"cpu_cores": 8, "ram_gb": 32.0},
             "devices": [{"type": "gpu", "model": "NVIDIA T4", "properties": {"memory_gb": 16}}],
         },
         installed_software={"ffmpeg": "5.1", "cuda": "11.8"},
@@ -531,8 +526,7 @@ async def test_worker_individual_token_auth(aiohttp_client, app):
 
     worker_id = "worker-with-individual-token"
     individual_token = "individual-secret-for-worker-1"
-    hashed_individual_token = hashlib.sha256(individual_token.encode()).hexdigest()
-    await storage.set_worker_token(worker_id, hashed_individual_token)
+    await storage.set_worker_token(worker_id, individual_token)
 
     headers = {AUTH_HEADER_WORKER: individual_token}
     payload = make_valid_worker_payload(worker_id)
@@ -559,7 +553,7 @@ async def test_worker_individual_token_auth_failure(aiohttp_client, app):
 
     resp = await client.post("/_worker/workers/register", json=payload, headers=headers)
 
-    assert resp.status == 401
+    assert resp.status == 403
     error = await resp.json()
     assert "Invalid individual worker token" in error["error"]
 
@@ -595,7 +589,7 @@ async def test_worker_no_token_failure(aiohttp_client, app):
 
     resp = await client.post("/_worker/workers/register", json=payload)  # No headers
 
-    assert resp.status == 401
+    assert resp.status == 403
     error = await resp.json()
     assert f"Missing {AUTH_HEADER_WORKER} header" in error["error"]
 

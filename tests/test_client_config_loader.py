@@ -18,7 +18,6 @@ async def test_load_client_configs_to_redis():
     storage = AsyncMock()
     config_path = "test_clients.toml"
 
-    # Create a dummy config file
     with open(config_path, "w") as f:
         f.write("""
 [client-1]

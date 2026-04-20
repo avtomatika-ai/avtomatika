@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from ..app_keys import ENGINE_KEY
-from ..history.noop import NoOpHistoryStorage
 from ..quota import quota_middleware_factory
 from ..security import client_auth_middleware_factory
 from .handlers import (
@@ -96,8 +95,10 @@ def _register_common_routes(app: web.Application, engine: "OrchestratorEngine") 
     app.router.add_get("/jobs/{job_id}/files/upload", get_job_file_upload_handler)
     app.router.add_put("/jobs/{job_id}/files/content/{filename}", stream_job_file_upload_handler)
     app.router.add_get("/jobs/{job_id}/files/download/{filename}", get_job_file_download_handler)
-    if not isinstance(engine.history_storage, NoOpHistoryStorage):
-        app.router.add_get("/jobs/{job_id}/history", get_job_history_handler)
+
+    # Always register history route; the handler itself will handle NoOp state
+    app.router.add_get("/jobs/{job_id}/history", get_job_history_handler)
+
     app.router.add_get("/blueprints/{blueprint_name}/graph", get_blueprint_graph_handler)
     app.router.add_get("/workers", get_workers_handler)
     app.router.add_get("/workers/catalog", get_dashboard_handler)  # Placeholder, will create actual handler

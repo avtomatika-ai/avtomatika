@@ -23,7 +23,6 @@ def setup_env():
 async def test_overflow_strategy(setup_env):
     storage, config, dispatcher = setup_env
 
-    # 1. Register 2 workers: cheap and expensive
     worker_cheap = {
         "worker_id": "cheap_w",
         "supported_skills": [{"name": "test_task"}],
@@ -62,24 +61,20 @@ async def test_overflow_strategy(setup_env):
 async def test_work_stealing_memory(setup_env):
     storage, config, dispatcher = setup_env
 
-    # 1. Register 2 workers with the same skill
     w1_info = {"worker_id": "w1", "supported_skills": [{"name": "steal_me"}], "status": "idle"}
     w2_info = {"worker_id": "w2", "supported_skills": [{"name": "steal_me"}], "status": "idle"}
     await storage.register_worker("w1", w1_info, 60)
     await storage.register_worker("w2", w2_info, 60)
 
-    # 2. Put a task in w1's queue
     payload = {"job_id": "j1", "type": "steal_me"}
     await storage.enqueue_task_for_worker("w1", payload, 1.0)
 
-    # 3. w2 tries to dequeue (its own queue is empty)
     # It should steal from w1
     stolen_task = await storage.dequeue_task_for_worker("w2", timeout=1)
 
     assert stolen_task is not None
     assert stolen_task["job_id"] == "j1"
 
-    # 4. Check that w1's queue is now empty
     w1_task = await storage.dequeue_task_for_worker("w1", timeout=1)
     assert w1_task is None
 

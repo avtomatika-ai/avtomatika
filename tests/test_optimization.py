@@ -5,6 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,7 +39,6 @@ async def test_signature_caching(engine):
     async def end_handler():
         pass
 
-    # Mock inspect.signature
     # We use a side_effect to call the real signature but track calls
     real_signature = __import__("inspect").signature
     mock_signature = MagicMock(side_effect=real_signature)
@@ -51,15 +51,12 @@ async def test_signature_caching(engine):
         assert mock_signature.call_count >= 2
         initial_call_count = mock_signature.call_count
 
-        # Setup engine properly for execution
         app = engine.app
         await engine.on_startup(app)
 
-        # Create and execute a job
         job_id = await engine.create_background_job("test_bp", {})
 
         # Wait a bit for the job to be picked up by the executor
-        import asyncio
 
         # We need to give enough time for the executor to pick up the job and run the handler
         # Since we use MemoryStorage and local loop, it should be fast.

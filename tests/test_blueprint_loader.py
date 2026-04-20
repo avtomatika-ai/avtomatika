@@ -35,12 +35,10 @@ async def test_dynamic_blueprint_loading():
     # Create a temporary directory for blueprints
     tmp_dir = tempfile.mkdtemp()
     try:
-        # Create a blueprint file
         bp_file_path = os.path.join(tmp_dir, "test_bp.py")
         with open(bp_file_path, "w") as f:
             f.write(BLUEPRINT_CONTENT)
 
-        # Setup engine config
         config = Config()
         config.BLUEPRINTS_DIR = tmp_dir
 
@@ -50,7 +48,6 @@ async def test_dynamic_blueprint_loading():
         # This should trigger the loader
         engine.setup()
 
-        # Verify the blueprint is registered
         assert "dynamic_test_blueprint" in engine.blueprints
         bp = engine.blueprints["dynamic_test_blueprint"]
         assert bp.name == "dynamic_test_blueprint"
@@ -58,7 +55,6 @@ async def test_dynamic_blueprint_loading():
         assert "end" in bp.end_states
 
     finally:
-        # Cleanup
         shutil.rmtree(tmp_dir)
 
 

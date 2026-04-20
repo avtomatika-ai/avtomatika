@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b21"
+version = "1.0b22"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,9 +27,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "rxon==1.0b7",
+    "rxon==1.0b10",
     "aiohttp~=3.13.2",
-    "python-json-logger~=4.0",
+    "python-json-logger~=4.1",
     "graphviz~=0.21",
     "zstandard~=0.24",
     "aioprometheus~=23.12",
@@ -39,7 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis~=7.2"]
-s3 = ["obstore~=0.9", "aiofiles~=25.1"]
+s3 = ["obstore~=0.9.3", "aiofiles~=25.1"]
 history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
 telemetry = [
     "opentelemetry-api~=1.40",
@@ -50,14 +50,15 @@ telemetry = [
 test = [
     "pytest~=9.0",
     "pytest-asyncio~=1.1",
-    "fakeredis~=2.34",
+    "fakeredis~=2.35",
     "pytest-aiohttp~=1.1",
     "pytest-mock~=3.14",
     "aioresponses~=0.7",
     "backports.zstd~=1.2",
     "opentelemetry-instrumentation-aiohttp-client",
-    "obstore~=0.9",
+    "obstore~=0.9.3",
     "aiofiles~=25.1",
+    "docker",
 ]
 all = [
     "avtomatika[redis]",
@@ -95,7 +96,7 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "A", "SIM", "C4", "PLC2401", "UP", "TID"]
+select = ["E", "W", "F", "I", "B", "A", "SIM", "C4", "PLC", "UP", "TID"]
 ignore = ["TID252"]
 
 [tool.ruff.lint.pyupgrade]

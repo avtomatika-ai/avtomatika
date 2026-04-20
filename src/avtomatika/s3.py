@@ -14,7 +14,7 @@ from shutil import rmtree
 from typing import Any, cast
 
 from orjson import dumps, loads
-from rxon.blob import calculate_config_hash, parse_uri
+from rxon.blob import BlobProvider, calculate_config_hash, parse_uri
 from rxon.exceptions import IntegrityError
 
 from .config import Config
@@ -32,32 +32,31 @@ try:
 except ImportError:
     # Define stubs for type hinting and avoid NameErrors
     HAS_S3_LIBS = False
-    S3Store = Any
-    delete_async = get_async = put_async = sign = obstore_list = aiopen = None  # type: ignore[assignment]
+    S3Store = cast(Any, object)
+    delete_async = get_async = put_async = sign = obstore_list = aiopen = cast(Any, None)
 
 
 class TaskFiles:
     """
     Manages files for a specific job, ensuring full compatibility with avtomatika-worker.
     Supports recursive directory download/upload and non-blocking I/O.
+    Uses BlobProvider for actual storage access.
     """
 
     def __init__(
         self,
-        store: "S3Store",
+        provider: BlobProvider,
         bucket: str,
         job_id: str,
         base_local_dir: str | Path,
-        semaphore: Semaphore,
         history: HistoryStorageBase | None = None,
     ):
-        self._store = store
+        self._provider = provider
         self._bucket = bucket
         self._job_id = job_id
         self._history = history
         self._s3_prefix = f"jobs/{job_id}/"
         self.local_dir = Path(base_local_dir) / job_id
-        self._semaphore = semaphore
 
     def _ensure_local_dir(self) -> None:
         if not self.local_dir.exists():
@@ -66,7 +65,7 @@ class TaskFiles:
     def path(self, filename: str) -> Path:
         """Returns local path for a filename, ensuring the directory exists."""
         self._ensure_local_dir()
-        clean_name = filename.split("/")[-1] if "://" in filename else filename.lstrip("/")
+        clean_name = filename.rsplit("/", maxsplit=1)[-1] if "://" in filename else filename.lstrip("/")
         return self.local_dir / clean_name
 
     def generate_presigned_url(
@@ -77,39 +76,7 @@ class TaskFiles:
     ) -> str:
         """Generates a temporary S3 access link for a file within this job's prefix."""
         target_key = f"{self._s3_prefix}{filename.lstrip('/')}"
-        return cast(str, sign(self._store, method, target_key, timedelta(seconds=expires_in)))
-
-    async def _download_single_file(
-        self,
-        key: str,
-        local_path: Path,
-        expected_size: int | None = None,
-        expected_hash: str | None = None,
-    ) -> dict[str, Any]:
-        """Downloads a single file safely using semaphore and streaming.
-        Returns metadata (size, etag).
-        """
-        if not local_path.parent.exists():
-            await to_thread(local_path.parent.mkdir, parents=True, exist_ok=True)
-
-        async with self._semaphore:
-            response = await get_async(self._store, key)
-            meta = response.meta
-            file_size = meta.size
-            etag = meta.e_tag.strip('"') if meta.e_tag else None
-
-            if expected_size is not None and file_size != expected_size:
-                raise IntegrityError(f"File size mismatch for {key}: expected {expected_size}, got {file_size}")
-
-            if expected_hash is not None and etag and expected_hash != etag:
-                raise IntegrityError(f"Integrity mismatch for {key}: expected ETag {expected_hash}, got {etag}")
-
-            stream = response.stream()
-            async with aiopen(local_path, "wb") as f:
-                async for chunk in stream:
-                    await f.write(chunk)
-
-            return {"size": file_size, "etag": etag}
+        return str(self._provider.generate_presigned_url(target_key, method, expires_in))
 
     async def download(
         self,
@@ -119,7 +86,6 @@ class TaskFiles:
     ) -> Path:
         """
         Downloads a file or directory (recursively).
-        If URI ends with '/', it treats it as a directory.
         """
         bucket, key, is_dir = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
         verify_meta = verify_meta or {}
@@ -132,7 +98,7 @@ class TaskFiles:
 
         if is_dir:
             logger.info(f"Recursive download: s3://{bucket}/{key} -> {target_path}")
-            entries = await to_thread(lambda: list(obstore_list(self._store, prefix=key)))
+            entries = await self._provider.list_objects(key)
 
             tasks = []
             for entry in entries:
@@ -142,62 +108,31 @@ class TaskFiles:
                     continue
 
                 local_file_path = target_path / rel_path
-                tasks.append(self._download_single_file(s3_key, local_file_path))
+                tasks.append(self._provider.download(f"s3://{bucket}/{s3_key}", str(local_file_path)))
 
             if tasks:
                 results = await gather(*tasks)
-                total_size = sum(r["size"] for r in results)
+                # For simplicity in this refactor, we don't log exact sizes for dirs here
                 await self._log_event(
                     "download_dir",
                     f"s3://{bucket}/{key}",
                     str(target_path),
-                    metadata={"total_size": total_size, "file_count": len(results)},
-                )
-            else:
-                await self._log_event(
-                    "download_dir",
-                    f"s3://{bucket}/{key}",
-                    str(target_path),
-                    metadata={"total_size": 0, "file_count": 0},
+                    metadata={"file_count": len(results)},
                 )
             return target_path
         else:
             logger.debug(f"Downloading s3://{bucket}/{key} -> {target_path}")
-            meta = await self._download_single_file(
-                key,
-                target_path,
-                expected_size=verify_meta.get("size"),
-                expected_hash=verify_meta.get("hash"),
-            )
+            success = await self._provider.download(f"s3://{bucket}/{key}", str(target_path))
+            if not success:
+                raise IntegrityError(f"Failed to download {name_or_uri}")
+
+            meta = await self._provider.get_metadata(f"s3://{bucket}/{key}")
             await self._log_event("download", f"s3://{bucket}/{key}", str(target_path), metadata=meta)
             return target_path
-
-    async def _upload_single_file(self, local_path: Path, s3_key: str) -> dict[str, Any]:
-        """Uploads a single file safely using semaphore. Returns S3 metadata."""
-        async with self._semaphore:
-            file_size = local_path.stat().st_size
-            async with aiopen(local_path, "rb") as f:
-                content = await f.read()
-            result = await put_async(self._store, s3_key, content)
-            etag = result.e_tag.strip('"') if result.e_tag else None
-            return {"size": file_size, "etag": etag}
-
-    async def upload_stream(self, filename: str, stream: Any) -> str:
-        """Streams data directly to S3 from an async iterator (e.g. aiohttp request content)."""
-        target_key = f"{self._s3_prefix}{filename.lstrip('/')}"
-        async with self._semaphore:
-            # obstore.put_async supports AsyncIterable[bytes]
-            result = await put_async(self._store, target_key, stream)
-            etag = result.e_tag.strip('"') if result.e_tag else None
-
-            uri = f"s3://{self._bucket}/{target_key}"
-            await self._log_event("upload_stream", uri, "N/A (streaming)", metadata={"etag": etag})
-            return uri
 
     async def upload(self, local_name: str, remote_name: str | None = None) -> str:
         """
         Uploads a file or directory recursively.
-        If local_name points to a directory, it uploads all contents.
         """
         local_path = self.path(local_name)
 
@@ -221,29 +156,32 @@ class TaskFiles:
 
             files_map = await to_thread(collect_files)
 
-            tasks = [self._upload_single_file(lp, k) for lp, k in files_map]
+            tasks = [self._provider.upload(str(lp), f"s3://{self._bucket}/{k}") for lp, k in files_map]
             if tasks:
-                results = await gather(*tasks)
-                total_size = sum(r["size"] for r in results)
-                metadata = {"total_size": total_size, "file_count": len(results)}
+                await gather(*tasks)
+                metadata = {"file_count": len(tasks)}
             else:
-                metadata = {"total_size": 0, "file_count": 0}
+                metadata = {"file_count": 0}
 
             uri = f"s3://{self._bucket}/{target_prefix}"
             await self._log_event("upload_dir", uri, str(local_path), metadata=metadata)
-            return uri
+            return str(uri)
 
         elif local_path.exists():
             target_key = f"{self._s3_prefix}{(remote_name or local_name).lstrip('/')}"
             logger.debug(f"Uploading {local_path} -> s3://{self._bucket}/{target_key}")
 
-            meta = await self._upload_single_file(local_path, target_key)
+            uri = await self._provider.upload(str(local_path), f"s3://{self._bucket}/{target_key}")
+            meta = await self._provider.get_metadata(uri)
 
-            uri = f"s3://{self._bucket}/{target_key}"
             await self._log_event("upload", uri, str(local_path), metadata=meta)
-            return uri
+            return str(uri)
         else:
             raise FileNotFoundError(f"Local file/dir not found: {local_path}")
+
+    async def upload_stream(self, filename: str, stream: Any) -> str:
+        """Streams data directly to S3."""
+        return str(await self._provider.upload_stream(filename, stream, self._s3_prefix))
 
     async def read_text(self, name_or_uri: str) -> str:
         bucket, key, _ = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
@@ -254,7 +192,7 @@ class TaskFiles:
             await self.download(name_or_uri)
 
         async with aiopen(local_path, "r", encoding="utf-8") as f:
-            return await f.read()
+            return str(await f.read())
 
     async def read_json(self, name_or_uri: str) -> Any:
         bucket, key, _ = parse_uri(name_or_uri, self._bucket, self._s3_prefix)
@@ -269,7 +207,6 @@ class TaskFiles:
             return loads(content)
 
     async def write_json(self, filename: str, data: Any, upload: bool = True) -> str:
-        """Writes JSON locally (binary mode) and optionally uploads to S3."""
         local_path = self.path(filename)
         json_bytes = dumps(data)
 
@@ -277,7 +214,7 @@ class TaskFiles:
             await f.write(json_bytes)
 
         if upload:
-            return await self.upload(filename)
+            return str(await self.upload(filename))
         return f"file://{local_path}"
 
     async def write_text(self, filename: str, text: str, upload: bool = True) -> Path:
@@ -294,10 +231,10 @@ class TaskFiles:
         """Full cleanup of S3 prefix and local job directory."""
         logger.info(f"Cleanup for job {self._job_id}...")
         try:
-            entries = await to_thread(lambda: list(obstore_list(self._store, prefix=self._s3_prefix)))
+            entries = await self._provider.list_objects(self._s3_prefix)
             paths_to_delete = [entry["path"] for entry in entries]
             if paths_to_delete:
-                await delete_async(self._store, paths_to_delete)
+                await self._provider.delete_objects(paths_to_delete)
         except Exception as e:
             logger.error(f"S3 cleanup error: {e}")
 
@@ -335,9 +272,9 @@ class TaskFiles:
             logger.warning(f"Failed to log S3 event: {e}")
 
 
-class S3Service:
+class S3Service(BlobProvider):
     """
-    Central service for S3 operations.
+    Central service for S3 operations, implementing RXON BlobProvider.
     Initializes the Store and provides TaskFiles instances.
     """
 
@@ -384,6 +321,107 @@ class S3Service:
             logger.error(f"Failed to initialize S3 Store: {e}")
             self._enabled = False
 
+    async def upload(self, local_path: str, uri: str) -> str:
+        """Standard BlobProvider upload."""
+        if not self._enabled or not self._store or not self._semaphore:
+            raise RuntimeError("S3 support is not enabled or initialized.")
+
+        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+        path = Path(local_path)
+
+        async with self._semaphore:
+            async with aiopen(path, "rb") as f:
+                content = await f.read()
+            await put_async(self._store, key, content)
+            return f"s3://{bucket}/{key}"
+
+    async def download(self, uri: str, local_path: str) -> bool:
+        """Standard BlobProvider download."""
+        if not self._enabled or not self._store or not self._semaphore:
+            return False
+
+        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+        path = Path(local_path)
+
+        if not path.parent.exists():
+            await to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+
+        async with self._semaphore:
+            response = await get_async(self._store, key)
+            stream = response.stream()
+            async with aiopen(path, "wb") as f:
+                async for chunk in stream:
+                    await f.write(chunk)
+            return True
+
+    async def get_metadata(self, uri: str) -> dict[str, Any] | None:
+        """Standard BlobProvider metadata."""
+        if not self._enabled or not self._store or not self._semaphore:
+            return None
+
+        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+        try:
+            async with self._semaphore:
+                response = await get_async(self._store, key)
+                meta = response.meta
+                return {
+                    "size": meta.size,
+                    "etag": meta.e_tag.strip('"') if meta.e_tag else None,
+                    "content_type": getattr(meta, "content_type", None),
+                }
+        except Exception:
+            return None
+
+    async def delete(self, uri: str) -> bool:
+        """Deletes a single object from storage."""
+        if not self._enabled or not self._store:
+            return False
+        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+        try:
+            await delete_async(self._store, [key])
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete S3 object {uri}: {e}")
+            return False
+
+    async def delete_dir(self, uri: str) -> bool:
+        """Deletes all objects under a specific URI prefix."""
+        if not self._enabled or not self._store:
+            return False
+        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+        try:
+            # obstore doesn't have a direct delete_dir, we must list and then delete
+            entries = await self.list_objects(key)
+            paths_to_delete = [entry["path"] for entry in entries]
+            if paths_to_delete:
+                await delete_async(self._store, paths_to_delete)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete S3 directory {uri}: {e}")
+            return False
+
+    async def list_objects(self, prefix: str) -> list[dict[str, Any]]:
+        """Helper for recursive operations."""
+        if not self._enabled or not self._store:
+            return []
+        return await to_thread(lambda: list(obstore_list(self._store, prefix=prefix)))
+
+    async def delete_objects(self, keys: list[str]) -> None:
+        """Helper for cleanup."""
+        if not self._enabled or not self._store:
+            return
+        await delete_async(self._store, keys)
+
+    async def upload_stream(self, filename: str, stream: Any, prefix: str) -> str:
+        """Helper for streaming upload."""
+        if not self._enabled or not self._store or not self._semaphore:
+            raise RuntimeError("S3 support is not enabled.")
+
+        target_key = f"{prefix}{filename.lstrip('/')}"
+        async with self._semaphore:
+            await put_async(self._store, target_key, stream)
+            return f"s3://{self.config.S3_DEFAULT_BUCKET}/{target_key}"
+
     def get_config_hash(self) -> str | None:
         """Returns a hash of the current S3 configuration for consistency checks."""
         if not self._enabled:
@@ -402,11 +440,10 @@ class S3Service:
             return None
 
         return TaskFiles(
-            self._store,
+            self,
             self.config.S3_DEFAULT_BUCKET,
             job_id,
             self.config.TASK_FILES_DIR,
-            self._semaphore,
             self._history,
         )
 

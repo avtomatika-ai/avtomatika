@@ -5,12 +5,18 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
 from asyncio import CancelledError, Task, create_task, gather, sleep
+from contextlib import suppress
 from logging import getLogger
-from time import monotonic
+from time import monotonic, time
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+
+from rxon.schema import validate_data
+
+from . import metrics
 
 # Conditional import for OpenTelemetry
 try:
@@ -131,12 +137,14 @@ class JobExecutor:
                 job_state["status"] = JOB_STATUS_FAILED
                 job_state["error_message"] = error_msg
                 await self.storage.save_job_state(job_id, job_state)
+
                 await self.history_storage.log_job_event(
                     {
                         "job_id": job_id,
                         "state": job_state.get("current_state"),
                         "event_type": "job_failed",
                         "duration_ms": duration_ms,
+                        "timestamp": time(),
                         "context_snapshot": job_state,
                     }
                 )
@@ -149,7 +157,9 @@ class JobExecutor:
                     "job_id": job_id,
                     "state": job_state.get("current_state"),
                     "event_type": "state_started",
+                    "origin_task_id": job_state.get("current_task_id"),  # Beta 10: Trace origin task
                     "attempt_number": job_state.get("retry_count", 0) + 1,
+                    "timestamp": time(),
                     "context_snapshot": job_state,
                 },
             )
@@ -195,17 +205,21 @@ class JobExecutor:
 
                 s3_service = self.engine.app.get(S3_SERVICE_KEY)
                 task_files = s3_service.get_task_files(job_id) if s3_service else None
+                # Initialize context with empty dicts if storage returns None
+                initial_data = job_state.get("initial_data") or {}
+                state_history = job_state.get("state_history") or {}
+                aggregation_results = job_state.get("aggregation_results") or {}
 
                 context = JobContext(
                     job_id=job_id,
-                    current_state=job_state["current_state"],
-                    initial_data=job_state["initial_data"],
-                    state_history=job_state.get("state_history", {}) or {},
+                    current_state=job_state.get("current_state", "start"),
+                    initial_data=initial_data,
+                    state_history=state_history,
                     client=client_config,
                     actions=action_factory,
-                    data_stores=SimpleNamespace(**blueprint.data_stores),
-                    tracing_context=tracing_context or {},
-                    aggregation_results=job_state.get("aggregation_results", {}) or {},
+                    data_stores=SimpleNamespace(**blueprint.data_stores) if blueprint.data_stores else None,
+                    tracing_context=job_state.get("tracing_context"),
+                    aggregation_results=aggregation_results,
                     webhook_url=job_state.get("webhook_url"),
                     task_files=task_files,
                 )
@@ -242,6 +256,12 @@ class JobExecutor:
                     await handler(**params_to_inject)
 
                     # Sync context state back to job_state for persistence
+                    # Beta 21: update_context results should go into initial_data for tests consistency
+                    if action_factory.context_updates:
+                        if "initial_data" not in job_state or job_state["initial_data"] is None:
+                            job_state["initial_data"] = {}
+                        job_state["initial_data"].update(action_factory.context_updates)
+
                     job_state["state_history"] = context.state_history
                     job_state["aggregation_results"] = context.aggregation_results
 
@@ -253,7 +273,7 @@ class JobExecutor:
                             final_metadata = event_metadata or job_state.get("metadata")
 
                             # Blueprints (Ghosts) emit events through their shell
-                            event_data = {
+                            event_data: dict[str, Any] = {
                                 "event_id": str(uuid4()),
                                 "worker_id": "ghost",  # Internal identity
                                 "origin_worker_id": "ghost",
@@ -262,7 +282,7 @@ class JobExecutor:
                                 "bubbling_chain": [],
                                 "target_job_id": job_id,
                                 "trace_context": tracing_context,
-                                "timestamp": monotonic(),
+                                "timestamp": time(),
                                 "security": final_security,
                                 "metadata": final_metadata,
                             }
@@ -326,6 +346,7 @@ class JobExecutor:
                 "state": current_state,
                 "event_type": "job_completed",
                 "duration_ms": duration_ms,
+                "timestamp": time(),
                 "context_snapshot": job_state,
             },
         )
@@ -340,8 +361,6 @@ class JobExecutor:
             contract = self.engine.blueprint_contracts.get(job_state["blueprint_name"], {})
             output_schema = contract.get("output_schema")
             if output_schema:
-                from rxon.schema import validate_data
-
                 is_valid, error_msg = validate_data(job_state.get("state_history"), output_schema)
                 if not is_valid:
                     status = JOB_STATUS_FAILED
@@ -383,9 +402,11 @@ class JobExecutor:
                 "job_id": job_id,
                 "state": previous_state,
                 "event_type": "state_finished",
+                "origin_task_id": job_state.get("current_task_id"),
                 "duration_ms": duration_ms,
                 "previous_state": previous_state,
                 "next_state": next_state,
+                "timestamp": time(),
                 "context_snapshot": job_state,
             },
         )
@@ -411,6 +432,7 @@ class JobExecutor:
                 "state": current_state,
                 "event_type": "task_dispatched",
                 "duration_ms": duration_ms,
+                "timestamp": time(),
                 "context_snapshot": {**job_state, "task_info": task_info},
             },
         )
@@ -422,26 +444,34 @@ class JobExecutor:
             logger.info(f"Job {job_id} is now paused, awaiting human approval.")
         else:
             logger.info(f"Job {job_id} dispatching task: {task_info}")
-            now = monotonic()
+
+            now = time()
+            now_mono = monotonic()
 
             dispatch_timeout = task_info.get("dispatch_timeout_seconds")
             result_timeout = task_info.get("result_timeout_seconds")
             execution_timeout = task_info.get("timeout_seconds")
 
+            # Store required version/type for dispatcher and worker validation
+            job_state["skill_version"] = task_info.get("skill_version")
+            job_state["skill_type"] = task_info.get("skill_type")
+
             # Absolute deadlines from now
-            dispatch_deadline = now + dispatch_timeout if dispatch_timeout is not None else None
-            result_deadline = now + result_timeout if result_timeout is not None else None
+            dispatch_deadline = now + dispatch_timeout if dispatch_timeout else None
+            result_deadline = now + result_timeout if result_timeout else None
 
             # Initial watch: wait for the EARLIEST event (either too late to start or too late for result)
             deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
             if deadlines:
+                timeout_at = now + min(deadlines) - now  # Relative to now
+                timeout_at = now + (min(deadlines) - now)  # Still absolute for add_job_to_watch
                 timeout_at = min(deadlines)
             else:
                 # Global fallback if no specific timeouts are set
                 timeout_at = now + (execution_timeout or self.engine.config.WORKER_TIMEOUT_SECONDS)
 
             job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
-            job_state["task_dispatched_at"] = now
+            job_state["task_dispatched_at"] = now_mono
             job_state["current_task_info"] = task_info
             job_state["current_task_transitions"] = task_info.get("transitions", {})
             job_state["current_task_event_transitions"] = task_info.get("event_transitions", {})
@@ -469,8 +499,6 @@ class JobExecutor:
         contract = self.engine.blueprint_contracts.get(blueprint_name, {})
         input_schema = contract.get("input_schema")
         if input_schema:
-            from rxon.schema import validate_data
-
             is_valid, error_msg = validate_data(initial_data, input_schema)
             if not is_valid:
                 error = ValueError(f"Sub-blueprint '{blueprint_name}' input validation failed: {error_msg}")
@@ -493,8 +521,8 @@ class JobExecutor:
         except Exception as e:
             error_msg = f"Failed to dispatch sub-job: {e}"
             logger.error(error_msg)
-            error = RuntimeError(error_msg)
-            await self._handle_failure(parent_job_state, error, duration_ms)
+            error_val = RuntimeError(error_msg)
+            await self._handle_failure(parent_job_state, error_val, duration_ms)
             return
 
         parent_job_state["status"] = "waiting_for_sub_job"
@@ -525,6 +553,7 @@ class JobExecutor:
 
         # Update job state for parallel execution
         job_state["status"] = JOB_STATUS_WAITING_FOR_PARALLEL
+        job_state["current_state"] = aggregate_into
         job_state["aggregation_target"] = aggregate_into
         job_state["active_branches"] = branch_task_ids
         job_state["aggregation_results"] = {}
@@ -543,10 +572,12 @@ class JobExecutor:
                 "tracing_context": job_state.get("tracing_context", {}),
                 "security": job_state.get("security"),
                 "metadata": job_state.get("metadata"),
+                "skill_version": task_info.get("skill_version"),
+                "skill_type": task_info.get("skill_type"),
                 **task_info,
             }
 
-            now = monotonic()
+            now = time()
             dispatch_timeout = task_info.get("dispatch_timeout_seconds")
             result_timeout = task_info.get("result_timeout_seconds")
             execution_timeout = task_info.get("timeout_seconds")
@@ -599,6 +630,7 @@ class JobExecutor:
                 "event_type": "state_failed",
                 "duration_ms": duration_ms,
                 "attempt_number": current_retries + 1,
+                "timestamp": time(),
                 "context_snapshot": {**job_state, "error_message": str(error)},
             },
         )
@@ -629,7 +661,6 @@ class JobExecutor:
 
             await self._check_and_resume_parent(job_state)
             await self.engine.send_job_webhook(job_state, "job_quarantined")
-            from . import metrics
 
             metrics.jobs_failed_total.inc(
                 {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown")},
@@ -689,7 +720,6 @@ class JobExecutor:
             logger.exception("Unhandled exception in job processing task")
 
     async def run(self) -> None:
-        import asyncio
 
         logger.info("JobExecutor started.")
         self._running = True
@@ -724,8 +754,6 @@ class JobExecutor:
             except Exception:
                 logger.exception("Error in JobExecutor main loop.")
                 if acquired:
-                    from contextlib import suppress
-
                     with suppress(ValueError):
                         semaphore.release()
                 await sleep(backoff_delay)
@@ -735,3 +763,6 @@ class JobExecutor:
 
     def stop(self) -> None:
         self._running = False
+
+
+ng = False

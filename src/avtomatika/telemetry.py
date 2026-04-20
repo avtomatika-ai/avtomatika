@@ -14,14 +14,26 @@ logger = getLogger(__name__)
 try:
     from opentelemetry import trace
     from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import (
         BatchSpanProcessor,
         ConsoleSpanExporter,
     )
 
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter,
+        )
+    except ImportError:
+        OTLPSpanExporter = None
+
     TELEMETRY_ENABLED = True
 except ImportError:
     TELEMETRY_ENABLED = False
+    TracerProvider = object
+    BatchSpanProcessor = None
+    ConsoleSpanExporter = None
+    OTLPSpanExporter = None
 
     class DummySpan:
         def __enter__(self) -> "DummySpan":
@@ -53,8 +65,6 @@ def setup_telemetry(service_name: str = "avtomatika") -> Any:
 
     # Avoid re-initializing if provider is already set
     # This prevents "Overriding of current TracerProvider is not allowed" warnings
-    from opentelemetry.sdk.trace import TracerProvider
-
     if isinstance(trace.get_tracer_provider(), TracerProvider):
         return trace.get_tracer(__name__)
 
@@ -63,13 +73,9 @@ def setup_telemetry(service_name: str = "avtomatika") -> Any:
 
     if otlp_endpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT"):
         logger.info(f"OTLP exporter enabled, sending traces to {otlp_endpoint}")
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-                OTLPSpanExporter,
-            )
-
+        if OTLPSpanExporter:
             processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True))
-        except ImportError:
+        else:
             logger.error(
                 "OTLP exporter is configured but 'opentelemetry-exporter-otlp' is not installed. "
                 "Please install it with: pip install opentelemetry-exporter-otlp"

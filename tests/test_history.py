@@ -50,7 +50,6 @@ async def test_sqlite_log_and_get_job_event(sqlite_storage: SQLiteHistoryStorage
     # Retrieve history
     history = await sqlite_storage.get_job_history(job_id)
 
-    # Assertions
     assert len(history) == 1
     event = history[0]
     assert event["job_id"] == job_id
@@ -217,7 +216,6 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
     """Tests the integration between JobExecutor and HistoryStorage, mocking
     other dependencies.
     """
-    # 1. Setup dependencies
     job_storage = RedisStorage(redis_client)
 
     mock_engine = MagicMock()
@@ -228,12 +226,10 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
     mock_dispatcher = AsyncMock()
     mock_engine.dispatcher = mock_dispatcher
 
-    # 2. Instantiate the real JobExecutor with real history and fake storage
     executor = JobExecutor(mock_engine, sqlite_storage)
     executor.storage = job_storage  # Manually set the storage
     executor.dispatcher = mock_dispatcher
 
-    # 3. Create and enqueue a job
     job_id = str(uuid.uuid4())
     job_state = {
         "id": job_id,
@@ -246,7 +242,6 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
     await job_storage.save_job_state(job_id, job_state)
     await job_storage.enqueue_job(job_id)
 
-    # 4. Manually drive the executor loop until the job is done
     # We'll process a few steps to cover the whole flow.
     for _ in range(3):  # start -> step_one -> dispatch -> (we stop here)
         result = await job_storage.dequeue_job()
@@ -261,14 +256,9 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
 
     await asyncio.sleep(0.1)  # Wait for async logs
 
-    # 5. Assert the history
     history = await sqlite_storage.get_job_history(job_id)
 
     # There should be 4 events:
-    # 1. 'start' state begins
-    # 2. 'start' state finishes (transitions to step_one)
-    # 3. 'step_one' state begins
-    # 4. 'step_one' state dispatches a task (which is its terminal action)
     assert len(history) == 4
 
     event_types = [e["event_type"] for e in history]

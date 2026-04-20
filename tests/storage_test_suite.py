@@ -51,7 +51,6 @@ class StorageTestSuite:
         assert fetched_state["data"]["foo"] == "bar"
         assert fetched_state["binary_data"] == b"some_bytes"
 
-        # Update state
         update_data = {"status": "running", "retry_count": 1}
         updated_state = await storage.update_job_state(job_id, update_data)
 
@@ -59,7 +58,6 @@ class StorageTestSuite:
         assert updated_state["retry_count"] == 1
         assert updated_state["data"]["foo"] == "bar"  # Ensure other fields are preserved
 
-        # Verify update persistence
         final_state = await storage.get_job_state(job_id)
         assert final_state["status"] == "running"
         assert final_state["retry_count"] == 1
@@ -70,7 +68,6 @@ class StorageTestSuite:
             "worker_id": worker_id,
             "status": "idle",
             "resources": {"cpu": 4},
-            # Test serialization of lists/dicts
             "tags": ["gpu", "fast"],
         }
         ttl = 60
@@ -99,13 +96,11 @@ class StorageTestSuite:
         job_id = "job-recovery-test"
         await storage.enqueue_job(job_id)
 
-        # 1. Consumer takes the job but "crashes" (does not ACK)
         result1 = await storage.dequeue_job()
         assert result1 is not None
         id1, msg_id1 = result1
         assert id1 == job_id
 
-        # 2. Consumer restarts (calls dequeue_job again)
         # It should receive the SAME message (from PEL) because it wasn't ACKed.
         # Wait a bit for min_idle_time if using Redis
         if storage.__class__.__name__ == "RedisStorage":
@@ -117,10 +112,8 @@ class StorageTestSuite:
         assert id2 == job_id
         assert msg_id2 == msg_id1
 
-        # 3. Now ACK it
         await storage.ack_job(msg_id2)
 
-        # 4. Should now get new messages
         job_id_2 = "job-2"
         await storage.enqueue_job(job_id_2)
 

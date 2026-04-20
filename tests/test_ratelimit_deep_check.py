@@ -26,19 +26,16 @@ async def test_ratelimit_identifier_logic(aiohttp_client):
 
     app = web.Application(middlewares=[middleware])
 
-    # 1. Route with worker_id (simulating Worker API)
     async def worker_handler(request):
         return web.Response(text="worker_ok")
 
     app.router.add_get("/workers/{worker_id}/action", worker_handler)
 
-    # 2. Route without worker_id (simulating Client API)
     async def client_handler(request):
         return web.Response(text="client_ok")
 
     app.router.add_get("/api/action", client_handler)
 
-    # 3. Route with override
     app.router.add_get("/api/special", client_handler)
 
     client = await aiohttp_client(app)

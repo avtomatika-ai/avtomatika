@@ -8,12 +8,14 @@
 from collections.abc import Callable
 from importlib import resources
 from logging import getLogger
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
 from aiohttp import web
 from aioprometheus import REGISTRY, render
 from orjson import OPT_INDENT_2, dumps, loads
+from rxon.schema import validate_data
 
 from .. import metrics
 from ..app_keys import (
@@ -63,8 +65,6 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
         contract = engine.blueprint_contracts.get(blueprint.name, {})
         input_schema = contract.get("input_schema")
         if input_schema:
-            from rxon.schema import validate_data
-
             is_valid, error_msg = validate_data(initial_data, input_schema)
             if not is_valid:
                 return json_response(
@@ -103,8 +103,6 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
         )
 
         # Immediately start watching for dispatch timeout
-        from time import monotonic
-
         if dispatch_timeout:
             await engine.storage.add_job_to_watch(job_id, monotonic() + dispatch_timeout)
 
@@ -185,8 +183,6 @@ _WORKER_CATALOG_CACHE: dict[str, Any] = {"data": None, "expires_at": 0.0}
 
 async def get_worker_catalog_handler(request: web.Request) -> web.Response:
     """Aggregates all unique skills and their contracts from online workers."""
-    from time import monotonic
-
     now = monotonic()
     if _WORKER_CATALOG_CACHE["data"] is not None and now < _WORKER_CATALOG_CACHE["expires_at"]:
         return json_response(_WORKER_CATALOG_CACHE["data"])

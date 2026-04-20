@@ -48,7 +48,6 @@ async def test_dispatcher_cheapest_strategy(dispatcher, mock_storage):
             "capabilities": {"cost_per_skill": {"task": 0.3}},
         },
     ]
-    # Update for O(1) dispatcher
     mock_storage.find_workers_for_skill.return_value = [w["worker_id"] for w in workers]
     mock_storage.get_workers.return_value = workers
 
@@ -140,16 +139,17 @@ async def test_dispatcher_ram_filtering(dispatcher, mock_storage):
         {
             "worker_id": "low_ram",
             "supported_skills": [{"name": "task"}],
-            "resources": {"ram_gb": 8.0},
+            "resources": {"properties": {"ram_gb": 8.0}},
             "status": "idle",
         },
         {
             "worker_id": "high_ram",
             "supported_skills": [{"name": "task"}],
-            "resources": {"ram_gb": 64.0},
+            "resources": {"properties": {"ram_gb": 64.0}},
             "status": "idle",
         },
     ]
+
     mock_storage.find_workers_by_hot_skill.return_value = []
     mock_storage.find_workers_for_skill.return_value = ["low_ram", "high_ram"]
     mock_storage.get_workers.return_value = workers
@@ -157,9 +157,8 @@ async def test_dispatcher_ram_filtering(dispatcher, mock_storage):
     job_state = {"id": "job-1"}
     task_info = {
         "type": "task",
-        "resource_requirements": {"resources": {"ram_gb": 32.0}},
+        "resource_requirements": {"resources": {"properties": {"ram_gb": 32.0}}},
     }
-
     await dispatcher.dispatch(job_state, task_info)
 
     args = mock_storage.enqueue_task_for_worker.call_args[0]

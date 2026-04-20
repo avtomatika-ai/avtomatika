@@ -19,6 +19,7 @@ logic is needed in the future (e.g., for logging expired workers).
 from asyncio import CancelledError, sleep
 from logging import getLogger
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
@@ -32,7 +33,6 @@ class HealthChecker:
         self.storage = engine.storage
         self.interval_seconds = interval_seconds
         self._running = False
-        from uuid import uuid4
 
         self._instance_id = str(uuid4())
 

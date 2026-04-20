@@ -60,7 +60,5 @@ async def test_handle_rxon_auth_failure(engine):
     payload = {"worker_id": "w1"}
     context = {"token": "wrong-token"}
 
-    from aiohttp import web
-
-    with pytest.raises(web.HTTPUnauthorized):
+    with pytest.raises(PermissionError):
         await engine.handle_rxon_message("register", payload, context)

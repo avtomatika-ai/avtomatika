@@ -5,6 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
 from abc import ABC
 from contextlib import suppress
 from datetime import datetime
@@ -27,10 +28,11 @@ CREATE TABLE IF NOT EXISTS job_history (
     timestamp TIMESTAMPTZ DEFAULT NOW(),
     state TEXT,
     event_type TEXT NOT NULL,
-    duration_ms INTEGER,
+    duration_ms BIGINT,
     previous_state TEXT,
     next_state TEXT,
     worker_id TEXT,
+    origin_task_id TEXT,
     attempt_number INTEGER,
     context_snapshot JSONB
 );
@@ -68,22 +70,37 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             logger.error(f"Failed to set timezone '{self.tz_name}' for PG connection: {e}")
 
     async def initialize(self) -> None:
-        """Initializes the connection pool to PostgreSQL and creates tables."""
-        try:
-            # We use init parameter to configure each new connection in the pool
-            self._pool = await create_pool(dsn=self._dsn, init=self._setup_connection)
-            if not self._pool:
-                raise RuntimeError("Failed to create a connection pool.")
+        """Initializes the connection pool to PostgreSQL and creates tables with retries."""
+        max_retries = 10
+        retry_delay = 1.0
+        last_error = None
 
-            async with self._pool.acquire() as conn:
-                await conn.execute(CREATE_JOB_HISTORY_TABLE_PG)
-                await conn.execute(CREATE_WORKER_HISTORY_TABLE_PG)
-                await conn.execute(CREATE_JOB_ID_INDEX_PG)
-                await conn.execute(CREATE_WORKER_ID_INDEX_PG)
-            logger.info(f"PostgreSQL history storage initialized (TZ={self.tz_name}).")
-        except (PostgresError, OSError) as e:
-            logger.error(f"Failed to initialize PostgreSQL history storage: {e}")
-            raise
+        for attempt in range(1, max_retries + 1):
+            try:
+                # We use init parameter to configure each new connection in the pool
+                self._pool = await create_pool(dsn=self._dsn, init=self._setup_connection)
+                if not self._pool:
+                    raise RuntimeError("Failed to create a connection pool.")
+
+                async with self._pool.acquire() as conn:
+                    await conn.execute(CREATE_JOB_HISTORY_TABLE_PG)
+                    await conn.execute(CREATE_WORKER_HISTORY_TABLE_PG)
+                    await conn.execute(CREATE_JOB_ID_INDEX_PG)
+                    await conn.execute(CREATE_WORKER_ID_INDEX_PG)
+                logger.info(f"PostgreSQL history storage initialized (TZ={self.tz_name}) after {attempt} attempts.")
+                return
+            except (PostgresError, OSError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.warning(
+                        f"PostgreSQL history storage initialization attempt {attempt}/{max_retries} failed: {e}. "
+                        f"Retrying in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 10.0)
+                else:
+                    logger.error(f"Failed to initialize PostgreSQL history storage after {max_retries} attempts: {e}")
+                    raise last_error from e
 
     async def close(self) -> None:
         """Closes the connection pool and background worker."""
@@ -100,14 +117,22 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         query = """
             INSERT INTO job_history (
                 event_id, job_id, timestamp, state, event_type, duration_ms,
-                previous_state, next_state, worker_id, attempt_number,
+                previous_state, next_state, worker_id, origin_task_id, attempt_number,
                 context_snapshot
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         """
         now = datetime.now(self.tz)
 
         context_snapshot = event_data.get("context_snapshot")
         context_snapshot_json = dumps(context_snapshot).decode("utf-8") if context_snapshot else None
+
+        duration_ms = event_data.get("duration_ms")
+        if duration_ms is not None:
+            # Ensure it is a valid integer and not negative (avoids int32 overflow/underflow issues)
+            try:
+                duration_ms = max(0, int(duration_ms))
+            except (ValueError, TypeError):
+                duration_ms = None
 
         params = (
             uuid4(),
@@ -115,10 +140,11 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             now,
             event_data.get("state"),
             event_data.get("event_type"),
-            event_data.get("duration_ms"),
+            duration_ms,
             event_data.get("previous_state"),
             event_data.get("next_state"),
             event_data.get("worker_id"),
+            event_data.get("origin_task_id"),
             event_data.get("attempt_number"),
             context_snapshot_json,
         )

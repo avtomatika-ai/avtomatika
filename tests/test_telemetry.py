@@ -8,13 +8,18 @@
 from unittest.mock import patch
 
 import pytest
+
+try:
+    from opentelemetry.sdk.trace import TracerProvider
+except ImportError:
+    TracerProvider = object  # type: ignore
+
 from src.avtomatika.telemetry import TELEMETRY_ENABLED, setup_telemetry
 
 
 @pytest.mark.skipif(not TELEMETRY_ENABLED, reason="opentelemetry-sdk not installed")
 def test_setup_telemetry_enabled():
     """Tests that telemetry is set up correctly when the SDK is installed."""
-    from opentelemetry.sdk.trace import TracerProvider
 
     class MockProvider(TracerProvider):
         pass

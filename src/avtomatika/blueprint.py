@@ -5,11 +5,17 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import ast
+import inspect
+import textwrap
 from collections.abc import Callable
 from logging import getLogger
 from operator import eq, ge, gt, le, lt, ne
 from re import compile as re_compile
 from typing import Any, NamedTuple, cast
+
+from graphviz import Digraph
+from rxon.schema import extract_json_schema
 
 from .datastore import AsyncDictStore
 
@@ -242,8 +248,6 @@ class Blueprint:
 
     def event(self, name: str, schema: Any) -> Callable:
         """Decorator or method to register an event schema for the blueprint."""
-        from rxon.schema import extract_json_schema
-
         self.events_schema[name] = extract_json_schema(schema) or {}
 
         def decorator(func: Callable) -> Callable:
@@ -267,7 +271,6 @@ class Blueprint:
             | {ch.state for ch in self.conditional_handlers}
         )
 
-        # 1. Check for dangling transitions
         for source_state, targets in transitions.items():
             for target_state in targets:
                 if target_state not in defined_states:
@@ -276,7 +279,6 @@ class Blueprint:
                         f"state '{source_state}' leads to non-existent state '{target_state}'."
                     )
 
-        # 2. Check for unreachable states
         if self.start_state:
             reachable = {self.start_state}
             stack = [self.start_state]
@@ -296,10 +298,6 @@ class Blueprint:
 
     def _get_all_transitions(self) -> dict[str, set[str]]:
         """Parses handler source code to find all possible transitions."""
-        import ast
-        import inspect
-        import textwrap
-
         transitions: dict[str, set[str]] = {}
 
         all_handlers = (
@@ -346,8 +344,6 @@ class Blueprint:
 
     def _analyze_handlers(self) -> None:
         """Analyzes and caches parameters for all registered handlers."""
-        import inspect
-
         all_funcs = (
             list(self.handlers.values())
             + list(self.aggregator_handlers.values())
@@ -375,8 +371,6 @@ class Blueprint:
         )
 
     def render_graph(self, output_filename: str | None = None, output_format: str = "png") -> str | None:
-        from graphviz import Digraph
-
         dot = Digraph(comment=f"State Machine for {self.name}")
         dot.attr("node", shape="box", style="rounded")
 

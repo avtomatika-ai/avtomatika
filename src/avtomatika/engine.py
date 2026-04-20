@@ -5,14 +5,31 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from asyncio import create_task, gather, get_running_loop, wait_for
+from asyncio import CancelledError, create_task, gather, get_running_loop, sleep, wait_for
 from collections.abc import Awaitable, Callable
+from importlib import import_module
 from logging import getLogger
-from time import monotonic
+from os.path import exists
+from time import time
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
-from aiohttp import ClientSession, web
+import orjson
+from aiohttp import ClientSession, WSMsgType, web
+
+try:
+    from opentelemetry.instrumentation.aiohttp_client import (
+        AioHttpClientInstrumentor,
+    )
+except ImportError:
+    AioHttpClientInstrumentor = None
+
+from rxon import HttpListener
+from rxon.constants import PROTOCOL_VERSION
+from rxon.schema import extract_skill_contract
+from rxon.security import create_server_ssl_context
+from rxon.utils import to_dict
 
 from . import metrics
 from .api.routes import setup_routes
@@ -35,6 +52,7 @@ from .app_keys import (
     WS_MANAGER_KEY,
 )
 from .blueprint import Blueprint
+from .blueprint_loader import load_blueprints_from_dir
 from .client_config_loader import load_client_configs_to_redis
 from .compression import compression_middleware
 from .config import Config
@@ -47,18 +65,20 @@ from .constants import (
     JOB_STATUS_WAITING_FOR_WORKER,
 )
 from .dispatcher import Dispatcher
-from .executor import JobExecutor
+from .executor import TERMINAL_STATES, JobExecutor
 from .health_checker import HealthChecker
 from .history.base import HistoryStorageBase
 from .history.noop import NoOpHistoryStorage
-from .logging_config import setup_logging
+from .logging_config import setup_logging, stop_logging
 from .ratelimit import rate_limit_middleware_factory
 from .reputation import ReputationCalculator
 from .s3 import S3Service
 from .scheduler import Scheduler
+from .security import verify_worker_auth
 from .services.worker_service import WorkerService
 from .storage.base import StorageBackend
 from .telemetry import setup_telemetry
+from .utils.schema import orchestrator_extract_json_schema
 from .utils.webhook_sender import WebhookPayload, WebhookSender
 from .watcher import Watcher
 from .worker_config_loader import load_worker_configs_to_redis
@@ -107,8 +127,6 @@ class OrchestratorEngine:
         self.runner: web.AppRunner
         self.site: web.TCPSite
 
-        from rxon import HttpListener
-
         self.rxon_listener = HttpListener(self.app)
 
     def register_blueprint(self, blueprint: Blueprint) -> None:
@@ -122,17 +140,11 @@ class OrchestratorEngine:
         self.blueprints[blueprint.name] = blueprint
 
         # REST API acts as a Web Shell for the logic
-        from rxon.schema import extract_skill_contract
-
-        from .utils.schema import orchestrator_extract_json_schema
-
         contract = extract_skill_contract(blueprint, extractor=orchestrator_extract_json_schema)
         self.blueprint_contracts[blueprint.name] = contract
 
         # Save to shared storage for cluster-wide matching if loop is running
         try:
-            from asyncio import create_task, get_running_loop
-
             get_running_loop()
             create_task(self.storage.save_blueprint_contract(blueprint.name, contract))
         except RuntimeError:
@@ -144,8 +156,6 @@ class OrchestratorEngine:
             return
 
         if self.config.BLUEPRINTS_DIR:
-            from .blueprint_loader import load_blueprints_from_dir
-
             load_blueprints_from_dir(self, self.config.BLUEPRINTS_DIR)
 
         setup_routes(self.app, self)
@@ -154,8 +164,6 @@ class OrchestratorEngine:
         self._setup_done = True
 
     async def _setup_history_storage(self) -> None:
-        from importlib import import_module
-
         uri = self.config.HISTORY_DATABASE_URI
         storage_class = None
         storage_args = []
@@ -167,8 +175,6 @@ class OrchestratorEngine:
 
         elif uri.startswith("sqlite:"):
             try:
-                from urllib.parse import urlparse
-
                 module = import_module(".history.sqlite", package="avtomatika")
                 storage_class = module.SQLiteHistoryStorage
                 parsed_uri = urlparse(uri)
@@ -183,7 +189,7 @@ class OrchestratorEngine:
             try:
                 module = import_module(".history.postgres", package="avtomatika")
                 storage_class = module.PostgresHistoryStorage
-                storage_args = [uri, self.config.TZ]
+                storage_args = [str(uri), str(self.config.TZ)]
             except ImportError as e:
                 logger.error(f"Could not import PostgresHistoryStorage, perhaps asyncpg is not installed? Error: {e}")
                 self.history_storage = NoOpHistoryStorage()
@@ -194,6 +200,7 @@ class OrchestratorEngine:
             return
 
         if storage_class:
+            # Explicitly unpacking args to avoid any ambiguity
             self.history_storage = storage_class(*storage_args)
             try:
                 await self.history_storage.initialize()
@@ -206,8 +213,6 @@ class OrchestratorEngine:
 
     async def handle_rxon_message(self, message_type: str, payload: Any, context: dict) -> Any:
         """Core handler for RXON protocol messages via any listener."""
-        from .security import verify_worker_auth
-
         token = context.get("token")
         cert_identity = context.get("cert_identity")
 
@@ -221,20 +226,13 @@ class OrchestratorEngine:
             elif hasattr(payload, "worker_id"):
                 worker_id_hint = payload.worker_id
 
-        try:
-            auth_worker_id = await verify_worker_auth(self.storage, self.config, token, cert_identity, worker_id_hint)
-        except PermissionError as e:
-            raise web.HTTPUnauthorized(text=str(e)) from e
-        except ValueError as e:
-            raise web.HTTPBadRequest(text=str(e)) from e
+        auth_worker_id = await verify_worker_auth(self.storage, self.config, token, cert_identity, worker_id_hint)
 
         if self.worker_service is None:
             raise web.HTTPInternalServerError(text="WorkerService is not initialized.")
 
         if message_type == "register":
             # Protocol Version Check
-            from rxon.constants import PROTOCOL_VERSION
-
             worker_version = context.get("protocol_version")
             warning = None
             if worker_version and worker_version != PROTOCOL_VERSION:
@@ -261,17 +259,17 @@ class OrchestratorEngine:
                 raise web.HTTPForbidden(text="Unauthorized: mTLS certificate required to issue access token.")
             return await self.worker_service.issue_access_token(auth_worker_id)
 
+        elif message_type == "websocket_auth":
+            # Just verify that verify_worker_auth succeeded (which it already did above)
+            return True
+
         elif message_type == "websocket":
             ws = payload
             await self.ws_manager.register(auth_worker_id, ws)
             try:
-                from aiohttp import WSMsgType
-
                 async for msg in ws:
                     if msg.type == WSMsgType.TEXT:
                         try:
-                            import orjson
-
                             data = orjson.loads(msg.data)
                             await self.worker_service.process_worker_event(auth_worker_id, data)
                         except Exception as e:
@@ -290,16 +288,11 @@ class OrchestratorEngine:
         await self.storage.initialize()
         await self._setup_history_storage()
 
-        try:
-            from opentelemetry.instrumentation.aiohttp_client import (
-                AioHttpClientInstrumentor,
-            )
-
-            AioHttpClientInstrumentor().instrument()
-        except ImportError:
-            logger.debug(
-                "opentelemetry-instrumentation-aiohttp-client not found. AIOHTTP client instrumentation is disabled."
-            )
+        if AioHttpClientInstrumentor:
+            try:
+                AioHttpClientInstrumentor().instrument()
+            except Exception:
+                logger.debug("Failed to instrument AIOHTTP client.")
 
         await self.history_storage.start()
 
@@ -308,8 +301,6 @@ class OrchestratorEngine:
             await self.storage.save_blueprint_contract(bp_name, contract)
 
         if self.config.CLIENTS_CONFIG_PATH:
-            from os.path import exists
-
             if exists(self.config.CLIENTS_CONFIG_PATH):
                 await load_client_configs_to_redis(self.storage, self.config.CLIENTS_CONFIG_PATH)
             else:
@@ -323,8 +314,6 @@ class OrchestratorEngine:
             )
 
         if self.config.WORKERS_CONFIG_PATH:
-            from os.path import exists
-
             if exists(self.config.WORKERS_CONFIG_PATH):
                 await load_worker_configs_to_redis(self.storage, self.config.WORKERS_CONFIG_PATH)
             else:
@@ -365,14 +354,12 @@ class OrchestratorEngine:
 
     async def _monitor_loop_lag(self) -> None:
         """Monitors event loop lag and updates the Prometheus metric."""
-        import time
-        from asyncio import CancelledError, sleep
 
         try:
             while True:
-                start = time.time()
+                start = time()
                 await sleep(1.0)
-                lag = time.time() - start - 1.0
+                lag = time() - start - 1.0
                 metrics.loop_lag_seconds.set({}, max(0.0, lag))
         except CancelledError:
             pass
@@ -407,25 +394,39 @@ class OrchestratorEngine:
             await app[S3_SERVICE_KEY].close()
 
         logger.info("Cancelling background tasks...")
-        app[HEALTH_CHECKER_TASK_KEY].cancel()
-        app[WATCHER_TASK_KEY].cancel()
-        app[REPUTATION_CALCULATOR_TASK_KEY].cancel()
+        if getattr(self, "_loop_lag_task", None):
+            self._loop_lag_task.cancel()
+
+        for key in [
+            HEALTH_CHECKER_TASK_KEY,
+            WATCHER_TASK_KEY,
+            REPUTATION_CALCULATOR_TASK_KEY,
+            EXECUTOR_TASK_KEY,
+            SCHEDULER_TASK_KEY,
+        ]:
+            if task := app.get(key):
+                task.cancel()
 
         logger.info("Background tasks signaled to stop.")
 
         logger.info("Gathering background tasks with a 10s timeout...")
+        tasks_to_wait = [
+            app[key]
+            for key in [
+                HEALTH_CHECKER_TASK_KEY,
+                WATCHER_TASK_KEY,
+                REPUTATION_CALCULATOR_TASK_KEY,
+                EXECUTOR_TASK_KEY,
+                SCHEDULER_TASK_KEY,
+            ]
+            if key in app
+        ]
         try:
-            await wait_for(
-                gather(
-                    app[HEALTH_CHECKER_TASK_KEY],
-                    app[WATCHER_TASK_KEY],
-                    app[REPUTATION_CALCULATOR_TASK_KEY],
-                    app[EXECUTOR_TASK_KEY],
-                    app[SCHEDULER_TASK_KEY],
-                    return_exceptions=True,
-                ),
-                timeout=10.0,
-            )
+            if tasks_to_wait:
+                await wait_for(
+                    gather(*tasks_to_wait, return_exceptions=True),
+                    timeout=10.0,
+                )
             logger.info("Background tasks gathered successfully.")
         except TimeoutError:
             logger.error("Timed out waiting for background tasks to shut down.")
@@ -434,7 +435,6 @@ class OrchestratorEngine:
         await app[HTTP_SESSION_KEY].close()
         logger.info("HTTP session closed.")
         logger.info("Shutdown sequence finished.")
-        from .logging_config import stop_logging
 
         stop_logging()
 
@@ -465,7 +465,7 @@ class OrchestratorEngine:
             "params": {"source": source},
         }
 
-        from rxon.utils import to_dict
+        now = time()
 
         job_state = {
             "id": job_id,
@@ -482,11 +482,11 @@ class OrchestratorEngine:
             "security": to_dict(security) if security else None,
             "metadata": metadata or {},
             "parent_job_id": parent_job_id,
+            "timestamp": now,
         }
         await self.storage.save_job_state(job_id, job_state)
 
         if dispatch_timeout:
-            now = monotonic()
             await self.storage.add_job_to_watch(job_id, now + dispatch_timeout)
 
         await self.storage.enqueue_job(job_id)
@@ -524,7 +524,7 @@ class OrchestratorEngine:
                 await self.send_job_webhook(job_state, "job_failed")
                 return
 
-            now = get_running_loop().time()
+            now_mono = get_running_loop().time()
 
             # Recalculate timeout for retry, respecting existing deadlines
             dispatch_deadline = job_state.get("dispatch_deadline")
@@ -532,10 +532,10 @@ class OrchestratorEngine:
             execution_timeout = task_info.get("timeout_seconds") or self.config.WORKER_TIMEOUT_SECONDS
 
             deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
-            timeout_at = min(deadlines) if deadlines else now + execution_timeout
+            timeout_at = min(deadlines) if deadlines else now_mono + execution_timeout
 
             job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
-            job_state["task_dispatched_at"] = now
+            job_state["task_dispatched_at"] = now_mono
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.add_job_to_watch(job_id, timeout_at)
 
@@ -562,6 +562,7 @@ class OrchestratorEngine:
             error=job_state.get("error_message"),
             security=job_state.get("security"),
             metadata=job_state.get("metadata"),
+            timestamp=job_state.get("timestamp"),
         )
 
         # Run in background to not block the main flow
@@ -571,12 +572,11 @@ class OrchestratorEngine:
         """Handles job/task timeout by either retrying or failing the job."""
         job_id = job_state["id"]
         status = job_state.get("status")
-        from .executor import TERMINAL_STATES
 
         if status in TERMINAL_STATES:
             return
 
-        now = monotonic()
+        now = time()
         picked_up = job_state.get("task_picked_up_at")
         dispatch_deadline = job_state.get("dispatch_deadline")
         result_deadline = job_state.get("result_deadline")
@@ -584,7 +584,6 @@ class OrchestratorEngine:
         blueprint_name = job_state.get("blueprint_name", "unknown")
         timeout_type = "dispatch" if picked_up is None else "execution"
 
-        # 1. Determine error message and reason
         error_message = "Worker task timed out."
         if picked_up is None:
             if dispatch_deadline and now >= dispatch_deadline:
@@ -596,12 +595,8 @@ class OrchestratorEngine:
 
         logger.warning(f"Job {job_id} ({blueprint_name}) timed out ({timeout_type}): {error_message}")
 
-        # 2. Update metrics
-        from . import metrics
-
         metrics.jobs_timeouts_total.inc({metrics.LABEL_BLUEPRINT: blueprint_name, "type": timeout_type})
 
-        # 3. Log to history (if it was assigned to a worker)
         worker_id = job_state.get("task_worker_id")
         if worker_id:
             await self.history_storage.log_job_event(
@@ -618,17 +613,13 @@ class OrchestratorEngine:
                 }
             )
 
-        # 4. Handle auto-cleanup
         if self.config.S3_AUTO_CLEANUP:
-            from .app_keys import S3_SERVICE_KEY
-
             s3_service = self.app.get(S3_SERVICE_KEY)
             if s3_service:
                 task_files = s3_service.get_task_files(job_id)
                 if task_files:
                     create_task(task_files.cleanup())
 
-        # 5. Decide: Retry or Fail
         # If it timed out during execution, we give it a chance to be retried on another worker
         if picked_up is not None:
             task_id = str(job_state.get("current_task_id") or job_id)
@@ -647,8 +638,6 @@ class OrchestratorEngine:
         job_state = await self.storage.get_job_state(job_id)
         if not job_state:
             return False
-
-        from .executor import TERMINAL_STATES
 
         if job_state.get("status") in TERMINAL_STATES:
             return False
@@ -675,8 +664,6 @@ class OrchestratorEngine:
         self.setup()
         ssl_context = None
         if self.config.TLS_ENABLED:
-            from rxon.security import create_server_ssl_context
-
             ssl_context = create_server_ssl_context(
                 cert_path=self.config.TLS_CERT_PATH,
                 key_path=self.config.TLS_KEY_PATH,
@@ -698,8 +685,6 @@ class OrchestratorEngine:
 
         ssl_context = None
         if self.config.TLS_ENABLED:
-            from rxon.security import create_server_ssl_context
-
             ssl_context = create_server_ssl_context(
                 cert_path=self.config.TLS_CERT_PATH,
                 key_path=self.config.TLS_KEY_PATH,

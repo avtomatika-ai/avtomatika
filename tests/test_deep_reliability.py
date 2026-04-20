@@ -12,10 +12,14 @@ import pytest
 from avtomatika.blueprint import Blueprint
 from avtomatika.constants import (
     AUTH_HEADER_WORKER,
+    IGNORED_REASON_MISMATCH,
+    IGNORED_REASON_STALE,
     JOB_STATUS_FAILED,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
+from avtomatika.engine import OrchestratorEngine
+from avtomatika.executor import JobExecutor
 from tests.conftest import STORAGE_KEY
 
 
@@ -32,7 +36,6 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
     worker_a = "worker-a"
     worker_b = "worker-b"
 
-    # 1. Setup job state assigned to worker_a
     job_state = {
         "id": job_id,
         "blueprint_name": "test_bp",
@@ -44,7 +47,6 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
     }
     await storage.save_job_state(job_id, job_state)
 
-    # 2. Worker B tries to submit result
     result_payload = {
         "job_id": job_id,
         "task_id": task_id,
@@ -59,11 +61,8 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
     # Authenticated worker_id will be "unknown_authenticated_by_global_token" in this test setup
     # unless we use individual tokens. Let's use individual tokens to be precise.
 
-    # Setup individual tokens (store hashes)
-    from hashlib import sha256
-
-    await storage.set_worker_token(worker_a, sha256(b"token-a").hexdigest())
-    await storage.set_worker_token(worker_b, sha256(b"token-b").hexdigest())
+    await storage.set_worker_token(worker_a, "token-a")
+    await storage.set_worker_token(worker_b, "token-b")
 
     # Real attempt by worker_b
     headers_b = {AUTH_HEADER_WORKER: "token-b"}
@@ -72,7 +71,6 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
     assert resp.status == 200  # API returns 200, but the result is IGNORED internally
     data = await resp.json()
     assert data["status"] == "ignored"
-    from avtomatika.constants import IGNORED_REASON_MISMATCH
 
     assert data["reason"] == IGNORED_REASON_MISMATCH
 
@@ -87,10 +85,6 @@ async def test_infinite_loop_prevention(config, redis_storage):
     """
     Reliability: Verify that a blueprint with an infinite loop is terminated.
     """
-    from avtomatika.engine import OrchestratorEngine
-    from avtomatika.executor import JobExecutor
-
-    # Create a looping blueprint
     loop_bp = Blueprint(name="loop_bp")
 
     @loop_bp.handler("start", is_start=True)
@@ -154,7 +148,6 @@ async def test_stale_result_ignored(aiohttp_client, app):
     worker_id = "worker-1"
     headers = {AUTH_HEADER_WORKER: "secure-worker-token"}
 
-    # 1. Setup job at task-2
     await storage.save_job_state(
         job_id,
         {
@@ -167,7 +160,6 @@ async def test_stale_result_ignored(aiohttp_client, app):
         },
     )
 
-    # 2. Submit result for old task-1
     result_payload = {
         "job_id": job_id,
         "task_id": "task-1",  # Stale ID
@@ -180,7 +172,6 @@ async def test_stale_result_ignored(aiohttp_client, app):
     assert resp.status == 200
     data = await resp.json()
     assert data["status"] == "ignored"
-    from avtomatika.constants import IGNORED_REASON_STALE
 
     assert data["reason"] == IGNORED_REASON_STALE
 
@@ -197,9 +188,6 @@ async def test_race_condition_protection(config, redis_storage):
     but we also want to ensure that if a job IS somehow processed twice,
     one of them bails out early if the status is already terminal.
     """
-    from avtomatika.engine import OrchestratorEngine
-    from avtomatika.executor import JobExecutor
-
     engine = OrchestratorEngine(redis_storage, config)
     engine.setup()
     await engine.on_startup(engine.app)

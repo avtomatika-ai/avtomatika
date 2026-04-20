@@ -13,6 +13,10 @@ import pytest
 from fakeredis.aioredis import FakeRedis
 
 from avtomatika.constants import AUTH_HEADER_WORKER
+from avtomatika.dispatcher import Dispatcher
+from avtomatika.engine import OrchestratorEngine
+from avtomatika.executor import JobExecutor
+from avtomatika.storage.memory import MemoryStorage
 from avtomatika.storage.redis import RedisStorage
 from avtomatika.ws_manager import WebSocketManager
 from tests.conftest import STORAGE_KEY
@@ -24,9 +28,7 @@ def make_valid_worker_payload(worker_id: str, **kwargs) -> dict[str, Any]:
         "worker_type": "test-worker",
         "supported_skills": [{"name": "test"}],
         "resources": {
-            "max_concurrent_tasks": 10,
-            "cpu_cores": 4,
-            "ram_gb": 8.0,
+            "properties": {"cpu_cores": 4, "ram_gb": 8.0},
         },
         "installed_software": {"python": "3.11"},
         "installed_artifacts": [],
@@ -73,7 +75,6 @@ async def test_worker_malformed_registration_null_skills(aiohttp_client, app):
     # It should succeed by substituting [] instead of 500.
     assert resp.status == 200
 
-    # Verify in storage
     storage = app[STORAGE_KEY]
     worker_info = await storage.get_worker_info("malicious-worker-1")
     assert worker_info["supported_skills"] == []
@@ -111,10 +112,6 @@ async def test_executor_resilience_to_storage_exceptions(config, redis_storage):
     Chaos: Simulate storage exceptions during job dequeuing.
     Executor should perform exponential backoff and continue.
     """
-    from avtomatika.dispatcher import Dispatcher
-    from avtomatika.engine import OrchestratorEngine
-    from avtomatika.executor import JobExecutor
-
     engine = OrchestratorEngine(redis_storage, config)
     engine.dispatcher = Dispatcher(redis_storage, config)
 
@@ -136,7 +133,6 @@ async def test_executor_resilience_to_storage_exceptions(config, redis_storage):
     # Wait long enough for the first retry attempt (initial backoff is 1.0s)
     await asyncio.sleep(1.5)
 
-    # Verify it tried multiple times
     assert redis_storage.dequeue_job.call_count >= 2
 
     executor.stop()
@@ -151,16 +147,12 @@ async def test_ws_manager_parallel_closing_resilience():
     """
     Reliability: WSManager.close_all should handle failing websocket closures gracefully.
     """
-    from avtomatika.storage.memory import MemoryStorage
-
     storage = MemoryStorage()
     manager = WebSocketManager(storage)
 
-    # Mock failing websocket
     mock_ws_fail = AsyncMock()
     mock_ws_fail.close.side_effect = Exception("Websocket already dead")
 
-    # Mock working websocket
     mock_ws_ok = AsyncMock()
 
     await manager.register("worker_fail", mock_ws_fail)
@@ -179,8 +171,6 @@ async def test_dispatcher_null_safety_complex_payloads(redis_storage, config):
     """
     Reliability: Dispatcher should handle missing or null resource_requirements and params.
     """
-    from avtomatika.dispatcher import Dispatcher
-
     dispatcher = Dispatcher(redis_storage, config)
 
     job_state = {"id": "j1"}

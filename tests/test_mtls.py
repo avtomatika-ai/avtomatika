@@ -11,6 +11,7 @@ import subprocess
 import aiohttp
 import pytest
 from aiohttp import web
+from rxon.security import create_server_ssl_context
 
 from avtomatika.config import Config
 from avtomatika.engine import OrchestratorEngine
@@ -37,7 +38,6 @@ def pki(tmp_path_factory):
     client_csr = pki_dir / "client.csr"
     client_crt = pki_dir / "client.crt"
 
-    # Create OpenSSL config file
     openssl_conf = pki_dir / "openssl.cnf"
     with open(openssl_conf, "w") as f:
         f.write("""
@@ -59,14 +59,12 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 """)
 
-    # 1. Generate CA
     run_cmd(f"openssl genrsa -out {ca_key} 2048")
     run_cmd(
         f"openssl req -x509 -new -nodes -key {ca_key} -sha256 -days 1 "
         f"-out {ca_crt} -subj '/CN=Test CA' -config {openssl_conf} -extensions v3_ca"
     )
 
-    # 2. Generate Server Cert
     run_cmd(f"openssl genrsa -out {server_key} 2048")
     run_cmd(f"openssl req -new -key {server_key} -out {server_csr} -subj '/CN=localhost' -config {openssl_conf}")
     run_cmd(
@@ -75,7 +73,6 @@ authorityKeyIdentifier = keyid:always,issuer
         f"-extfile {openssl_conf} -extensions v3_req"
     )
 
-    # 3. Generate Client Cert (CN is the Identity)
     run_cmd(f"openssl genrsa -out {client_key} 2048")
     run_cmd(f"openssl req -new -key {client_key} -out {client_csr} -subj '/CN=worker-mtls-test' -config {openssl_conf}")
     run_cmd(
@@ -121,9 +118,6 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     runner = web.AppRunner(engine.app)
     await runner.setup()
 
-    # Create SSL Context for server
-    from rxon.security import create_server_ssl_context
-
     server_ssl_ctx = create_server_ssl_context(
         cert_path=mtls_config.TLS_CERT_PATH,
         key_path=mtls_config.TLS_KEY_PATH,
@@ -141,7 +135,6 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     base_url = f"https://localhost:{port}"
 
     # --- Client Side Setup ---
-    # Create SSL Context for client
     client_ssl_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=pki["ca_crt"])
     client_ssl_ctx.load_cert_chain(certfile=pki["client_crt"], keyfile=pki["client_key"])
 
@@ -159,9 +152,6 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     # With mTLS, the middleware extracts ID from cert.
     # Let's see if middleware logic handles this.
     # worker_auth_middleware checks:
-    # 1. extract_cert_identity -> "worker-mtls-test"
-    # 2. sets request["worker_id"] = "worker-mtls-test"
-    # 3. passes control to handler.
 
     # The handler `register_worker_handler` looks at `request.get("worker_registration_data")`
     # which comes from body middleware check.
@@ -175,13 +165,12 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     target_worker_id = "worker-mtls-test"
 
     async with aiohttp.ClientSession() as session:
-        # 1. Register (POST)
         # Note: We do NOT send X-Worker-Token header.
         reg_data = {
             "worker_id": target_worker_id,
             "worker_type": "tls-worker",
             "supported_skills": [{"name": "t1"}],
-            "resources": {"max_concurrent_tasks": 1, "cpu_cores": 1, "ram_gb": 1.0},
+            "resources": {"properties": {"cpu_cores": 1, "ram_gb": 1.0}},
             "installed_software": {},
             "installed_artifacts": [],
             "capabilities": {"hostname": "h", "ip_address": "127.0.0.1", "cost_per_skill": {}},
@@ -191,12 +180,10 @@ async def test_mtls_worker_authentication(pki, mtls_config):
             data = await resp.json()
             assert data["status"] == "registered"
 
-        # 2. Verify worker is in storage
         info = await storage.get_worker_info(target_worker_id)
         assert info is not None
         assert info["worker_type"] == "tls-worker"
 
-        # 3. Heartbeat (PATCH)
         # We access URL with worker_id. Middleware should confirm cert CN == worker_id logic?
         # Actually, my middleware implementation simply sets request["worker_id"] = cert_id.
         # It DOES NOT check if URL param matches cert param yet. Ideally it should or handler relies

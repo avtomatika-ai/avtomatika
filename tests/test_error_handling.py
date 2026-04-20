@@ -14,6 +14,7 @@ import pytest_asyncio
 from avtomatika.config import Config
 from avtomatika.dispatcher import Dispatcher
 from avtomatika.engine import OrchestratorEngine
+from avtomatika.services.worker_service import WorkerService
 from avtomatika.storage.redis import RedisStorage
 from tests.test_blueprints import error_flow_bp
 
@@ -49,7 +50,6 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
         "transitions": {"success": "finished", "failure": "failed"},
     }
 
-    # 1. Manually create the job state as if it's waiting for a worker
     initial_job_state = {
         "id": job_id,
         "status": "waiting_for_worker",
@@ -59,9 +59,6 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
         "current_task_transitions": task_info.get("transitions", {}),
     }
     await storage.save_job_state(job_id, initial_job_state)
-
-    # 2. Simulate worker failure responses for each retry attempt + the final one
-    from avtomatika.services.worker_service import WorkerService
 
     worker_service = WorkerService(storage, engine.history_storage, config, engine)
     engine.worker_service = worker_service
@@ -91,7 +88,6 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
             # After the last attempt, it should not dispatch again
             mock_dispatch.assert_not_called()
 
-    # 3. Poll for final quarantine status
     final_state = await storage.get_job_state(job_id)
     assert final_state is not None, "Job was not quarantined as expected"
     assert final_state["status"] == "quarantined"
@@ -114,7 +110,6 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
     monkeypatch.setattr(engine.dispatcher, "dispatch", mock_dispatch)
 
     job_id = "job-permanent-123"
-    # 1. Manually create the job state
     initial_job_state = {
         "id": job_id,
         "status": "waiting_for_worker",
@@ -122,9 +117,6 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
         "current_task_transitions": {"success": "finished", "failure": "failed"},
     }
     await storage.save_job_state(job_id, initial_job_state)
-
-    # 2. Simulate a single permanent failure response
-    from avtomatika.services.worker_service import WorkerService
 
     worker_service = WorkerService(storage, engine.history_storage, config, engine)
     engine.worker_service = worker_service
@@ -139,7 +131,6 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
 
     await worker_service.process_task_result(payload_data, authenticated_worker_id="test-worker")
 
-    # 3. Check for immediate quarantine status
     final_state = await storage.get_job_state(job_id)
     assert final_state is not None, "Job was not quarantined immediately"
     assert final_state["status"] == "quarantined"
@@ -163,7 +154,6 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
     monkeypatch.setattr(engine.dispatcher, "dispatch", mock_dispatch)
 
     job_id = "job-invalid-123"
-    # 1. Manually create the job state
     initial_job_state = {
         "id": job_id,
         "status": "waiting_for_worker",
@@ -171,9 +161,6 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
         "current_task_transitions": {"success": "finished", "failure": "failed"},
     }
     await storage.save_job_state(job_id, initial_job_state)
-
-    # 2. Simulate a single invalid input failure response
-    from avtomatika.services.worker_service import WorkerService
 
     worker_service = WorkerService(storage, engine.history_storage, config, engine)
     engine.worker_service = worker_service
@@ -188,7 +175,6 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
 
     await worker_service.process_task_result(payload_data, authenticated_worker_id="test-worker")
 
-    # 3. Check for immediate failed status
     final_state = await storage.get_job_state(job_id)
     assert final_state is not None, "Job did not fail immediately"
     assert final_state["status"] == "failed"

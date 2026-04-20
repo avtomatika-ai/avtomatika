@@ -352,6 +352,13 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def decrement_worker_load(self, worker_id: str) -> None:
+        """Optimistically decrements the worker's load counter.
+        Called when a worker completes or fails a task.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Get complete information about a worker by its ID."""
         raise NotImplementedError

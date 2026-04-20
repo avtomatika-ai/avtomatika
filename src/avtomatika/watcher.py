@@ -5,6 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
 from asyncio import CancelledError, sleep
 from logging import getLogger
 from socket import gethostname
@@ -30,8 +31,6 @@ class Watcher:
 
     async def run(self):
         """The main loop of the watcher."""
-        import asyncio
-
         logger.info(f"Watcher started (Instance ID: {self._instance_id}).")
         self._running = True
         backoff_delay = self.watch_interval_seconds

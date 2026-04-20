@@ -16,25 +16,18 @@ async def test_memory_storage_locking():
     storage = MemoryStorage()
     key = "test_lock"
 
-    # 1. Acquire successfully
     assert await storage.acquire_lock(key, "holder_1", 10) is True
 
-    # 2. Fail to acquire with different holder
     assert await storage.acquire_lock(key, "holder_2", 10) is False
 
-    # 3. Fail to acquire with same holder (lock is non-reentrant in our simple impl)
     assert await storage.acquire_lock(key, "holder_1", 10) is False
 
-    # 4. Fail to release by wrong holder
     assert await storage.release_lock(key, "holder_2") is False
 
-    # 5. Successfully release by correct holder
     assert await storage.release_lock(key, "holder_1") is True
 
-    # 6. Acquire again by different holder
     assert await storage.acquire_lock(key, "holder_2", 10) is True
 
-    # 7. Test expiration logic
     await storage.release_lock(key, "holder_2")
 
     # Set short TTL

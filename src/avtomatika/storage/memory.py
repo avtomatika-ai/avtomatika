@@ -7,6 +7,7 @@
 
 from asyncio import CancelledError, Lock, PriorityQueue, Queue, QueueEmpty, wait_for
 from collections.abc import Callable
+from inspect import iscoroutinefunction
 from time import monotonic
 from typing import Any, cast
 
@@ -77,7 +78,6 @@ class MemoryStorage(StorageBackend):
     ) -> dict[str, Any]:
         async with self._lock:
             current_state = self._jobs.get(job_id, {})
-            from inspect import iscoroutinefunction
 
             if iscoroutinefunction(update_callback):
                 updated_state = await update_callback(current_state)
@@ -450,6 +450,14 @@ class MemoryStorage(StorageBackend):
                 worker = self._workers[worker_id]
                 # Internal counter for dispatcher, not related to RXON Heartbeat usage
                 worker["_internal_load"] = worker.get("_internal_load", 0) + 1
+
+    async def decrement_worker_load(self, worker_id: str) -> None:
+        async with self._lock:
+            if worker_id in self._workers:
+                worker = self._workers[worker_id]
+                current = worker.get("_internal_load", 0)
+                if current > 0:
+                    worker["_internal_load"] = current - 1
 
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         async with self._lock:

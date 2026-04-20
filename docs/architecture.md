@@ -65,17 +65,27 @@ Avtomatika is optimized for maximum throughput and low latency:
     *   **Standardized Holon Matching**: Uses the formalized `rxon` protocol logic for matching task requirements to holon resources. Supports **Smart Numeric Comparison (GE)** for any property (RAM, VRAM, custom metrics).
     *   **S3 Hash Consistency**: Strict verification of S3 configuration compatibility between Orchestrator and Worker during registration to prevent "split-brain" storage issues.
     *   **Deep Normalization (Beta 20 Fix)**: To ensure 100% data integrity between Python and Redis Lua, the storage layer implements recursive msgpack unpacking. This prevents 'hanging' issues caused by nested binary artifacts.
-    *   **O(1) Work Stealing**: Randomly samples a subset of workers to steal tasks from, avoiding full index scans.
+    *   **O(1) Work Stealing**: Randomly samples a subset of workers to steal tasks from, avoiding full index scans. **Beta 21:** The system now ensures atomic updates of `assigned_worker_id` during pickup to prevent result mismatch.
+    *   **ZSET Worker Indexing**: All worker indexes (skills, idle, all) use Redis Sorted Sets (ZSET) with expiration timestamps as scores. This allows the orchestrator to filter out stale or timed-out workers directly in Redis, ensuring 100% data consistency and atomic cleanup via `ZRANGEBYSCORE`.
     *   **Batching**: Schedulers use `MGET` to check multiple job intervals in a single round-trip.
 
 4.  **Backpressure & Resilience**:
     *   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Configurable semaphore (default 1000) limits active job handlers.
     *   **Heartbeat Jitter**: Prevents "Thundering Herd" effects after orchestrator restarts by staggering worker check-ins (fully supported by SDK).
 
+## Blob Storage Architecture
+
+As of v1.0b22, S3 integration is refactored into a pluggable **BlobProvider** system:
+- **Provider Interface**: Defines standard operations like `upload`, `download`, `get_metadata`, and `sign`.
+- **Obstore Implementation**: Uses the Rust-based `obstore` library for high-speed, multi-threaded S3 interactions.
+- **Task Isolation**: Each job has a dedicated S3 prefix and local temporary directory managed by the `TaskFiles` helper.
+- **Consistency**: Strict verification of S3 configuration compatibility between Orchestrator and Worker during registration to prevent "split-brain" storage issues.
+
 ## Security (Zero Trust Architecture)
 
-Avtomatika implements a multi-layered security model:
+Avtomatika implements a strict Zero Trust model for worker-orchestrator communication:
 *   **Identity Chain Verification**: Every signal (Registration, Task Result, Event) is cryptographically verified using HMAC-SHA256 signatures in the `SecurityContext`. We don't just trust the last sender; we verify the origin.
+*   **Replay Protection**: Mandatory `timestamp` in payloads with a sliding window check (60 seconds) to prevent message reuse.
 *   **mTLS (Mutual TLS)**: Mandatory mutual authentication between Orchestrator and Workers using certificates.
 *   **STS (Security Token Service)**: Automatic rotation of short-lived access tokens via the `/_worker/auth/token` endpoint.
 

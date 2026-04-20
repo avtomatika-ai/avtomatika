@@ -5,13 +5,16 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from avtomatika.app_keys import S3_SERVICE_KEY
+from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
+from avtomatika.engine import OrchestratorEngine
+from avtomatika.executor import JobExecutor
 from avtomatika.s3 import S3Service, TaskFiles
 
 
@@ -48,10 +51,9 @@ async def test_s3_service_disabled_without_config():
 
 @pytest.mark.asyncio
 async def test_task_files_local_isolation(config):
-    mock_store = MagicMock()
+    mock_provider = MagicMock()
     job_id = "job-123"
-    sem = asyncio.Semaphore(1)
-    tf = TaskFiles(mock_store, "bucket", job_id, config.TASK_FILES_DIR, sem)
+    tf = TaskFiles(mock_provider, "bucket", job_id, config.TASK_FILES_DIR)
 
     expected_path = Path(config.TASK_FILES_DIR) / job_id
     assert tf.local_dir == expected_path
@@ -63,95 +65,69 @@ async def test_task_files_local_isolation(config):
 
 @pytest.mark.asyncio
 async def test_task_files_sync_operations(config):
-    mock_store = MagicMock()
+    mock_provider = MagicMock()
+    mock_provider.download = AsyncMock(return_value=True)
+    mock_provider.upload = AsyncMock(return_value="s3://bucket/jobs/job-sync/local.dat")
+    mock_provider.get_metadata = AsyncMock(return_value={"size": 13, "etag": "abc"})
+
     job_id = "job-sync"
     mock_history = AsyncMock()
-    sem = asyncio.Semaphore(1)
-    tf = TaskFiles(mock_store, "bucket", job_id, config.TASK_FILES_DIR, sem, mock_history)
+    tf = TaskFiles(mock_provider, "bucket", job_id, config.TASK_FILES_DIR, mock_history)
 
     with (
-        patch("avtomatika.s3.get_async", AsyncMock()) as mock_get,
-        patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
         patch("avtomatika.s3.aiopen", MagicMock()) as mock_aio_open,
     ):
-        # Mock streaming download
-        mock_resp = MagicMock()
-
-        async def mock_stream_gen():
-            yield b"remote "
-            yield b"content"
-
-        mock_resp.stream.return_value = mock_stream_gen()
-        mock_get.return_value = mock_resp
-
         mock_file = AsyncMock()
         mock_file.read.return_value = b"local content"
         mock_aio_open.return_value.__aenter__.return_value = mock_file
 
-        # Test download
         await tf.download("remote.dat")
-        mock_get.assert_called_once()
-        # Verify write was called (chunks are concatenated or written sequentially)
-        assert mock_file.write.call_count >= 1
+        mock_provider.download.assert_called_once()
 
-        # Test upload
         with (
             patch("pathlib.Path.exists", return_value=True),
-            patch("pathlib.Path.stat") as mock_stat,
+            patch("pathlib.Path.is_dir", return_value=False),
         ):
-            mock_stat.return_value.st_size = 13
-            mock_stat.return_value.st_mode = 0o100644  # Regular file
             await tf.upload("local.dat")
-            mock_put.assert_called_once()
+            mock_provider.upload.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_full_cleanup(config, tmp_path):
-    mock_store = MagicMock()
+    mock_provider = MagicMock()
+    mock_provider.list_objects = AsyncMock(return_value=[{"path": "jobs/job-cleanup/s3.txt"}])
+    mock_provider.delete_objects = AsyncMock()
+
     job_id = "job-cleanup"
-    sem = asyncio.Semaphore(1)
-    tf = TaskFiles(mock_store, "bucket", job_id, config.TASK_FILES_DIR, sem)
+    tf = TaskFiles(mock_provider, "bucket", job_id, config.TASK_FILES_DIR)
 
     local_file = tf.path("to_delete.txt")
     with open(local_file, "w") as f:
         f.write("hello")
     assert tf.local_dir.exists()
 
-    with (
-        patch("avtomatika.s3.obstore_list", MagicMock(return_value=[{"path": f"jobs/{job_id}/s3.txt"}])),
-        patch("avtomatika.s3.delete_async", AsyncMock()) as mock_delete,
-    ):
-        await tf.cleanup()
+    await tf.cleanup()
 
-        # Now expects a LIST of paths
-        mock_delete.assert_called_with(mock_store, [f"jobs/{job_id}/s3.txt"])
-        assert not tf.local_dir.exists()
+    mock_provider.delete_objects.assert_called_with(["jobs/job-cleanup/s3.txt"])
+    assert not tf.local_dir.exists()
 
 
 @pytest.mark.asyncio
 async def test_task_files_helper_methods(config):
-    mock_store = MagicMock()
-    sem = asyncio.Semaphore(1)
-    tf = TaskFiles(mock_store, "test-bucket", "job1", config.TASK_FILES_DIR, sem)
+    mock_provider = MagicMock()
+    mock_provider.download = AsyncMock(return_value=True)
+    mock_provider.get_metadata = AsyncMock(return_value={"size": 10, "etag": "abc"})
+
+    tf = TaskFiles(mock_provider, "test-bucket", "job1", config.TASK_FILES_DIR)
 
     with (
-        patch("avtomatika.s3.get_async", AsyncMock()) as mock_get,
         patch("pathlib.Path.exists", return_value=False),
         patch("avtomatika.s3.aiopen") as mock_aio_open,
     ):
-        # Helper methods like read_text call download() internally
-        mock_resp = MagicMock()
-
-        async def mock_stream_gen():
-            yield b'{"key": "value"}'
-
-        mock_resp.stream.return_value = mock_stream_gen()
-        mock_get.return_value = mock_resp
-
         mock_file = AsyncMock()
         # Side effect for read_text/read_json after download
         mock_file.read.side_effect = ['{"key": "value"}', b'{"key": "value"}']
-        mock_file.write = AsyncMock()  # Mock write for the download part
+        mock_file.write = AsyncMock()
         mock_aio_open.return_value.__aenter__.return_value = mock_file
 
         text = await tf.read_text("data.json")
@@ -161,58 +137,41 @@ async def test_task_files_helper_methods(config):
         assert data == {"key": "value"}
 
     with (
-        patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
-        patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.stat") as mock_stat,
         patch("avtomatika.s3.aiopen") as mock_aio_open,
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.is_dir", return_value=False),
     ):
-        mock_stat.return_value.st_size = 5
-        mock_stat.return_value.st_mode = 0o100644  # Regular file
+        mock_provider.upload = AsyncMock(return_value="s3://test-bucket/jobs/job1/out.txt")
         mock_file = AsyncMock()
         mock_file.read.return_value = b"hello"
         mock_aio_open.return_value.__aenter__.return_value = mock_file
 
         await tf.write_text("out.txt", "hello")
-        mock_put.assert_called_with(mock_store, "jobs/job1/out.txt", b"hello")
+        mock_provider.upload.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_recursive_download(config):
-    mock_store = MagicMock()
+    mock_provider = MagicMock()
+    mock_provider.list_objects = AsyncMock(
+        return_value=[{"path": "jobs/rec-down/data/file1.txt"}, {"path": "jobs/rec-down/data/sub/file2.txt"}]
+    )
+    mock_provider.download = AsyncMock(return_value=True)
+
     job_id = "rec-down"
-    sem = asyncio.Semaphore(5)
-    tf = TaskFiles(mock_store, "bucket", job_id, config.TASK_FILES_DIR, sem)
+    tf = TaskFiles(mock_provider, "bucket", job_id, config.TASK_FILES_DIR)
 
-    with (
-        patch(
-            "avtomatika.s3.obstore_list",
-            return_value=[{"path": f"jobs/{job_id}/data/file1.txt"}, {"path": f"jobs/{job_id}/data/sub/file2.txt"}],
-        ),
-        patch("avtomatika.s3.get_async", AsyncMock()) as mock_get,
-        patch("avtomatika.s3.aiopen", MagicMock()) as mock_open,
-    ):
-        mock_resp = MagicMock()
-
-        async def mock_stream_gen():
-            yield b"content"
-
-        mock_resp.stream.return_value = mock_stream_gen()
-        mock_get.return_value = mock_resp
-
-        # We also need to mock file writing
-        mock_file = AsyncMock()
-        mock_open.return_value.__aenter__.return_value = mock_file
-
-        await tf.download("data/")
-        assert mock_get.call_count == 2
+    await tf.download("data/")
+    assert mock_provider.download.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_recursive_upload(config):
-    mock_store = MagicMock()
+    mock_provider = MagicMock()
+    mock_provider.upload = AsyncMock(return_value="s3://uri")
+
     job_id = "rec-up"
-    sem = asyncio.Semaphore(5)
-    tf = TaskFiles(mock_store, "bucket", job_id, config.TASK_FILES_DIR, sem)
+    tf = TaskFiles(mock_provider, "bucket", job_id, config.TASK_FILES_DIR)
     local_dir = tf.path("data")
     walk_data = [(str(local_dir), [], ["file1.txt"]), (str(local_dir / "sub"), [], ["file2.txt"])]
 
@@ -220,34 +179,18 @@ async def test_recursive_upload(config):
         patch("avtomatika.s3.walk", return_value=walk_data),
         patch("pathlib.Path.is_dir", return_value=True),
         patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.stat") as mock_stat,
-        patch("avtomatika.s3.put_async", AsyncMock()) as mock_put,
-        patch("avtomatika.s3.aiopen", MagicMock()) as mock_open,
     ):
-        mock_stat.return_value.st_size = 10
-        mock_stat.return_value.st_mode = 0o100644  # Regular file
-        mock_file = AsyncMock()
-        mock_file.read.return_value = b"data"
-        mock_open.return_value.__aenter__.return_value = mock_file
-
         await tf.upload("data")
-        assert mock_put.call_count == 2
+        assert mock_provider.upload.call_count == 2
 
 
 @pytest.mark.asyncio
 async def test_job_executor_s3_injection(config):
-    from avtomatika.app_keys import S3_SERVICE_KEY
-    from avtomatika.blueprint import Blueprint
-    from avtomatika.engine import OrchestratorEngine
-    from avtomatika.executor import JobExecutor
-
     mock_storage = AsyncMock()
     mock_history = AsyncMock()
     engine = OrchestratorEngine(mock_storage, config)
-    # Mock webhook sender to prevent errors during transition/failure handling
     engine.webhook_sender = AsyncMock()
-    engine.webhook_sender.start = MagicMock()  # start() is sync, avoids RuntimeWarning
-    # Mock dispatcher to avoid init issues
+    engine.webhook_sender.start = MagicMock()
     engine.dispatcher = MagicMock()
 
     mock_s3 = MagicMock()
@@ -289,15 +232,9 @@ async def test_job_executor_s3_injection(config):
 
 @pytest.mark.asyncio
 async def test_job_executor_s3_auto_cleanup(config):
-    from avtomatika.app_keys import S3_SERVICE_KEY
-    from avtomatika.blueprint import Blueprint
-    from avtomatika.engine import OrchestratorEngine
-    from avtomatika.executor import JobExecutor
-
     mock_storage = AsyncMock()
     mock_history = AsyncMock()
 
-    # 1. Test WITH auto-cleanup enabled (default)
     config.S3_AUTO_CLEANUP = True
     engine = OrchestratorEngine(mock_storage, config)
     engine.webhook_sender = AsyncMock()
@@ -333,7 +270,6 @@ async def test_job_executor_s3_auto_cleanup(config):
     await executor._process_job(job_id, "msg-1")
     mock_task_files.cleanup.assert_called_once()
 
-    # 2. Test WITHOUT auto-cleanup
     config.S3_AUTO_CLEANUP = False
     engine2 = OrchestratorEngine(mock_storage, config)
     engine2.webhook_sender = AsyncMock()

@@ -5,6 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import asyncio
 from asyncio import CancelledError, sleep
 from logging import getLogger
 from typing import TYPE_CHECKING
@@ -70,7 +71,6 @@ class ReputationCalculator:
         logger.info(f"Recalculating reputation for {len(worker_ids)} workers.")
 
         chunk_size = 20
-        import asyncio
 
         for i in range(0, len(worker_ids), chunk_size):
             if not self._running:
@@ -100,50 +100,31 @@ class ReputationCalculator:
                 # If there is no history, skip to next worker
                 return
 
-            successful_tasks = 0
-            failed_tasks = 0
-            contract_violations = 0
+            worker_info = await self.storage.get_worker_info(worker_id)
+            if not worker_info:
+                return
 
-            for event in task_finished_events:
-                # Extract the result from the snapshot
-                snapshot = event.get("context_snapshot", {})
-                result = snapshot.get("result", {})
-                status = result.get("status")
-                error = result.get("error", {})
-                error_code = error.get("code") if isinstance(error, dict) else None
+            current_reputation = worker_info.get("reputation", 1.0)
 
-                if status == "success":
-                    successful_tasks += 1
-                elif status == "failure":
-                    if error_code == "CONTRACT_VIOLATION_ERROR":
-                        contract_violations += 1
-                    else:
-                        failed_tasks += 1
+            total_tasks = len(task_finished_events)
+            successful_tasks = sum(
+                1
+                for event in task_finished_events
+                if event.get("context_snapshot", {}).get("result", {}).get("status") == "success"
+            )
 
-            # Violations are much more costly than simple failures (10x penalty weight)
-            total_weight = successful_tasks + failed_tasks + (contract_violations * 10)
+            if total_tasks > 0:
+                historical_success_rate = successful_tasks / total_tasks
+                # Formula: 70% history, 30% current (weighted average)
+                new_reputation = (historical_success_rate * 0.7) + (current_reputation * 0.3)
 
-            if total_weight > 0:
-                # Statistical score from history
-                statistical_score = successful_tasks / total_weight
+                # Clamp to [0.1, 1.0] to avoid complete exclusion
+                new_reputation = max(0.1, min(1.0, new_reputation))
 
-                # Get current operative reputation from Redis
-                worker_info = await self.storage.get_worker_info(worker_id)
-                try:
-                    current_reputation = float(worker_info.get("reputation", 1.0)) if worker_info else 1.0
-                except (TypeError, ValueError):
-                    current_reputation = 1.0
-
-                # Smoothing: 70% history, 30% current operative state
-                # This ensures penalties aren't instantly forgotten
-                new_reputation = (statistical_score * 0.7) + (current_reputation * 0.3)
-                new_reputation = round(min(1.0, new_reputation), 4)
-
-                await self.storage.update_worker_data(
-                    worker_id,
-                    {"reputation": new_reputation},
+                await self.storage.update_worker_data(worker_id, {"reputation": round(new_reputation, 4)})
+                logger.debug(
+                    f"Updated reputation for {worker_id}: {new_reputation:.4f} ({successful_tasks}/{total_tasks})"
                 )
-        except Exception as e:
-            logger.error(f"Failed to calculate reputation for worker {worker_id}: {e}")
 
-        logger.info("Reputation calculation finished.")
+        except Exception:
+            logger.exception(f"Error calculating reputation for worker {worker_id}.")

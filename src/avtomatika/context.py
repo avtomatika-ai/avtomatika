@@ -28,6 +28,7 @@ class ActionFactory:
         self._sub_blueprint_to_run_val: dict[str, Any] | None = None
         self._parallel_tasks_to_dispatch_val: dict[str, Any] | None = None
         self._pending_events: list[tuple[str, dict[str, Any], Any, Any]] = []
+        self._context_updates: dict[str, Any] = {}
 
     def _check_for_existing_action(self) -> None:
         """
@@ -67,6 +68,15 @@ class ActionFactory:
     def pending_events(self) -> list[tuple[str, dict[str, Any], Any, Any]]:
         return self._pending_events
 
+    @property
+    def context_updates(self) -> dict[str, Any]:
+        """Returns the pending context updates."""
+        return self._context_updates
+
+    def update_context(self, updates: dict[str, Any]) -> None:
+        """Updates the job context with new values."""
+        self._context_updates.update(updates)
+
     def send_event(self, event_type: str, payload: dict[str, Any], security: Any = None, metadata: Any = None) -> None:
         """Emits a generic event from the blueprint logic."""
         logger.debug(f"Job {self._job_id}: Ghost emitting event '{event_type}'")
@@ -75,8 +85,14 @@ class ActionFactory:
     def dispatch_parallel(self, tasks: list[dict[str, Any]], aggregate_into: str) -> None:
         """
         Dispatches multiple tasks for parallel execution.
+        Sets a default 'skill_version' if missing for backward compatibility.
         """
         self._check_for_existing_action()
+
+        for task in tasks:
+            if "skill_version" not in task:
+                task["skill_version"] = "1.0.0"
+
         logger.debug(
             f"Job {self._job_id}: Dispatching {len(tasks)} tasks in parallel, aggregating into '{aggregate_into}'"
         )
@@ -96,6 +112,7 @@ class ActionFactory:
         task_type: str,
         params: dict[str, Any],
         transitions: dict[str, str],
+        skill_version: str = "1.0.0",  # Default for backward compatibility
         event_transitions: dict[str, str] | None = None,
         dispatch_strategy: str = "default",
         resource_requirements: dict[str, Any] | None = None,
@@ -105,10 +122,11 @@ class ActionFactory:
         max_cost: float | None = None,
         priority: float = 0.0,
         resource_hint: str | None = None,
+        skill_type: str | None = None,
     ) -> None:
         """Dispatches a task to a worker for execution."""
         self._check_for_existing_action()
-        logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}'")
+        logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}' (version {skill_version})")
 
         # If resource_hint is provided, inject it into params for the Dispatcher
         if resource_hint:
@@ -134,6 +152,8 @@ class ActionFactory:
             "result_timeout_seconds": final_result_timeout,
             "max_cost": max_cost,
             "priority": priority,
+            "skill_version": skill_version,
+            "skill_type": skill_type,
         }
 
     def await_human_approval(

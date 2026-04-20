@@ -5,16 +5,29 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import contextlib
+from asyncio import create_task
 from hashlib import sha256
 from logging import getLogger
 from secrets import token_urlsafe
-from time import monotonic
+from time import monotonic, time
 from typing import Any
 
-from rxon.models import TokenResponse, WorkerEventPayload
+from rxon.constants import HB_RESP_CANCEL_TASKS, HB_RESP_REQUIRE_FULL_SYNC
+from rxon.models import (
+    SecurityContext,
+    SkillInfo,
+    TaskResult,
+    TokenResponse,
+    WorkerEventPayload,
+    WorkerRegistration,
+)
 from rxon.schema import validate_data
+from rxon.security import verify_signature
+from rxon.utils import from_dict, to_dict
 from rxon.validators import validate_identifier
 
+from avtomatika import metrics
 from avtomatika.app_keys import S3_SERVICE_KEY
 from avtomatika.config import Config
 from avtomatika.constants import (
@@ -41,8 +54,10 @@ from avtomatika.constants import (
     TASK_STATUS_FAILURE,
     TASK_STATUS_SUCCESS,
 )
+from avtomatika.executor import TERMINAL_STATES
 from avtomatika.history.base import HistoryStorageBase
 from avtomatika.storage.base import StorageBackend
+from avtomatika.utils.webhook_sender import WebhookPayload
 
 logger = getLogger(__name__)
 
@@ -71,56 +86,57 @@ class WorkerService:
         Verifies Zero Trust signature, signer identity, and message freshness (TTL).
         Raises PermissionError if verification fails.
         """
+        # Internal 'ghost' identity is trusted by default
+        if worker_id == "ghost":
+            return
+
+        msg_timestamp = payload.get("timestamp")
+        if msg_timestamp:
+            diff = abs(int(time()) - int(msg_timestamp))
+            if diff > 60:
+                logger.warning(f"REPLAY ATTEMPT or CLOCK SKEW: Message from {worker_id} is too old ({diff:.1f}s)")
+                raise PermissionError("Message timestamp expired (replay protection)")
+        else:
+            # External workers MUST provide a timestamp for replay protection
+            logger.critical(f"MISSING TIMESTAMP: Worker {worker_id} did not provide a timestamp for replay protection")
+            raise PermissionError("Missing required timestamp for replay protection")
+
         if secret is None:
             secret = await self.storage.get_worker_token(worker_id) or getattr(self.config, "GLOBAL_WORKER_TOKEN", "")
 
-        security_data = payload.get("security")
-        if not (isinstance(security_data, dict) and security_data.get("signature")):
+        security_raw = payload.get("security")
+        if not security_raw:
             if secret:
                 logger.critical(
-                    f"MISSING SIGNATURE: Worker {worker_id} did not provide a signature but token is required"
+                    "MISSING SECURITY CONTEXT: Worker %s did not provide security metadata but token is required",
+                    worker_id,
+                )
+                raise PermissionError("Missing required security context")
+            return
+
+        security: SecurityContext = from_dict(SecurityContext, security_raw)
+
+        if not security.signature:
+            if secret:
+                logger.critical(
+                    "MISSING SIGNATURE: Worker %s did provide context but no signature while token is required",
+                    worker_id,
                 )
                 raise PermissionError("Missing required cryptographic signature")
             return
 
-        from time import time
+        if security.signer_id and security.signer_id != worker_id:
+            logger.critical(f"IDENTITY MISMATCH: Message for {worker_id} signed by {security.signer_id}")
+            raise PermissionError(f"Message signer ID '{security.signer_id}' does not match worker ID '{worker_id}'")
 
-        from rxon.security import verify_signature
+        if secret:
+            logger.debug(f"Verifying signature for {worker_id} using token starting with: {secret[:4]}...")
+        else:
+            logger.warning(
+                f"No token found for {worker_id}, skipping signature check (Zero Trust disabled for this worker)"
+            )
 
-        # 1. Signer Identity Check
-        signer_id = security_data.get("signer_id")
-        if signer_id and signer_id != worker_id:
-            logger.critical(f"IDENTITY MISMATCH: Message for {worker_id} signed by {signer_id}")
-            raise PermissionError(f"Message signer ID '{signer_id}' does not match worker ID '{worker_id}'")
-
-        # 2. Replay Protection: Timestamp TTL check (60s default)
-        msg_timestamp = payload.get("timestamp")
-        if msg_timestamp:
-            now = time()
-            if abs(now - msg_timestamp) > 60:
-                logger.warning(
-                    f"REPLAY ATTEMPT or CLOCK SKEW: Message from {worker_id} is too old ({now - msg_timestamp:.1f}s)"
-                )
-                raise PermissionError("Message timestamp expired (replay protection)")
-        elif secret:
-            logger.critical(f"MISSING TIMESTAMP: Worker {worker_id} did not provide a timestamp for replay protection")
-            raise PermissionError("Missing required timestamp for replay protection")
-
-        # Deep copy and strip None values to ensure hash consistency
-        def _strip_none(obj: Any) -> Any:
-            if isinstance(obj, dict):
-                return {k: _strip_none(v) for k, v in obj.items() if v is not None}
-            elif isinstance(obj, list):
-                return [_strip_none(v) for v in obj if v is not None]
-            return obj
-
-        data_to_verify = _strip_none(payload)
-        data_to_verify.pop("security", None)
-        if ignore_fields:
-            for field in ignore_fields:
-                data_to_verify.pop(field, None)
-
-        if secret and not verify_signature(data_to_verify, security_data["signature"], secret):
+        if secret and not verify_signature(payload, security.signature, secret, ignore_fields=ignore_fields):
             logger.critical(f"SIGNATURE VERIFICATION FAILED from worker {worker_id}")
             raise PermissionError("Invalid cryptographic signature")
 
@@ -129,9 +145,6 @@ class WorkerService:
         Registers a new worker.
         :param worker_data: Raw dictionary from request (validated against WorkerRegistration)
         """
-        from rxon.models import WorkerRegistration
-        from rxon.utils import from_dict, to_dict
-
         worker_id = worker_data.get("worker_id")
         if not isinstance(worker_id, str):
             raise ValueError("Missing or invalid worker_id in registration data")
@@ -142,7 +155,7 @@ class WorkerService:
             raise PermissionError("Immediate sender ID mismatch")
 
         # Zero Trust Verification
-        await self._verify_zero_trust(worker_data, worker_id, secret=getattr(self.config, "GLOBAL_WORKER_TOKEN", ""))
+        await self._verify_zero_trust(worker_data, worker_id, secret=None)
 
         # Ensure worker meets the protocol registration requirements
         try:
@@ -174,13 +187,14 @@ class WorkerService:
         ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
         await self.storage.register_worker(worker_id, worker_data, ttl)
 
-        logger.info(f"Worker '{worker_id}' registered with info: {worker_data}")
+        logger.info(f"Worker '{worker_id}' registered (timestamp: {worker_data.get('timestamp')})")
 
         await self.history_storage.log_worker_event(
             {
                 "worker_id": worker_id,
                 "event_type": "registered",
                 "worker_info_snapshot": worker_data,
+                "timestamp": worker_data.get("timestamp"),
             }
         )
 
@@ -198,6 +212,8 @@ class WorkerService:
 
                 async def _mark_picked_up(state: dict[str, Any]) -> dict[str, Any]:
                     state["task_picked_up_at"] = now
+                    # Update assignment in case of work stealing
+                    state["assigned_worker_id"] = worker_id
                     return state
 
                 try:
@@ -223,6 +239,12 @@ class WorkerService:
                     if updated_state.get("metadata"):
                         task["metadata"] = updated_state["metadata"]
 
+                    # Beta 10: Include required skill version/type in the task payload for worker validation
+                    if updated_state.get("skill_version"):
+                        task["skill_version"] = updated_state["skill_version"]
+                    if updated_state.get("skill_type"):
+                        task["skill_type"] = updated_state["skill_type"]
+
                     logger.info(f"Task {task.get('task_id')} for job {job_id} picked up by worker {worker_id}")
                 except Exception as e:
                     logger.error(f"Failed to update pick-up time for job {job_id}: {e}")
@@ -233,43 +255,92 @@ class WorkerService:
         """
         Processes a task result submitted by a worker.
         """
-        from rxon.models import TaskResult
-        from rxon.utils import from_dict, to_dict
-
         # Zero Trust Verification
         await self._verify_zero_trust(result_payload, authenticated_worker_id)
+
+        # Optimistically decrement load counter (task finished)
+        if authenticated_worker_id != "ghost":
+            await self.storage.decrement_worker_load(authenticated_worker_id)
 
         # Ensure result matches protocol TaskResult
         try:
             validated_res = from_dict(TaskResult, result_payload)
-            # Normalize to dict for storage consistency
+            # Beta 8: Handle optional worker_id - fill from authenticated identity if missing
+            if validated_res.worker_id is None:
+                validated_res = validated_res._replace(worker_id=authenticated_worker_id)
+
+            # Re-sync payload from the strictly typed model
             result_payload = to_dict(validated_res)
         except (AttributeError, TypeError, ValueError) as e:
             logger.error(f"Task result failed protocol validation: {e}")
             raise ValueError(f"Invalid TaskResult payload: {e}") from e
 
-        payload_worker_id = result_payload.get("worker_id")
+        job_id = validated_res.job_id
+        task_id = validated_res.task_id
 
-        if payload_worker_id and payload_worker_id != authenticated_worker_id:
+        # Now result_payload always has worker_id from either the payload or auth
+        payload_worker_id = result_payload["worker_id"]
+
+        if payload_worker_id != authenticated_worker_id:
             raise PermissionError(
                 f"Forbidden: Authenticated worker '{authenticated_worker_id}' "
                 f"cannot submit results for another worker '{payload_worker_id}'."
             )
 
-        job_id = result_payload.get("job_id")
-        task_id = result_payload.get("task_id")
-
-        if not job_id or not task_id:
-            raise ValueError("job_id and task_id are required")
-
         job_state = await self.storage.get_job_state(job_id)
         if not job_state:
-            # UNIFIED: Handle missing job (might be flushed or expired)
             return {
                 "status": "ignored",
                 "reason": IGNORED_REASON_NOT_FOUND,
                 "message": f"Job {job_id} not found (expired or deleted).",
             }
+
+        # Use status strictly from the model (model b8 has 'success' as default)
+        result_status = validated_res.status
+        worker_data_content = validated_res.data
+
+        # Find the exact skill definition used
+        skill_snapshot: SkillInfo | None = None
+        if authenticated_worker_id:
+            try:
+                worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+                if worker_info:
+                    task_type = job_state.get("current_task_info", {}).get("type")
+
+                    # Search strictly by 'name' as per b8
+                    for skill_data in worker_info.get("supported_skills", []):
+                        if skill_data.get("name") == task_type:
+                            skill_snapshot = from_dict(SkillInfo, skill_data)
+                            break
+            except Exception as e:
+                logger.warning(f"Failed to fetch skill snapshot for validation (job {job_id}): {e}")
+
+        # Check if result matches skill's output_schema
+        if result_status == TASK_STATUS_SUCCESS and skill_snapshot:
+            # Beta 8: Only validate if dialect is json-schema
+            if skill_snapshot.schema_dialect == "json-schema" and skill_snapshot.output_schema:
+                is_valid, error_msg = validate_data(worker_data_content, skill_snapshot.output_schema)
+                if not is_valid:
+                    full_error = f"Contract violation: result data does not match output_schema. {error_msg}"
+                    logger.error(f"Worker {authenticated_worker_id} violated contract for job {job_id}: {full_error}")
+
+                    penalty = self.config.REPUTATION_PENALTY_CONTRACT_VIOLATION
+                    worker_info = await self.storage.get_worker_info(authenticated_worker_id)
+                    if worker_info:
+                        new_rep = max(0.0, worker_info.get("reputation", 1.0) - penalty)
+                        await self.storage.update_worker_data(authenticated_worker_id, {"reputation": new_rep})
+                        logger.warning(
+                            f"Worker {authenticated_worker_id} reputation decreased by {penalty} "
+                            f"to {new_rep:.2f} due to contract violation."
+                        )
+                    result_status = TASK_STATUS_FAILURE
+                    result_payload["status"] = TASK_STATUS_FAILURE
+                    result_payload["error"] = {"code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
+            elif skill_snapshot.schema_dialect != "json-schema":
+                logger.debug(
+                    f"Skipping output validation for job {job_id}: "
+                    f"dialect '{skill_snapshot.schema_dialect}' not supported for native validation."
+                )
 
         # Verify that the worker submitting the result is the one assigned to the task
         task_worker_id = job_state.get("task_worker_id")
@@ -278,7 +349,6 @@ class WorkerService:
                 f"HIJACKING ATTEMPT DETECTED: Worker {authenticated_worker_id} tried to submit result "
                 f"for job {job_id} task {task_id}, which is assigned to worker {task_worker_id}."
             )
-            # We treat this as an IGNORED result for safety, but log it as CRITICAL
             return {
                 "status": "ignored",
                 "reason": IGNORED_REASON_MISMATCH,
@@ -286,10 +356,11 @@ class WorkerService:
             }
 
         # SAFETY CHECK: Verify that the submitted task_id matches the current task of the job.
-        # This prevents late results from old tasks (e.g. after a timeout and retry)
-        # from overwriting data in a job that has already moved on.
+        # Skip this check for parallel branches as they have their own branch IDs.
         current_task_id = job_state.get("current_task_id")
-        if current_task_id and current_task_id != task_id:
+        current_status = job_state.get("status")
+
+        if current_status != JOB_STATUS_WAITING_FOR_PARALLEL and current_task_id and current_task_id != task_id:
             logger.warning(
                 f"Received STALE result for job {job_id}. "
                 f"Submitted task_id: {task_id}, current task_id in job: {current_task_id}. Ignoring."
@@ -300,26 +371,19 @@ class WorkerService:
                 "message": f"Result ignored: task_id {task_id} is no longer active for job {job_id}.",
             }
 
-        # Protection: If the job is already failed (e.g., by Watcher due to timeout),
-        # or finished, we should not process any late results from workers.
-        from avtomatika.executor import TERMINAL_STATES
-
-        current_status = job_state.get("status")
-
+        # Protection: Terminal states check
         if current_status in TERMINAL_STATES:
-            # UNIFIED: Handle terminal states
             error_message = (job_state.get("error_message") or "").lower()
             if "timeout" in error_message:
                 reason = IGNORED_REASON_LATE
             elif current_status == JOB_STATUS_CANCELLED:
                 reason = IGNORED_REASON_CANCELLED
             else:
-                reason = "job_already_terminated"  # Generic terminal reason
+                reason = "job_already_terminated"
 
             logger.warning(
                 f"Received late result for job {job_id} (status: {current_status}, reason: {reason}). Ignoring."
             )
-            from avtomatika import metrics
 
             metrics.tasks_ignored_total.inc(
                 {
@@ -333,56 +397,12 @@ class WorkerService:
                 "message": (f"Result ignored: the job is already in a terminal state ({current_status})."),
             }
 
-        result_status = result_payload.get("status", TASK_STATUS_SUCCESS)
-        worker_data_content = result_payload.get("data")
-
-        # Find the exact skill definition used
-        skill_snapshot = None
-        if authenticated_worker_id:
-            try:
-                worker_info = await self.storage.get_worker_info(authenticated_worker_id)
-                if worker_info:
-                    task_type = job_state.get("current_task_info", {}).get("type")
-                    # Search for the matching skill in the worker's supported_skills
-                    # Every skill is strictly a dict (SkillInfo)
-                    for skill in worker_info.get("supported_skills", []):
-                        if skill.get("name") == task_type or skill.get("type") == task_type:
-                            skill_snapshot = skill
-                            break
-            except Exception as e:
-                logger.warning(f"Failed to fetch skill snapshot for validation (job {job_id}): {e}")
-
-        # Check if result matches skill's output_schema
-        if result_status == TASK_STATUS_SUCCESS and skill_snapshot:
-            output_schema = skill_snapshot.get("output_schema")
-            if output_schema:
-                is_valid, error_msg = validate_data(worker_data_content, output_schema)
-                if not is_valid:
-                    full_error = f"Contract violation: result data does not match output_schema. {error_msg}"
-                    logger.error(f"Worker {authenticated_worker_id} violated contract for job {job_id}: {full_error}")
-
-                    # HLN SELF-REGULATION: Penalize reputation for contract violation
-                    penalty = self.config.REPUTATION_PENALTY_CONTRACT_VIOLATION
-                    worker_info = await self.storage.get_worker_info(authenticated_worker_id)
-                    if worker_info:
-                        new_rep = max(0.0, worker_info.get("reputation", 1.0) - penalty)
-                        await self.storage.update_worker_data(authenticated_worker_id, {"reputation": new_rep})
-                        logger.warning(
-                            f"Worker {authenticated_worker_id} reputation decreased by {penalty} "
-                            f"to {new_rep:.2f} due to contract violation."
-                        )
-                    # Transform success into failure due to contract violation
-                    result_status = TASK_STATUS_FAILURE
-                    result_payload["status"] = TASK_STATUS_FAILURE
-                    result_payload["error"] = {"code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
-
         if current_status == JOB_STATUS_WAITING_FOR_PARALLEL:
             await self.storage.remove_job_from_watch(f"{job_id}:{task_id}")
 
             def _update_parallel_results(state: dict[str, Any]) -> dict[str, Any]:
                 state.setdefault("aggregation_results", {})[task_id] = result_payload
 
-                # Propagate security context and metadata from the result if present
                 if result_payload.get("security"):
                     state["security"] = result_payload["security"]
                 if result_payload.get("metadata"):
@@ -423,10 +443,12 @@ class WorkerService:
                 "event_type": "task_finished",
                 "duration_ms": duration_ms,
                 "worker_id": authenticated_worker_id,
+                "origin_task_id": validated_res.task_id,  # Beta 10: Trace graph back to origin task
+                "timestamp": result_payload.get("timestamp"),
                 "context_snapshot": {
                     **job_state,
                     "result": result_payload,
-                    "skill_snapshot": skill_snapshot,  # Financial/Contract info
+                    "skill_snapshot": skill_snapshot,
                 },
             },
         )
@@ -464,26 +486,23 @@ class WorkerService:
                 if "data_metadata" not in job_state:
                     job_state["data_metadata"] = {}
                 job_state["data_metadata"].update(data_metadata)
-                logger.debug(f"Stored data metadata for job {job_id}: {list(data_metadata.keys())}")
 
-            # Propagate security context and metadata from the result if present
             if result_payload.get("security"):
                 job_state["security"] = result_payload["security"]
             if result_payload.get("metadata"):
                 job_state.setdefault("metadata", {}).update(result_payload["metadata"])
+            if result_payload.get("timestamp"):
+                job_state["timestamp"] = result_payload["timestamp"]
 
             job_state["current_state"] = next_state
             job_state["status"] = JOB_STATUS_RUNNING
 
-            # HLN SELF-REGULATION: Reward worker for successful task completion
             reward = self.config.REPUTATION_REWARD_SUCCESS
             if authenticated_worker_id and reward > 0:
                 worker_info = await self.storage.get_worker_info(authenticated_worker_id)
                 if worker_info:
                     new_rep = min(1.0, worker_info.get("reputation", 1.0) + reward)
                     await self.storage.update_worker_data(authenticated_worker_id, {"reputation": new_rep})
-                    # Log silently or at debug level to avoid spamming for every success
-                    logger.debug(f"Worker {authenticated_worker_id} reputation increased to {new_rep:.4f}")
 
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.enqueue_job(job_id)
@@ -493,19 +512,11 @@ class WorkerService:
             job_state["status"] = JOB_STATUS_FAILED
             job_state["error_message"] = f"Worker returned unhandled status: {result_status}"
             await self.storage.save_job_state(job_id, job_state)
-
-            # Cleanup S3 on terminal failure
             await self._cleanup_s3_if_needed(job_id)
-
             return {"status": "accepted", "transition": "unhandled_status_failure"}
 
     async def _cleanup_s3_if_needed(self, job_id: str) -> None:
-        """Helper to cleanup S3 files if auto-cleanup is enabled."""
         if self.config.S3_AUTO_CLEANUP:
-            from asyncio import create_task
-
-            from avtomatika.app_keys import S3_SERVICE_KEY
-
             s3_service = self.engine.app.get(S3_SERVICE_KEY)
             if s3_service:
                 task_files = s3_service.get_task_files(job_id)
@@ -532,7 +543,6 @@ class WorkerService:
             ERROR_CODE_DEPENDENCY,
             ERROR_CODE_CONTRACT_VIOLATION,
         ):
-            # HLN SELF-REGULATION: Immediate penalty for critical/permanent failures
             penalty = self.config.REPUTATION_PENALTY_TASK_FAILURE
             if error_type == ERROR_CODE_CONTRACT_VIOLATION:
                 penalty = self.config.REPUTATION_PENALTY_CONTRACT_VIOLATION
@@ -543,7 +553,6 @@ class WorkerService:
                 if worker_info:
                     new_rep = max(0.0, worker_info.get("reputation", 1.0) - penalty)
                     await self.storage.update_worker_data(worker_id, {"reputation": new_rep})
-                    logger.warning(f"Worker {worker_id} reputation decreased by {penalty} due to {error_type}.")
 
             job_state["status"] = JOB_STATUS_QUARANTINED
             job_state["error_message"] = f"Task failed with permanent error ({error_type}): {error_message}"
@@ -557,75 +566,52 @@ class WorkerService:
             job_state["status"] = JOB_STATUS_FAILED
             job_state["error_message"] = f"Task failed due to data integrity mismatch: {error_message}"
             await self.storage.save_job_state(job_id, job_state)
-            logger.critical(f"Data integrity mismatch detected for job {job_id}: {error_message}")
         else:
             await self.engine.handle_task_failure(job_state, task_id, error_message)
 
     async def process_worker_event(self, authenticated_worker_id: str, raw_payload: dict[str, Any]) -> dict[str, Any]:
-        """Processes a generic worker event with Identity Chain verification."""
-        from rxon.utils import from_dict, to_dict
-
-        # Zero Trust Verification (excluding bubbling_chain)
         await self._verify_zero_trust(raw_payload, authenticated_worker_id, ignore_fields=["bubbling_chain"])
 
         try:
             event = from_dict(WorkerEventPayload, raw_payload)
         except (AttributeError, TypeError, ValueError) as e:
-            logger.error(f"Event payload failed protocol validation from {authenticated_worker_id}: {e}")
+            logger.error(f"Event payload failed protocol validation: {e}")
             return {"status": "error", "message": f"Invalid event payload: {e}"}
 
-        if not event:
-            return {"status": "error", "message": "Invalid event payload"}
-
-        # Immediate sender must be who they say they are
         if event.worker_id != authenticated_worker_id:
-            logger.critical(
-                f"SPOOFING DETECTED: Worker {authenticated_worker_id} tried to send event as {event.worker_id}"
-            )
             raise PermissionError("Immediate sender ID mismatch")
 
-        # Contract Validation for Events
         events_schema = None
+        dialect = "json-schema"
 
         if authenticated_worker_id == "ghost":
-            # Event from internal blueprint handler
             job_state = await self.storage.get_job_state(event.target_job_id or event.target_task_id)
             if job_state:
                 contract = self.engine.blueprint_contracts.get(job_state["blueprint_name"], {})
                 events_schema = contract.get("events_schema")
+                dialect = contract.get("schema_dialect", "json-schema")
         else:
-            # Event from external worker
             worker_info = await self.storage.get_worker_info(authenticated_worker_id)
-            if worker_info and event.target_task_id:
-                # Events are usually scoped to a skill/task if target_task_id is present
+            if worker_info and (event.target_task_id or event.target_job_id):
                 job_state = await self.storage.get_job_state(event.target_job_id or event.target_task_id)
                 if job_state:
                     task_type = job_state.get("current_task_info", {}).get("type")
-                    for skill in worker_info.get("supported_skills", []):
-                        if skill.get("name") == task_type or skill.get("type") == task_type:
-                            events_schema = skill.get("events_schema")
+
+                    for skill_data in worker_info.get("supported_skills", []):
+                        if skill_data.get("name") == task_type or skill_data.get("type") == task_type:
+                            skill = from_dict(SkillInfo, skill_data)
+                            events_schema = skill.events_schema
+                            dialect = skill.schema_dialect
                             break
 
-        if events_schema:
+        if events_schema and dialect == "json-schema":
             if event.event_type in events_schema:
                 is_valid, error_msg = validate_data(event.payload, events_schema[event.event_type])
                 if not is_valid:
-                    full_error = f"Contract violation for event '{event.event_type}': {error_msg}"
-                    logger.error(f"Sender {authenticated_worker_id} violated event contract: {full_error}")
-                    return {"status": "error", "code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
-            elif event.event_type != EVENT_TYPE_PROGRESS:
-                # Check if we should enforce strict validation
-                if self.config.STRICT_EVENT_VALIDATION:
-                    full_error = f"Contract violation: event type '{event.event_type}' is not declared in schema."
-                    logger.error(f"Sender {authenticated_worker_id} violated contract: {full_error}")
-                    return {"status": "error", "code": ERROR_CODE_CONTRACT_VIOLATION, "message": full_error}
-                else:
-                    logger.warning(
-                        f"Sender {authenticated_worker_id} emitted undeclared event "
-                        f"'{event.event_type}'. Allowed by config."
-                    )
+                    return {"status": "error", "code": ERROR_CODE_CONTRACT_VIOLATION, "message": error_msg}
+        elif events_schema and dialect != "json-schema":
+            logger.debug(f"Skipping event validation for dialect '{dialect}'")
 
-        # Update bubbling chain before propagation
         new_chain = list(event.bubbling_chain or [])
         if (
             authenticated_worker_id != "ghost"
@@ -634,12 +620,9 @@ class WorkerService:
         ):
             new_chain.append(authenticated_worker_id)
 
-        # Update event object with the new chain
         event = event._replace(bubbling_chain=new_chain)
 
-        # System Events: Progress
         if event.event_type == EVENT_TYPE_PROGRESS:
-            # ... (existing progress logic) ...
             target_id = event.target_job_id or event.target_task_id
             if target_id:
                 progress = event.payload.get("progress", 0.0)
@@ -650,168 +633,109 @@ class WorkerService:
                     state["progress_message"] = message
                     return state
 
-                try:
+                with contextlib.suppress(Exception):
                     await self.storage.update_job_state_atomic(target_id, _update_progress)
-                except Exception as e:
-                    logger.warning(f"Failed to update progress for job {target_id}: {e}")
 
-        # Check if event triggers a state change
         if event.target_job_id:
             job_state = await self.storage.get_job_state(event.target_job_id)
             if job_state and job_state.get("status") == JOB_STATUS_WAITING_FOR_WORKER:
                 event_transitions = job_state.get("current_task_event_transitions", {})
                 if next_state := event_transitions.get(event.event_type):
-                    logger.info(
-                        f"Event '{event.event_type}' triggered transition "
-                        f"for job {event.target_job_id} to '{next_state}'"
-                    )
-
-                    # Merge event payload into history
                     if "state_history" not in job_state:
                         job_state["state_history"] = {}
                     job_state["state_history"].update(event.payload)
-
-                    # Prevent late results from original task
                     job_state["current_task_id"] = f"superseded_by_event:{event.event_id}"
-
                     job_state["current_state"] = next_state
                     job_state["status"] = JOB_STATUS_RUNNING
-
                     await self.storage.save_job_state(event.target_job_id, job_state)
                     await self.storage.remove_job_from_watch(event.target_job_id)
                     await self.storage.enqueue_job(event.target_job_id)
 
-        # Log to history
+        # Use event timestamp if available, otherwise fallback to current time
+        event_ts = event.timestamp or int(time())
+
         await self.history_storage.log_job_event(
             {
                 "job_id": event.target_job_id or "system",
                 "state": "running",
                 "event_type": f"worker_event:{event.event_type}",
-                "worker_id": event.origin_worker_id,  # Log the REAL creator
+                "worker_id": event.origin_worker_id,
+                "timestamp": event_ts,
                 "context_snapshot": {
                     "event_id": event.event_id,
                     "payload": event.payload,
-                    "priority": event.priority,
-                    "bubbling_chain": event.bubbling_chain,
                     "sender_id": authenticated_worker_id,
                 },
             }
         )
 
-        # Notify subscribers (like Matryoshka bridge)
         if self.engine.on_worker_event:
-            from asyncio import create_task
-
             for callback in self.engine.on_worker_event:
                 create_task(callback(authenticated_worker_id, event))
 
-        # Send event to client if webhook_url is set
         if event.target_job_id:
             job_state = await self.storage.get_job_state(event.target_job_id)
             if job_state and job_state.get("webhook_url"):
-                from avtomatika.utils.webhook_sender import WebhookPayload
-
                 webhook_payload = WebhookPayload(
                     event=f"worker_event:{event.event_type}",
                     job_id=event.target_job_id,
                     status=job_state.get("status", "running"),
                     result=event.payload,
-                    error=None,
                     security=to_dict(event.security) if event.security else None,
                     metadata=event.metadata,
+                    timestamp=event.timestamp,
                 )
                 await self.engine.webhook_sender.send(job_state["webhook_url"], webhook_payload)
 
         return {"status": "event_accepted"}
 
     async def issue_access_token(self, worker_id: str) -> TokenResponse:
-        """Generates and stores a temporary access token."""
         raw_token = token_urlsafe(32)
         token_hash = sha256(raw_token.encode()).hexdigest()
-        ttl = 3600
-
-        await self.storage.save_worker_access_token(worker_id, token_hash, ttl)
-        logger.info(f"Issued temporary access token for worker {worker_id}")
-
-        return TokenResponse(access_token=raw_token, expires_in=ttl, worker_id=worker_id)
+        await self.storage.save_worker_access_token(worker_id, token_hash, 3600)
+        return TokenResponse(access_token=raw_token, expires_in=3600, worker_id=worker_id)
 
     async def update_worker_heartbeat(
         self, worker_id: str, update_data: dict[str, Any] | None
     ) -> dict[str, Any] | None:
-        """Updates worker TTL and status, and checks for tasks that should be cancelled."""
         try:
-            from rxon.constants import HB_RESP_CANCEL_TASKS, HB_RESP_REQUIRE_FULL_SYNC
-
             ttl = self.config.WORKER_HEALTH_CHECK_INTERVAL_SECONDS * 2
-
             if update_data:
-                # Zero Trust Verification
                 await self._verify_zero_trust(update_data, worker_id)
-
                 response_data: dict[str, Any] = {"status": "ok"}
-                # Use hash match to avoid redundant skill updates
                 new_hash = update_data.get("skills_hash")
                 current_worker = await self.storage.get_worker_info(worker_id)
-
-                # If hash is provided and matches, we don't need to re-register skills
                 if current_worker and new_hash and current_worker.get("skills_hash") == new_hash:
-                    # SELF-HEALING: Check if storage actually has the skills
                     if not current_worker.get("supported_skills"):
-                        logger.warning(
-                            f"Worker {worker_id} hash match, but skills missing in storage. Forcing Full Sync."
-                        )
                         response_data[HB_RESP_REQUIRE_FULL_SYNC] = True
-
-                    # Remove skills from update to keep it lightweight
                     update_data.pop("supported_skills", None)
-
                 updated_worker = await self.storage.update_worker_status(worker_id, update_data, ttl)
-
                 if updated_worker:
                     await self.history_storage.log_worker_event(
                         {
                             "worker_id": worker_id,
                             "event_type": "status_update",
                             "worker_info_snapshot": updated_worker,
-                        },
+                            "timestamp": update_data.get("timestamp"),
+                        }
                     )
-
-                    # Check current tasks for cancellation
                     current_tasks = update_data.get("current_tasks", []) or []
                     if current_tasks:
-                        cancel_task_ids = []
-                        from avtomatika.executor import TERMINAL_STATES
-
-                        for task_id in current_tasks:
-                            # Find job_id for this task_id.
-                            # In Avtomatika, task_id is often the same as job_id or can be mapped.
-                            job_state = await self.storage.get_job_state(task_id)
-                            if not job_state:
-                                # If job is missing, it's definitely stale
-                                cancel_task_ids.append(task_id)
-                                continue
-
-                            status = job_state.get("status")
-                            # If the job is in a terminal state or cancelled, tell the worker to stop
-                            if (status in TERMINAL_STATES or status == JOB_STATUS_CANCELLED) and job_state.get(
-                                "task_worker_id"
-                            ) == worker_id:
-                                # Verification: check if THIS worker is still the one assigned
-                                cancel_task_ids.append(task_id)
-
-                        if cancel_task_ids:
-                            response_data[HB_RESP_CANCEL_TASKS] = cancel_task_ids
-
-                # Heartbeat Jitter to prevent "Thundering Herd" after Orchestrator restart
-                # This tells the worker to slightly shift its next heartbeat.
-                import random
-
-                response_data["next_heartbeat_jitter_ms"] = random.randint(-2000, 2000)
-
+                        cancel_ids = []
+                        for tid in current_tasks:
+                            js = await self.storage.get_job_state(tid)
+                            if (
+                                not js
+                                or js.get("status") in TERMINAL_STATES
+                                or js.get("status") == JOB_STATUS_CANCELLED
+                            ):
+                                cancel_ids.append(tid)
+                        if cancel_ids:
+                            response_data[HB_RESP_CANCEL_TASKS] = cancel_ids
                 return response_data
             else:
                 refreshed = await self.storage.refresh_worker_ttl(worker_id, ttl)
                 return {"status": "ttl_refreshed"} if refreshed else None
         except Exception as e:
-            logger.exception(f"CRITICAL ERROR in update_worker_heartbeat for worker {worker_id}: {e}")
+            logger.exception(f"Error in heartbeat: {e}")
             raise e

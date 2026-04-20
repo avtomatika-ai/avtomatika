@@ -60,7 +60,6 @@ class TimezoneJsonFormatter(json.JsonFormatter):
         dt = datetime.fromtimestamp(record.created, self.tz)
         if datefmt:
             return dt.strftime(datefmt)
-        # Return ISO format with offset
         return dt.isoformat()
 
 
@@ -73,7 +72,6 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: st
     # Use QueueHandler to avoid blocking the Event Loop during I/O
     log_queue: Queue = Queue(-1)
 
-    # 1. Base formatting
     formatter: Formatter
     if log_format.lower() == "json":
         formatter = TimezoneJsonFormatter(
@@ -86,15 +84,12 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json", tz_name: st
             tz_name=tz_name,
         )
 
-    # 2. Setup actual destination handler
     stream_handler = StreamHandler(stdout)
     stream_handler.setFormatter(formatter)
 
-    # 3. Setup Listener to process the queue in a background thread
     _LOG_LISTENER = QueueListener(log_queue, stream_handler)
     _LOG_LISTENER.start()
 
-    # 4. Attach QueueHandler to loggers
     queue_handler = QueueHandler(log_queue)
 
     logger = getLogger("avtomatika")

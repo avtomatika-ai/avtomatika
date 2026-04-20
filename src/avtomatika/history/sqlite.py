@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS job_history (
     previous_state TEXT,
     next_state TEXT,
     worker_id TEXT,
+    origin_task_id TEXT,
     attempt_number INTEGER,
     context_snapshot TEXT
 );
@@ -110,9 +111,9 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         query = """
             INSERT INTO job_history (
                 event_id, job_id, timestamp, state, event_type, duration_ms,
-                previous_state, next_state, worker_id, attempt_number,
+                previous_state, next_state, worker_id, origin_task_id, attempt_number,
                 context_snapshot
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         now_ts = time()
 
@@ -129,6 +130,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             event_data.get("previous_state"),
             event_data.get("next_state"),
             event_data.get("worker_id"),
+            event_data.get("origin_task_id"),
             event_data.get("attempt_number"),
             context_snapshot_json,
         )

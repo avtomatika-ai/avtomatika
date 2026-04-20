@@ -73,7 +73,6 @@ async def test_process_job_calls_webhook(job_executor):
     bp.validate()
     job_executor.engine.blueprints["webhook-test-bp"] = bp
 
-    # Mock send_job_webhook on the engine
     job_executor.engine.send_job_webhook = AsyncMock()
 
     job_id = "test-job-webhook"
@@ -92,10 +91,8 @@ async def test_process_job_calls_webhook(job_executor):
     # Disable S3 service for this test to avoid cleanup error
     job_executor.engine.app.get.return_value = None
 
-    # Run the job processor
     await job_executor._process_job(job_id, "msg-123")
 
-    # Assertions
     # Verify that send_job_webhook was called with the correct event type
     job_executor.engine.send_job_webhook.assert_called_once()
     call_args = job_executor.engine.send_job_webhook.call_args
@@ -203,11 +200,9 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
     job_executor.storage.get_job_state.return_value = job_state
     job_executor.storage.ack_job = AsyncMock()
 
-    # Run the job processor
     await job_executor._process_job(job_id, "msg-123")
 
     # --- Assertions ---
-    # 1. Check that the handler received the correct arguments
     assert captured_args["job_id"] == job_id
     assert isinstance(captured_args["actions"], ActionFactory)
     assert captured_args["initial_data"] == {"initial_field": "initial_value"}
@@ -215,7 +210,6 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
     assert captured_args["worker_field"] == "worker_value"
     assert captured_args["initial_field"] == "initial_value"
 
-    # 2. Check that the correct state transition was triggered and saved
     job_executor.storage.save_job_state.assert_called_with(
         job_id,
         {
@@ -232,7 +226,6 @@ async def test_process_job_handler_dependency_injection(job_executor, mocker):
             "aggregation_results": ANY,
         },
     )
-    # 3. Check that the job was re-enqueued for the next state
     job_executor.storage.enqueue_job.assert_called_with(job_id)
     job_executor.storage.ack_job.assert_called_with("msg-123")
 
@@ -271,11 +264,9 @@ async def test_process_job_handler_backward_compatibility(job_executor):
     job_executor.storage.get_job_state.return_value = job_state
     job_executor.storage.ack_job = AsyncMock()
 
-    # Run the job processor
     await job_executor._process_job(job_id, "msg-123")
 
     # --- Assertions ---
-    # 1. Check that the handler was called with the correct arguments
     handler_mock.assert_called_once()
     call_args = handler_mock.call_args[0]
     assert len(call_args) == 2
@@ -284,7 +275,6 @@ async def test_process_job_handler_backward_compatibility(job_executor):
     # The second argument should be the ActionFactory
     assert isinstance(call_args[1], ActionFactory)
 
-    # 2. Check that the job was transitioned
     job_executor.storage.save_job_state.assert_called_with(
         job_id,
         {
@@ -350,7 +340,6 @@ async def test_di_name_collision_precedence(job_executor, mocker):
     job_executor.storage.get_job_state.return_value = job_state
     job_executor.storage.ack_job = AsyncMock()
 
-    # Run the job processor
     await job_executor._process_job(job_id_context, "msg-123")
 
     # --- Assertions ---
@@ -360,7 +349,6 @@ async def test_di_name_collision_precedence(job_executor, mocker):
     assert captured_args["state_history"] == {"job_id": job_id_history, "key_from_history": "value_history"}
     assert isinstance(captured_args["actions"], ActionFactory)
 
-    # Verify transition
     job_executor.storage.save_job_state.assert_called_with(
         job_id_context,
         {
@@ -487,12 +475,10 @@ async def test_process_job_handles_none_fields_gracefully(job_executor):
     job_executor.storage.get_job_state.return_value = job_state
     job_executor.storage.ack_job = AsyncMock()
 
-    # Run the job processor
     await job_executor._process_job(job_id, "msg-123")
 
     # If we reached here without TypeError, the test passed
     job_executor.storage.ack_job.assert_called_with("msg-123")
-    # Verify it transitioned to 'end'
     job_executor.storage.save_job_state.assert_called_with(
         job_id,
         {
@@ -509,3 +495,37 @@ async def test_process_job_handles_none_fields_gracefully(job_executor):
             "status": "running",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_data_stores_attribute_access(job_executor):
+    """Verifies that handlers can access data_stores using dot notation."""
+    mock_store = AsyncMock()
+    mock_store.get.return_value = "secret"
+
+    bp = Blueprint(name="ds-attr-bp")
+    bp.data_stores["my_store"] = mock_store
+
+    @bp.handler("start", is_start=True)
+    async def handler(data_stores, actions):
+        val = await data_stores.my_store.get("key")
+        assert val == "secret"
+        actions.go_to("end")
+
+    @bp.handler("end", is_end=True)
+    async def end_handler():
+        pass
+
+    job_executor.engine.blueprints["ds-attr-bp"] = bp
+    job_id = "job-ds-attr"
+    job_state = {
+        "id": job_id,
+        "blueprint_name": "ds-attr-bp",
+        "current_state": "start",
+        "initial_data": {},
+        "client_config": {},
+    }
+    job_executor.storage.get_job_state.return_value = job_state
+
+    await job_executor._process_job(job_id, "msg-1")
+    # If no AttributeError, success

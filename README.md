@@ -6,7 +6,16 @@
 [![PyPI Version](https://img.shields.io/pypi/v/avtomatika.svg)](https://pypi.org/project/avtomatika/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 
-Avtomatika is a high-performance, state-driven engine for managing complex asynchronous workflows in Python. It provides a robust framework for building scalable and resilient applications by separating process logic from execution logic.
+**Avtomatika** is a high-performance, state-machine based orchestrator for long-running AI workflows and distributed tasks. It serves as the core of a **Hierarchical Logic Network (HLN)**, coordinating **Holons** (workers) via the **RXON** protocol.
+
+## 🚀 Key Features
+
+- **State-Machine Driven**: Declarative Python Blueprints for complex logic.
+- **High-Performance Redis Storage**: **ZSET indexing** for atomic worker management and **Msgpack** serialization.
+- **Zero Trust Security**: Mandatory worker authentication and **Replay Protection** via a 60s timestamp window.
+- **Pluggable Blob Storage**: Support for S3-compatible storage via the `BlobProvider` interface (powered by `obstore`).
+- **Hierarchical Logic**: Support for child blueprints (Ghosts) and parallel execution with aggregation.
+- **Observability**: Distributed tracing with **OpenTelemetry** and real-time metrics.
 
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
 

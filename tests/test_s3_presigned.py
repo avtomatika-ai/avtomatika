@@ -5,8 +5,11 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
+from avtomatika.app_keys import ENGINE_KEY, S3_SERVICE_KEY
 from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.s3 import S3Service
@@ -51,9 +54,6 @@ def create_dummy_bp():
 @pytest.mark.parametrize("app", [{"extra_blueprints": [create_dummy_bp()]}], indirect=True)
 @pytest.mark.asyncio
 async def test_presign_handler(aiohttp_client, app, s3_config):
-    from avtomatika.app_keys import ENGINE_KEY, S3_SERVICE_KEY
-    from avtomatika.s3 import S3Service
-
     # Enable S3 in the app's engine config
     app_engine = app[ENGINE_KEY]
     app_engine.config.S3_ENDPOINT_URL = s3_config.S3_ENDPOINT_URL
@@ -66,7 +66,6 @@ async def test_presign_handler(aiohttp_client, app, s3_config):
 
     client = await aiohttp_client(app)
 
-    # Mock auth for client
     headers = {"X-Client-Token": "user_token_vip"}
 
     job_id = "test-job-upload"
@@ -83,9 +82,6 @@ async def test_presign_handler(aiohttp_client, app, s3_config):
 @pytest.mark.parametrize("app", [{"extra_blueprints": [create_dummy_bp()]}], indirect=True)
 @pytest.mark.asyncio
 async def test_download_redirect_handler(aiohttp_client, app, s3_config):
-    from avtomatika.app_keys import ENGINE_KEY, S3_SERVICE_KEY
-    from avtomatika.s3 import S3Service
-
     app_engine = app[ENGINE_KEY]
     app_engine.config.S3_ENDPOINT_URL = s3_config.S3_ENDPOINT_URL
     app_engine.config.S3_ACCESS_KEY = s3_config.S3_ACCESS_KEY
@@ -112,11 +108,6 @@ async def test_download_redirect_handler(aiohttp_client, app, s3_config):
 @pytest.mark.parametrize("app", [{"extra_blueprints": [create_dummy_bp()]}], indirect=True)
 @pytest.mark.asyncio
 async def test_streaming_upload_handler(aiohttp_client, app, s3_config):
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    from avtomatika.app_keys import ENGINE_KEY, S3_SERVICE_KEY
-    from avtomatika.s3 import S3Service
-
     app_engine = app[ENGINE_KEY]
     app_engine.config.S3_ENDPOINT_URL = s3_config.S3_ENDPOINT_URL
     app_engine.config.S3_ACCESS_KEY = s3_config.S3_ACCESS_KEY
@@ -132,7 +123,6 @@ async def test_streaming_upload_handler(aiohttp_client, app, s3_config):
     filename = "input.data"
     payload = b"some binary content"
 
-    # Mock obstore.put_async
     mock_put_result = MagicMock()
     mock_put_result.e_tag = "some-etag"
 

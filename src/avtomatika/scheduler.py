@@ -11,6 +11,8 @@ from logging import getLogger
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from rxon.schema import validate_data
+
 from .scheduler_config_loader import ScheduledJobConfig, load_schedules_from_file
 
 if TYPE_CHECKING:
@@ -133,8 +135,6 @@ class Scheduler:
             contract = self.engine.blueprint_contracts.get(job.blueprint, {})
             input_schema = contract.get("input_schema")
             if input_schema:
-                from rxon.schema import validate_data
-
                 is_valid, error_msg = validate_data(job.input_data, input_schema)
                 if not is_valid:
                     logger.error(

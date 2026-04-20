@@ -11,6 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
+from . import metrics
 from .storage.base import StorageBackend
 
 Handler = Callable[[web.Request], Awaitable[web.Response]]
@@ -44,8 +45,6 @@ def rate_limit_middleware_factory(
         with suppress(Exception):
             count = await storage.increment_key_with_ttl(rate_limit_key, period)
             if count > limit:
-                from . import metrics
-
                 metrics.ratelimit_blocked_total.inc({"identifier": key_identifier, "path": request.path})
                 return web.json_response({"error": "Too Many Requests"}, status=429)
         return await handler(request)

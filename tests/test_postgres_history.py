@@ -27,7 +27,6 @@ async def postgres_storage(mocker):
     mock_pool = MagicMock()
     mock_pool.close = AsyncMock()
     mock_conn = AsyncMock()
-    # Setup acquire context manager
     mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
     mock_pool.acquire.return_value.__aexit__.return_value = None
 

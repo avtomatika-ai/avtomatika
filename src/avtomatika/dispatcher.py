@@ -7,7 +7,13 @@
 
 from collections import defaultdict
 from logging import getLogger
+from time import time
 from typing import Any
+
+from rxon.constants import WORKER_STATUS_DRAINING
+from rxon.models import InstalledArtifact, Resources, SkillInfo, TaskPayload
+from rxon.schema import validate_data
+from rxon.utils import from_dict, to_dict
 
 try:
     from opentelemetry.propagate import inject
@@ -17,6 +23,7 @@ except ImportError:
         pass
 
 
+from . import metrics
 from .config import Config
 from .storage.base import StorageBackend
 
@@ -37,11 +44,8 @@ class Dispatcher:
 
     async def _get_workers_cached(self, worker_ids: list[str]) -> list[dict[str, Any]]:
         """Gets worker info from memory cache or Redis."""
-        import time
+        now = time()
 
-        now = time.time()
-
-        # 1. Identify what's missing or expired in cache
         to_fetch_ids = []
         result_map = {}
 
@@ -55,15 +59,12 @@ class Dispatcher:
             to_fetch_ids.append(wid)
 
         if to_fetch_ids:
-            # 2. Fetch missing from Redis
             fetched = await self.storage.get_workers(to_fetch_ids)
-            # 3. Update cache
             for w in fetched:
                 wid = w["worker_id"]
                 self._worker_cache[wid] = (now + self._worker_cache_ttl, w)
                 result_map[wid] = w
 
-        # 4. Periodically clean up cache
         if len(self._worker_cache) > 5000:
             expired_keys = [k for k, v in self._worker_cache.items() if now > v[0]]
             for k in expired_keys:
@@ -85,10 +86,9 @@ class Dispatcher:
         parsed_artifacts: list[Any] | None = None,
     ) -> tuple[bool, str | None]:
         """Checks if a worker meets requirements using standardized RXON matching."""
-        from rxon.models import InstalledArtifact, Resources
-        from rxon.utils import from_dict
+        if worker.get("status") == WORKER_STATUS_DRAINING:
+            return False, "worker_is_draining"
 
-        # 1. Check Resources (CPU, RAM, GPU, etc.)
         if parsed_resources is not None:
             worker_res_dict = worker.get("resources")
             if not worker_res_dict:
@@ -99,16 +99,14 @@ class Dispatcher:
             if not worker_resources.matches(parsed_resources):
                 return False, "resource_mismatch"
 
-        # 2. Check Installed Artifacts (Models, Datasets)
         if parsed_artifacts is not None:
             worker_artifacts_raw = worker.get("installed_artifacts", [])
-            worker_artifacts = [from_dict(InstalledArtifact, a) for i, a in enumerate(worker_artifacts_raw or [])]
+            worker_artifacts = [from_dict(InstalledArtifact, a) for a in (worker_artifacts_raw or [])]
 
             for req_art in parsed_artifacts:
                 if not any(wa.matches(req_art) for wa in worker_artifacts):
                     return False, f"missing_artifact: {req_art.name}"
 
-        # 3. Check Installed Software (Environment)
         if required_software := requirements.get("installed_software"):
             worker_sw = worker.get("installed_software", {}) or {}
             for sw_name, sw_version in required_software.items():
@@ -117,49 +115,73 @@ class Dispatcher:
                 if sw_version != "any" and worker_sw[sw_name] != sw_version:
                     return False, f"software_version_mismatch: {sw_name} ({worker_sw[sw_name]} != {sw_version})"
 
-        # 4. Flexible Skill Parameter Checks
         if task_type:
-            target_skill = None
+            target_skill_data = None
             for skill in worker.get("supported_skills", []):
-                if isinstance(skill, dict) and (skill.get("name") == task_type or skill.get("type") == task_type):
-                    target_skill = skill
+                # Strictly use 'name' as per RXON b8 standard. No 'type' fallback.
+                if isinstance(skill, dict) and skill.get("name") == task_type:
+                    target_skill_data = skill
                     break
 
-            if not target_skill:
+            if not target_skill_data:
                 return False, f"skill_not_found: {task_type}"
+
+            target_skill = from_dict(SkillInfo, target_skill_data)
+
+            skill_version = requirements.get("skill_version") or "1.0.0"
+
+            # Check version/type compatibility using strict RXON b10 SkillInfo.matches
+            req_skill = SkillInfo(
+                name=task_type,
+                version=skill_version,
+                type=requirements.get("skill_type"),
+            )
+
+            # Relaxed matching for backward compatibility: if worker has no version, ignore version check
+            is_match = target_skill.matches(req_skill)
+            if not is_match and not target_skill.version:
+                # If target_skill has no version, we only check the name (which is already done) and type
+                is_match = target_skill.name == req_skill.name and (
+                    not req_skill.type or target_skill.type == req_skill.type
+                )
+
+            if not is_match:
+                return (
+                    False,
+                    f"skill_contract_mismatch: {task_type} "
+                    f"(expected version {req_skill.version}, type {req_skill.type})",
+                )
 
             # Check explicit skill parameter requirements
             if skill_reqs := requirements.get("skill"):
+                my_props = target_skill.properties or {}
                 for field, expected_value in skill_reqs.items():
-                    actual_value = target_skill.get(field)
+                    # Check both direct fields and properties
+                    actual_value = getattr(target_skill, field, None)
+                    if actual_value is None:
+                        actual_value = my_props.get(field)
+
                     if actual_value != expected_value:
                         return False, f"skill_param_mismatch: {field} (expected {expected_value}, got {actual_value})"
 
             # Check if current params match worker's input_schema
-            if params_to_check := requirements.get("params"):
-                input_schema = target_skill.get("input_schema")
-                if input_schema:
-                    from rxon.schema import validate_data
-
-                    is_valid, error_msg = validate_data(params_to_check, input_schema)
-                    if not is_valid:
-                        return False, f"schema_validation_failed: {error_msg}"
+            if (params_to_check := requirements.get("params")) and target_skill.input_schema:
+                is_valid, error_msg = validate_data(params_to_check, target_skill.input_schema)
+                if not is_valid:
+                    return False, f"schema_validation_failed: {error_msg}"
 
             # Check if worker supports all required output statuses
-            if transitions := requirements.get("transitions"):
-                worker_statuses = target_skill.get("output_statuses")
-                if worker_statuses:
-                    # Ignore standard statuses
-                    STANDARD_STATUSES = {"success", "failure", "cancelled"}
-                    required_custom = {s for s in transitions if s not in STANDARD_STATUSES}
+            if (transitions := requirements.get("transitions")) and target_skill.output_statuses:
+                # Ignore standard statuses
+                STANDARD_STATUSES = {"success", "failure", "cancelled"}
+                required_custom = {s for s in transitions if s not in STANDARD_STATUSES}
 
-                    if required_custom:
-                        supported_set = set(worker_statuses)
-                        missing = required_custom - supported_set
-                        if missing:
-                            return False, f"unsupported_output_statuses: {sorted(missing)}"
+                if required_custom:
+                    supported_set = set(target_skill.output_statuses)
+                    missing = required_custom - supported_set
+                    if missing:
+                        return False, f"unsupported_output_statuses: {sorted(missing)}"
 
-        # 5. Custom 'extra' capabilities match
         if extra_reqs := requirements.get("extra_requirements"):
             worker_extra = worker.get("capabilities", {}).get("extra", {})
             for key, req_value in extra_reqs.items():
@@ -177,14 +199,16 @@ class Dispatcher:
         """Default strategy: selects "warm" workers (those that have the
         task in their hot_skills or hot_cache), and then selects the cheapest among them.
         """
-        # 1. Prioritize Hot Skills (Strictly objects)
         hot_skill_workers = [
             w
             for w in workers
-            if any(hs.get("name") == task_type or hs.get("type") == task_type for hs in (w.get("hot_skills") or []))
+            if any(
+                (hs.get("name") if isinstance(hs, dict) else hs) == task_type
+                or (hs.get("type") if isinstance(hs, dict) else None) == task_type
+                for hs in (w.get("hot_skills") or [])
+            )
         ]
 
-        # 2. Then Hot Cache
         hot_cache_workers = [w for w in workers if any(hc == task_type for hc in w.get("hot_cache", []))]
 
         target_pool = hot_skill_workers or hot_cache_workers or workers
@@ -311,9 +335,16 @@ class Dispatcher:
         if "transitions" not in resource_requirements:
             resource_requirements["transitions"] = task_info.get("transitions") or {}
 
+        # Add skill version and type to requirements so _check_worker_compliance can find them
+        # Beta 10: Fallback to job_state if missing in task_info
+        resource_requirements["skill_version"] = task_info.get("skill_version") or job_state.get("skill_version")
+        resource_requirements["skill_type"] = task_info.get("skill_type") or job_state.get("skill_type")
+
         # Hot Cache and Hot Skill awareness
         params = task_info.get("params") or {}
-        resource_hint = params.get("resource_hint") or params.get("model_name")
+        resource_hint = task_info.get("resource_hint")
+        if not resource_hint and isinstance(params, dict):
+            resource_hint = params.get("resource_hint") or params.get("model_name")
         capable_workers = []
 
         hot_skill_ids = await self.storage.find_workers_by_hot_skill(task_type)
@@ -321,8 +352,6 @@ class Dispatcher:
             logger.info(f"HLN: Found {len(hot_skill_ids)} HOT workers for skill '{task_type}'.")
             capable_workers = await self._get_workers_cached(hot_skill_ids)
             if capable_workers:
-                from . import metrics
-
                 metrics.tasks_hot_dispatched_total.inc(
                     {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"}
                 )
@@ -333,8 +362,6 @@ class Dispatcher:
                 capable_workers = await self._get_workers_cached(hot_ids)
                 if capable_workers:
                     logger.info(f"HLN: Found {len(hot_ids)} HOT workers with resource '{resource_hint}' loaded.")
-                    from . import metrics
-
                     metrics.tasks_hot_dispatched_total.inc(
                         {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_cache"}
                     )
@@ -344,12 +371,13 @@ class Dispatcher:
             if not candidate_ids:
                 logger.warning(f"No idle workers found for task '{task_type}'")
                 raise RuntimeError(f"No suitable workers for task type '{task_type}'")
+
             capable_workers = await self._get_workers_cached(candidate_ids)
-
-        logger.debug(f"Found {len(capable_workers)} capable workers for task '{task_type}'")
-
-        if not capable_workers:
-            raise RuntimeError(f"No suitable workers for task type '{task_type}' (data missing)")
+            if not capable_workers:
+                # Beta 21 Resilience: If IDs are in index but data is missing,
+                # it's a stale index. We just treat it as "no workers" and let it retry.
+                logger.debug(f"HLN: Stale index detected for '{task_type}'. IDs {candidate_ids} have no data.")
+                raise RuntimeError(f"No suitable workers for task type '{task_type}'")
 
         if resource_requirements:
             compliant_workers = []
@@ -364,16 +392,14 @@ class Dispatcher:
             # Pre-parse requirements to avoid O(N) parsing overhead
             parsed_resources = None
             if req_res_dict := resource_requirements.get("resources"):
-                from rxon.models import Resources
-                from rxon.utils import from_dict
+                # Ensure it has properties if it came from flat structure
+                if "properties" not in req_res_dict and ("cpu_cores" in req_res_dict or "ram_gb" in req_res_dict):
+                    req_res_dict = {"properties": req_res_dict}
 
                 parsed_resources = from_dict(Resources, req_res_dict)
 
             parsed_artifacts = None
             if required_artifacts := resource_requirements.get("installed_artifacts"):
-                from rxon.models import InstalledArtifact
-                from rxon.utils import from_dict
-
                 parsed_artifacts = []
                 for req_raw in required_artifacts:
                     if isinstance(req_raw, str):
@@ -480,19 +506,21 @@ class Dispatcher:
         # We prefer result_deadline if set, otherwise we don't send it (worker will use its local timeout)
         deadline = job_state.get("result_deadline")
 
-        payload = {
-            "job_id": job_id,
-            "task_id": task_id,
-            "type": task_type,
-            "params": task_params,
-            "tracing_context": {},
-            "params_metadata": filtered_metadata if filtered_metadata else None,
-            "priority": priority,
-            "deadline": deadline,
-            "security": job_state.get("security"),
-            "metadata": job_state.get("metadata"),
-        }
-        inject(payload["tracing_context"], context=job_state.get("tracing_context"))
+        payload_obj = TaskPayload(
+            job_id=job_id,
+            task_id=task_id,
+            type=task_type,
+            params=task_params,
+            tracing_context={},
+            params_metadata=filtered_metadata if filtered_metadata else None,
+            priority=priority,
+            deadline=deadline,
+            security=job_state.get("security"),
+            metadata=job_state.get("metadata"),
+            timestamp=time(),
+        )
+        inject(payload_obj.tracing_context, context=job_state.get("tracing_context"))
+        payload = to_dict(payload_obj)
 
         try:
             await self.storage.enqueue_task_for_worker(worker_id, payload, priority)
