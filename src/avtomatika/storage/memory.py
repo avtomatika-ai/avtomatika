@@ -43,7 +43,6 @@ class MemoryStorage(StorageBackend):
             return self._jobs.get(job_id)
 
     async def _clean_expired(self) -> None:
-        """Helper to remove expired keys."""
         now = monotonic()
 
         expired_generic = [k for k, t in self._generic_key_ttls.items() if t < now]
@@ -92,7 +91,6 @@ class MemoryStorage(StorageBackend):
         worker_info: dict[str, Any],
         ttl: int,
     ) -> None:
-        """Registers a worker and creates a task queue for it."""
         async with self._lock:
             worker_info.setdefault("reputation", 1.0)
             self._workers[worker_id] = worker_info
@@ -106,7 +104,6 @@ class MemoryStorage(StorageBackend):
         task_payload: dict[str, Any],
         priority: float,
     ) -> None:
-        """Puts a task on the priority queue for a worker."""
         async with self._lock:
             if worker_id not in self._worker_task_queues:
                 self._worker_task_queues[worker_id] = PriorityQueue()
@@ -118,7 +115,6 @@ class MemoryStorage(StorageBackend):
         worker_id: str,
         timeout: int,
     ) -> dict[str, Any] | None:
-        """Retrieves a task from the worker's priority queue with a timeout."""
         queue = None
         async with self._lock:
             if worker_id not in self._worker_task_queues:

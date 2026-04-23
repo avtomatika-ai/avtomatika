@@ -8,10 +8,8 @@
 from aioprometheus import Counter, Gauge, Summary
 from aioprometheus.collectors import REGISTRY
 
-# Constants for labels
 LABEL_BLUEPRINT = "blueprint"
 
-# Global variables for metrics
 jobs_total: Counter
 jobs_failed_total: Counter
 job_duration_seconds: Summary

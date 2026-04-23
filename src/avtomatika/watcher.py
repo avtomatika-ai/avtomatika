@@ -40,7 +40,6 @@ class Watcher:
 
         while self._running:
             try:
-                # Attempt to acquire distributed lock
                 if await self.storage.acquire_lock("global_watcher_lock", self._instance_id, 60):
                     try:
                         logger.debug("Watcher running check for timed out jobs...")
@@ -65,7 +64,7 @@ class Watcher:
                     finally:
                         await self.storage.release_lock("global_watcher_lock", self._instance_id)
 
-                backoff_delay = self.watch_interval_seconds  # Reset on success
+                backoff_delay = self.watch_interval_seconds
 
             except CancelledError:
                 logger.info("Watcher received cancellation request.")

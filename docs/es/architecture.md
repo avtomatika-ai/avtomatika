@@ -23,7 +23,7 @@ Avtomatika está optimizado para un rendimiento máximo y una latencia mínima:
     *   **Webhooks**: Se envían a través de un pool de workers paralelo.
 
 2.  **Protocolos y Algoritmos Estandarizados**:
-    *   **Smart Matching Unificado (RXON v1.0b7)**: Uso de la lógica formalizada del protocolo para la selección de workers. Soporte **GE (Greater or Equal)** para cualquier propiedad numérica (VRAM, RAM, CPU).
+    *   **Smart Matching Unificado (RXON)**: Uso de la lógica formalizada del protocolo para la selección de workers. Soporte **GE (Greater or Equal)** para cualquier propiedad numérica (VRAM, RAM, CPU).
     *   **Normalización Profunda (Beta 20 Fix)**: La capa de almacenamiento implementa el desempaquetado recursivo de Msgpack para eliminar artefactos de Redis Lua, garantizando el 100% de integridad de los datos.
     *   **Work Stealing**: Los workers inactivos pueden "robar" tareas de forma atómica de colegas sobrecargados en tiempo O(1).
 
@@ -46,6 +46,3 @@ Router inteligente que empareja los requisitos de las tareas con los recursos de
 ### 3. `StorageBackend`
 *   **RedisStorage**: Almacenamiento principal de alto rendimiento para colas de tareas y estados.
 *   **HistoryStorage**: Capa de archivo (PostgreSQL/SQLite) para auditoría e historial de eventos.
-
----
-*Documentación actualizada para la versión v1.0b7.*

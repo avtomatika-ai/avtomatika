@@ -232,7 +232,6 @@ class OrchestratorEngine:
             raise web.HTTPInternalServerError(text="WorkerService is not initialized.")
 
         if message_type == "register":
-            # Protocol Version Check
             worker_version = context.get("protocol_version")
             warning = None
             if worker_version and worker_version != PROTOCOL_VERSION:
@@ -314,8 +313,14 @@ class OrchestratorEngine:
             )
 
         if self.config.WORKERS_CONFIG_PATH:
-            if exists(self.config.WORKERS_CONFIG_PATH):
-                await load_worker_configs_to_redis(self.storage, self.config.WORKERS_CONFIG_PATH)
+            if self.config.WORKERS_CONFIG_PATH:
+                await load_worker_configs_to_redis(
+                    self.storage,
+                    self.config.WORKERS_CONFIG_PATH,
+                    self.config.WORKER_AUTH_MODE,
+                    self.config.REDIS_ENCRYPTION_KEY,
+                )
+
             else:
                 logger.warning(
                     f"WORKERS_CONFIG_PATH is set to '{self.config.WORKERS_CONFIG_PATH}', but the file was not found."

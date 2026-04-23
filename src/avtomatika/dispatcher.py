@@ -43,7 +43,6 @@ class Dispatcher:
         self._worker_cache_ttl = 2.0
 
     async def _get_workers_cached(self, worker_ids: list[str]) -> list[dict[str, Any]]:
-        """Gets worker info from memory cache or Redis."""
         now = time()
 
         to_fetch_ids = []
@@ -69,7 +68,6 @@ class Dispatcher:
             expired_keys = [k for k, v in self._worker_cache.items() if now > v[0]]
             for k in expired_keys:
                 del self._worker_cache[k]
-            # If still over limit, clear half of the cache (LRU-like simple approach)
             if len(self._worker_cache) > 5000:
                 keys_to_del = list(self._worker_cache.keys())[:2500]
                 for k in keys_to_del:

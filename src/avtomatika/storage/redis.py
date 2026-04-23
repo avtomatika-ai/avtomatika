@@ -150,7 +150,6 @@ class RedisStorage(StorageBackend):
             except NoScriptError:
                 pass
 
-        # Load and cache
         sha = await self._redis.script_load(script)
         self._lua_shas[script] = sha
         return await self._redis.evalsha(sha, num_keys, *args)

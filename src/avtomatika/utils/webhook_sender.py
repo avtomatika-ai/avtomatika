@@ -45,7 +45,6 @@ class WebhookSender:
 
     async def stop(self) -> None:
         if self._worker_tasks:
-            # Wait for the queue to be processed before stopping
             if not self._queue.empty():
                 logger.info(f"WebhookSender stopping, waiting for {self._queue.qsize()} webhooks to be sent...")
                 await self._queue.join()

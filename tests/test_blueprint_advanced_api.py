@@ -89,7 +89,7 @@ def test_static_analysis_with_inferred_names():
     # validate() triggers _analyze_handlers and validate_integrity which uses _get_all_transitions
     bp.validate()
 
-    transitions = bp._get_all_transitions()
+    transitions, _ = bp._get_all_transitions()
     assert transitions["start"] == {"middle"}
     assert transitions["middle"] == {"end"}
 

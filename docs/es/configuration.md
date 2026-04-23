@@ -137,6 +137,7 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 | `INSTANCE_ID` | Identificador único para esta instancia del Orquestador. | `hostname` |
 | `CLIENT_TOKEN` | Token global para clientes API (respaldo). | `secure-orchestrator-token` |
 | `GLOBAL_WORKER_TOKEN` | Token global para workers (respaldo). | `secure-worker-token` |
+| `CLIENT_API_PREFIX` | **Ruta de API configurable:** Segmento de URL para la API de Cliente. Si está vacío, la API estará en la raíz. | `api` |
 | `WORKERS_CONFIG_PATH` | Ruta a `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Ruta a `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Ruta a `schedules.toml`. | `""` |
@@ -162,6 +163,7 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 | `HISTORY_DATABASE_URI` | URI para el almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` |
 | `RATE_LIMITING_ENABLED` | Habilitar middleware de límite de tasa. | `true` |
 | `MAX_TRANSITIONS_PER_JOB` | **Protección de Bucle Infinito:** Límite de transiciones por trabajo. | `100` |
+| `WORKER_AUTH_MODE` | **Modo de autenticación:** `mixed` (tokens+mTLS), `mtls-only` (mTLS estricto + STS), `token-only`. | `mixed` |
 
 ### Seguridad y TLS (mTLS)
 
@@ -172,6 +174,7 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 | `TLS_KEY_PATH` | Ruta a la clave privada del servidor (`.key`). | `""` |
 | `TLS_CA_PATH` | Ruta al paquete CA para verificar certificados de cliente. | `""` |
 | `TLS_REQUIRE_CLIENT_CERT` | Si es `true`, el servidor rechazará conexiones sin certificado válido (mTLS). | `false` |
+| `REDIS_ENCRYPTION_KEY` | **Cifrado de Sobres:** Si se proporciona, los tokens de worker se cifran en Redis (AES-GCM). | `""` |
 
 ### Almacenamiento S3 (Opcional)
 

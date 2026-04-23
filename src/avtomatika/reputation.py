@@ -37,7 +37,6 @@ class ReputationCalculator:
         self._running = True
         while self._running:
             try:
-                # Attempt to acquire lock
                 if await self.storage.acquire_lock("global_reputation_lock", self._instance_id, 300):
                     try:
                         await self.calculate_all_reputations()
@@ -93,11 +92,9 @@ class ReputationCalculator:
                 since_days=REPUTATION_HISTORY_DAYS,
             )
 
-            # Count only task completion events
             task_finished_events = [event for event in history if event.get("event_type") == "task_finished"]
 
             if not task_finished_events:
-                # If there is no history, skip to next worker
                 return
 
             worker_info = await self.storage.get_worker_info(worker_id)

@@ -154,6 +154,7 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `INSTANCE_ID` | **Important for Scaling:** Unique identifier for this Orchestrator instance. Used as consumer name in Redis Streams. Defaults to hostname if not set. | `hostname` |
 | `CLIENT_TOKEN` | Global token for API clients (fallback if `clients.toml` not used). | `secure-orchestrator-token` |
 | `GLOBAL_WORKER_TOKEN` | Global token for workers (fallback if `workers.toml` not used). | `secure-worker-token` |
+| `CLIENT_API_PREFIX` | **Configurable API path:** The segment of the URL for the Client API. If set to empty, API will be at root. | `api` |
 | `WORKERS_CONFIG_PATH` | Path to `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Path to `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Path to `schedules.toml`. | `""` |
@@ -183,6 +184,7 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `RATE_LIMIT_HEARTBEAT_LIMIT` | Specific limit for worker heartbeat requests per period. | `120` |
 | `RATE_LIMIT_POLL_LIMIT` | Specific limit for worker task poll requests per period. | `60` |
 | `MAX_TRANSITIONS_PER_JOB` | **Infinite Loop Protection:** Maximum number of state transitions allowed for a single job before it is terminated. | `100` |
+| `WORKER_AUTH_MODE` | **Authentication mode:** `mixed` (tokens+mTLS), `mtls-only` (strict mTLS + STS tokens), or `token-only`. | `mixed` |
 
 ### Security & TLS (mTLS)
 
@@ -195,6 +197,7 @@ Configure these variables to enable HTTPS and Mutual TLS (Zero Trust).
 | `TLS_KEY_PATH` | Path to the server's private key (`.key`). Required if TLS enabled. | `""` |
 | `TLS_CA_PATH` | Path to the CA certificate bundle to verify client certificates. | `""` |
 | `TLS_REQUIRE_CLIENT_CERT` | If `true`, the server will reject connections without a valid client certificate (mTLS). | `false` |
+| `REDIS_ENCRYPTION_KEY` | **Envelope Encryption:** If provided, static worker tokens are stored encrypted in Redis (AES-GCM). | `""` |
 
 ### S3 Storage (Optional)
 

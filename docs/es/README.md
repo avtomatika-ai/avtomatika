@@ -212,7 +212,7 @@ async def publish_video(
 
 Avtomatika está diseñada para entornos de alta carga con miles de workers concurrentes.
 
-*   **Smart Matching Unificado (RXON v1.0b7)**:
+*   **Smart Matching Unificado (RXON)**:
     *   **Matching Unificado**: Migración a la lógica de selección formalizada de `rxon`. Todos los recursos (CPU, RAM, GPU, etc.) se rigen estrictamente por el estándar del protocolo HLN.
     *   **Comparación Numérica Inteligente**: Realiza automáticamente verificaciones **GE (Mayor o Igual)** para números.
     *   **Hot Cache y Skills**: Prioriza workers que ya tienen modelos de IA específicos cargados.
@@ -344,6 +344,11 @@ Para más detalles, consulta la [**Guía de Configuración**](https://github.com
 
 *   **Structured JSON Logging**: Vía `QueueHandler` no bloqueante.
 *   **Métricas**: En `/_public/metrics`, con prefijo `orchestrator_` y `orchestrator_loop_lag_seconds`.
+
+### Seguridad y Protección de Datos
+*   **Envelope Encryption**: Si se establece `REDIS_ENCRYPTION_KEY`, los tokens de worker se cifran en Redis (AES-GCM).
+*   **Modos de Autenticación**: Soporte para `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
+*   **Prefijo de API Configurable**: La API de cliente se puede mover o ocultar vía `CLIENT_API_PREFIX`.
 
 ### Capa de Almacenamiento
 

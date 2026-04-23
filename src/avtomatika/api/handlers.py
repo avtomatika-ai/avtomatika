@@ -61,7 +61,6 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
 
         client_config = request["client_config"]
 
-        # Validate initial_data against blueprint's input_schema
         contract = engine.blueprint_contracts.get(blueprint.name, {})
         input_schema = contract.get("input_schema")
         if input_schema:
@@ -91,7 +90,6 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
         }
         await engine.storage.save_job_state(job_id, job_state)
 
-        # Log creation to history
         await engine.history_storage.log_job_event(
             {
                 "job_id": job_id,
@@ -388,7 +386,12 @@ async def reload_worker_configs_handler(request: web.Request) -> web.Response:
             status=400,
         )
 
-    await load_worker_configs_to_redis(engine.storage, engine.config.WORKERS_CONFIG_PATH)
+    await load_worker_configs_to_redis(
+        engine.storage,
+        engine.config.WORKERS_CONFIG_PATH,
+        engine.config.WORKER_AUTH_MODE,
+        engine.config.REDIS_ENCRYPTION_KEY,
+    )
     return json_response({"status": "worker_configs_reloaded"})
 
 

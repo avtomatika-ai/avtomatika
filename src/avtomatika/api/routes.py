@@ -5,7 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
@@ -39,6 +39,8 @@ if TYPE_CHECKING:
 
 def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     """Sets up application routes for Public and Client APIs."""
+    client_prefix = engine.config.CLIENT_API_PREFIX.strip("/")
+    client_prefix_str = f"/{client_prefix}" if client_prefix else ""
 
     public_app = web.Application()
     public_app[ENGINE_KEY] = engine
@@ -48,6 +50,7 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     public_app.router.add_post("/debug/flush_db", flush_db_handler)
     public_app.router.add_get("/docs", docs_handler)
     public_app.router.add_get("/jobs/quarantined", get_quarantined_jobs_handler)
+
     app.add_subapp("/_public/", public_app)
 
     if engine.config.ENABLE_CLIENT_API:
@@ -84,24 +87,64 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
             _register_common_routes(sub_app, engine)
 
         if has_unversioned_routes:
-            app.add_subapp("/api/", protected_app)
+            if client_prefix_str:
+                app.add_subapp(f"{client_prefix_str}/", protected_app)
+            else:
+                # If client API is at root, we must apply middlewares to each route individually
+                # to avoid affecting /_public/ or /_worker/
+                def wrap(h: Any) -> Any:
+                    async def wrapped_handler(request: web.Request) -> web.Response:
+                        # Manually chain middlewares for this specific handler
+                        current_h = h
+                        for mw in reversed(api_middlewares):
+                            # Create a closure for the next step in the chain
+                            next_h = current_h
+
+                            async def next_step(req: web.Request, nh: Any = next_h, m: Any = mw) -> web.Response:
+                                return await m(req, nh)
+
+                            current_h = next_step
+
+                        return await current_h(request)
+
+                    return wrapped_handler
+
+                _register_common_routes(app, engine, wrap_func=wrap)
+
+                # Register blueprint routes with middleware
+                for bp in engine.blueprints.values():
+                    if not bp.api_endpoint or bp.api_version:
+                        continue
+                    endpoint = bp.api_endpoint if bp.api_endpoint.startswith("/") else f"/{bp.api_endpoint}"
+                    app.router.add_post(endpoint, wrap(create_job_handler_factory(bp)))
+
         for version, sub_app in versioned_apps.items():
-            app.add_subapp(f"/api/{version}", sub_app)
+            version_prefix = f"/{version}" if version else ""
+            app.add_subapp(f"{client_prefix_str}{version_prefix}", sub_app)
 
 
-def _register_common_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
-    app.router.add_get("/jobs/{job_id}", get_job_status_handler)
-    app.router.add_post("/jobs/{job_id}/cancel", cancel_job_handler)
-    app.router.add_get("/jobs/{job_id}/files/upload", get_job_file_upload_handler)
-    app.router.add_put("/jobs/{job_id}/files/content/{filename}", stream_job_file_upload_handler)
-    app.router.add_get("/jobs/{job_id}/files/download/{filename}", get_job_file_download_handler)
+def _register_common_routes(
+    app: web.Application,
+    engine: "OrchestratorEngine",
+    wrap_func: Any = None,
+) -> None:
+    def add(method: str, path: str, handler: Any) -> None:
+        if wrap_func:
+            handler = wrap_func(handler)
+        app.router.add_route(method, path, handler)
+
+    add("GET", "/jobs/{job_id}", get_job_status_handler)
+    add("POST", "/jobs/{job_id}/cancel", cancel_job_handler)
+    add("GET", "/jobs/{job_id}/files/upload", get_job_file_upload_handler)
+    add("PUT", "/jobs/{job_id}/files/content/{filename}", stream_job_file_upload_handler)
+    add("GET", "/jobs/{job_id}/files/download/{filename}", get_job_file_download_handler)
 
     # Always register history route; the handler itself will handle NoOp state
-    app.router.add_get("/jobs/{job_id}/history", get_job_history_handler)
+    add("GET", "/jobs/{job_id}/history", get_job_history_handler)
 
-    app.router.add_get("/blueprints/{blueprint_name}/graph", get_blueprint_graph_handler)
-    app.router.add_get("/workers", get_workers_handler)
-    app.router.add_get("/workers/catalog", get_dashboard_handler)  # Placeholder, will create actual handler
-    app.router.add_get("/jobs", get_jobs_handler)
-    app.router.add_get("/dashboard", get_dashboard_handler)
-    app.router.add_post("/admin/reload-workers", reload_worker_configs_handler)
+    add("GET", "/blueprints/{blueprint_name}/graph", get_blueprint_graph_handler)
+    add("GET", "/workers", get_workers_handler)
+    add("GET", "/workers/catalog", get_dashboard_handler)  # Placeholder
+    add("GET", "/jobs", get_jobs_handler)
+    add("GET", "/dashboard", get_dashboard_handler)
+    add("POST", "/admin/reload-workers", reload_worker_configs_handler)

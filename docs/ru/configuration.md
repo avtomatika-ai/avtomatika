@@ -154,6 +154,7 @@ input_data = { compression = "max" }
 | `INSTANCE_ID` | Уникальный ID экземпляра. Используется как имя потребителя в Redis Streams. | `hostname` |
 | `CLIENT_TOKEN` | Глобальный токен для API-клиентов (резервный). | `secure-orchestrator-token` |
 | `GLOBAL_WORKER_TOKEN` | Глобальный токен для воркеров (резервный). | `secure-worker-token` |
+| `CLIENT_API_PREFIX` | **Настраиваемый путь API:** Сегмент URL для клиентского API. Если пуст, API будет в корне. | `api` |
 | `WORKERS_CONFIG_PATH` | Путь к `workers.toml`. | `""` |
 | `CLIENTS_CONFIG_PATH` | Путь к `clients.toml`. | `""` |
 | `SCHEDULES_CONFIG_PATH` | Путь к `schedules.toml`. | `""` |
@@ -179,6 +180,7 @@ input_data = { compression = "max" }
 | `HISTORY_DATABASE_URI` | URI хранилища истории (`sqlite:///...` или `postgresql://...`). | `""` (Отключено) |
 | `RATE_LIMITING_ENABLED` | Включить ограничение частоты запросов. | `true` |
 | `MAX_TRANSITIONS_PER_JOB` | Защита от бесконечных циклов в блупринтах. | `100` |
+| `WORKER_AUTH_MODE` | **Режим аутентификации:** `mixed` (токены+mTLS), `mtls-only` (строгий mTLS + STS), `token-only`. | `mixed` |
 
 ### Безопасность и TLS (mTLS)
 
@@ -189,6 +191,7 @@ input_data = { compression = "max" }
 | `TLS_KEY_PATH` | Путь к приватному ключу сервера (`.key`). | `""` |
 | `TLS_CA_PATH` | Путь к CA бандлу для проверки сертификатов клиентов. | `""` |
 | `TLS_REQUIRE_CLIENT_CERT` | Если `true`, сервер будет требовать валидный сертификат (mTLS). | `false` |
+| `REDIS_ENCRYPTION_KEY` | **Шифрование в Redis:** Если задан, токены воркеров шифруются (AES-GCM). | `""` |
 
 ### S3 Хранилище (Опционально)
 

@@ -57,6 +57,7 @@ from avtomatika.constants import (
 from avtomatika.executor import TERMINAL_STATES
 from avtomatika.history.base import HistoryStorageBase
 from avtomatika.storage.base import StorageBackend
+from avtomatika.utils.crypto import decrypt_token
 from avtomatika.utils.webhook_sender import WebhookPayload
 
 logger = getLogger(__name__)
@@ -102,7 +103,16 @@ class WorkerService:
             raise PermissionError("Missing required timestamp for replay protection")
 
         if secret is None:
-            secret = await self.storage.get_worker_token(worker_id) or getattr(self.config, "GLOBAL_WORKER_TOKEN", "")
+            secret = await self.storage.get_worker_token(worker_id)
+            # Decrypt if encryption is enabled
+            if secret and self.config.REDIS_ENCRYPTION_KEY and self.config.encrypt_worker_tokens:
+                decrypted = decrypt_token(secret, self.config.REDIS_ENCRYPTION_KEY)
+                if decrypted is None:
+                    raise PermissionError("Unauthorized: Failed to decrypt worker token. Key might be invalid.")
+                secret = decrypted
+
+            if not secret:
+                secret = getattr(self.config, "GLOBAL_WORKER_TOKEN", "")
 
         security_raw = payload.get("security")
         if not security_raw:
@@ -154,13 +164,10 @@ class WorkerService:
             logger.critical(f"SPOOFING DETECTED: Worker {authenticated_worker_id} tried to register as {worker_id}")
             raise PermissionError("Immediate sender ID mismatch")
 
-        # Zero Trust Verification
         await self._verify_zero_trust(worker_data, worker_id, secret=None)
 
-        # Ensure worker meets the protocol registration requirements
         try:
             validated_reg = from_dict(WorkerRegistration, worker_data)
-            # Re-serialize to dict to ensure standard structure and types in storage
             worker_data = to_dict(validated_reg)
         except (AttributeError, TypeError, ValueError) as e:
             logger.error(f"Worker registration failed validation: {e}")
@@ -170,7 +177,6 @@ class WorkerService:
 
         validate_identifier(worker_id, "worker_id")
 
-        # S3 Consistency Check
         s3_service = self.engine.app.get(S3_SERVICE_KEY)
         if s3_service:
             orchestrator_s3_hash = s3_service.get_config_hash()

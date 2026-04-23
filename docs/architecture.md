@@ -75,7 +75,7 @@ Avtomatika is optimized for maximum throughput and low latency:
 
 ## Blob Storage Architecture
 
-As of v1.0b22, S3 integration is refactored into a pluggable **BlobProvider** system:
+S3 integration is refactored into a pluggable **BlobProvider** system:
 - **Provider Interface**: Defines standard operations like `upload`, `download`, `get_metadata`, and `sign`.
 - **Obstore Implementation**: Uses the Rust-based `obstore` library for high-speed, multi-threaded S3 interactions.
 - **Task Isolation**: Each job has a dedicated S3 prefix and local temporary directory managed by the `TaskFiles` helper.

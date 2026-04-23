@@ -264,7 +264,7 @@ class Blueprint:
 
     def validate_integrity(self) -> None:
         """Checks for dangling transitions and unreachable states."""
-        transitions = self._get_all_transitions()
+        transitions, parse_errors = self._get_all_transitions()
         defined_states = (
             set(self.handlers.keys())
             | set(self.aggregator_handlers.keys())
@@ -291,14 +291,26 @@ class Blueprint:
 
             unreachable = defined_states - reachable
             if unreachable:
-                raise ValueError(
+                msg = (
                     f"Blueprint '{self.name}' has unreachable states: {', '.join(unreachable)}. "
                     "All states must be reachable from the start state."
                 )
+                # If we had parse errors, we can't be sure the graph is complete.
+                # In this case, we only warn. Otherwise, we raise a fatal error.
+                if parse_errors > 0:
+                    logger.warning(
+                        f"{msg} (Validation was based on incomplete data due to {parse_errors} parse errors)"
+                    )
+                else:
+                    raise ValueError(msg)
 
-    def _get_all_transitions(self) -> dict[str, set[str]]:
-        """Parses handler source code to find all possible transitions."""
+    def _get_all_transitions(self) -> tuple[dict[str, set[str]], int]:
+        """
+        Parses handler source code to find all possible transitions.
+        Returns a tuple of (transitions_map, parse_error_count).
+        """
         transitions: dict[str, set[str]] = {}
+        parse_errors = 0
 
         all_handlers = (
             list(self.handlers.items())
@@ -338,9 +350,10 @@ class Blueprint:
                                 transitions[state].add(str(keyword.value.value))
 
             except (TypeError, OSError, SyntaxError) as e:
-                logger.warning(f"Could not parse handler for state '{state}': {e}")
+                logger.warning(f"Could not parse handler for state '{state}' in blueprint '{self.name}': {e}")
+                parse_errors += 1
 
-        return transitions
+        return transitions, parse_errors
 
     def _analyze_handlers(self) -> None:
         """Analyzes and caches parameters for all registered handlers."""
@@ -374,7 +387,7 @@ class Blueprint:
         dot = Digraph(comment=f"State Machine for {self.name}")
         dot.attr("node", shape="box", style="rounded")
 
-        transitions = self._get_all_transitions()
+        transitions, _ = self._get_all_transitions()
         defined_states = (
             set(self.handlers.keys())
             | set(self.aggregator_handlers.keys())

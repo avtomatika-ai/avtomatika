@@ -26,7 +26,6 @@ class WebSocketManager:
     async def register(self, worker_id: str, ws: web.WebSocketResponse) -> None:
         """Registers a new WebSocket connection for a worker."""
         if worker_id in self._connections:
-            # Close the old connection if it exists
             await self._connections[worker_id].close(code=1008, message=b"New connection established")
         self._connections[worker_id] = ws
         logger.info(f"WebSocket connection registered for worker {worker_id}.")

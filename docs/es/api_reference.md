@@ -6,14 +6,14 @@ Este documento describe todos los puntos finales HTTP proporcionados por el serv
 
 ## Autenticación
 
--   **Cliente -> Orquestador:** Todas las solicitudes a los puntos finales `/api/v1/*` deben contener el encabezado `X-Client-Token` con el token del cliente.
--   **Worker -> Orquestador:** Todas las solicitudes a los puntos finales `/_worker/*` deben contener el encabezado `X-Worker-Token` con un token de worker válido.
+-   **Cliente -> Orquestador:** Todas las solicitudes a los puntos finales de cliente (prefijo predeterminado `/api/v1/*`) deben contener el encabezado `X-Client-Token`. La parte `/api` es configurable mediante `CLIENT_API_PREFIX`.
+-   **Worker -> Orquestador:** Todas las solicitudes a los puntos finales `/_worker/*` deben contener el encabezado `X-Worker-Token` con un token de worker válido (individual o global).
 
 ---
 
 ## 1. Puntos Finales Públicos (`/_public`)
 
-Estos puntos finales no requieren autenticación.
+Estos puntos finales no requieren autenticación y siempre utilizan el prefijo fijo `/_public`.
 
 ### Verificación del Estado del Servicio
 -   **Punto final:** `GET /_public/status`
@@ -32,12 +32,13 @@ Estos puntos finales no requieren autenticación.
 
 ---
 
-## 2. Puntos Finales de Cliente (`/api/v1`)
+## 2. Puntos Finales de Cliente (`/{CLIENT_API_PREFIX}/v1`)
 
 Requieren encabezado `X-Client-Token`.
+La ruta base para estos puntos finales es configurable a través de la variable de entorno `CLIENT_API_PREFIX` (por defecto `api`). Si se establece como una cadena vacía, estos puntos finales estarán disponibles en la raíz (ej. `/v1/...`).
 
 ### Crear Nuevo Trabajo
--   **Punto final:** `POST /api/v1/{blueprint_api_endpoint}`
+-   **Punto final:** `POST /{CLIENT_API_PREFIX}/v1/{blueprint_api_endpoint}`
 -   **Descripción:** Inicia una nueva instancia (Job) de un blueprint.
 -   **Cuerpo de la Solicitud:**
     ```json

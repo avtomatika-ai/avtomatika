@@ -6,14 +6,14 @@ This document describes all HTTP endpoints provided by the Orchestrator server. 
 
 ## Authentication
 
--   **Client -> Orchestrator:** All requests to `/api/v1/*` endpoints must contain the `X-Client-Token` header with the client token.
+-   **Client -> Orchestrator:** All requests to client endpoints (default prefix `/api/v1/*`) must contain the `X-Client-Token` header. The `/api` part is configurable via `CLIENT_API_PREFIX`.
 -   **Worker -> Orchestrator:** All requests to `/_worker/*` endpoints must contain the `X-Worker-Token` header with a valid worker token (individual or global).
 
 ---
 
 ## 1. Public Endpoints (`/_public`)
 
-These endpoints do not require authentication.
+These endpoints do not require authentication and always use the fixed `/_public` prefix.
 
 ### Service Status Check
 
@@ -48,13 +48,14 @@ These endpoints do not require authentication.
 
 ---
 
-## 2. Client Endpoints (`/api/v1`)
+## 2. Client Endpoints (`/{CLIENT_API_PREFIX}/v1`)
 
 These endpoints are designed for external systems that initiate and monitor workflows. Requires `X-Client-Token` header.
+The base path for these endpoints is configurable via the `CLIENT_API_PREFIX` environment variable (default is `api`). If set to an empty string, these endpoints will be available at the root (e.g. `/v1/...`).
 
 ### Create New Job
 
--   **Endpoint:** `POST /api/v1/{blueprint_api_endpoint}`
+-   **Endpoint:** `POST /{CLIENT_API_PREFIX}/v1/{blueprint_api_endpoint}`
 -   **Example:** `POST /api/v1/jobs/simple_flow`
 -   **Description:** Creates and starts a new instance (Job) of the specified blueprint.
 -   **Request Body:**

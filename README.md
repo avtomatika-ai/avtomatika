@@ -235,7 +235,7 @@ async def publish_video(context):
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **Standardized Holon Matching (RXON v1.0b7)**:
+*   **Standardized Holon Matching (RXON)**:
     *   **Unified Matching**: Migrated to the formalized `rxon` matching logic. All resource checks (CPU, RAM, GPU, custom properties) are now strictly governed by the HLN protocol standard.
     *   **Smart Numeric Comparison**: Automatically performs **GE (Greater or Equal)** checks for numbers (e.g., minimum VRAM or RAM), ensuring flexible but reliable dispatching.
     *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
@@ -466,6 +466,11 @@ Multiple Orchestrator instances can run behind a load balancer.
 *   **Structured JSON Logging**: Easy to parse and index.
 *   **Asynchronous processing**: Non-blocking `QueueHandler` prevents event loop blocking.
 *   **Metrics**: Available at `/_public/metrics`, with `orchestrator_` prefix and `orchestrator_loop_lag_seconds`.
+
+### Security & Data Protection
+*   **Envelope Encryption**: When `REDIS_ENCRYPTION_KEY` is provided, worker tokens are stored encrypted in Redis (AES-GCM).
+*   **Auth Modes**: Support for `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
+*   **Configurable API Prefix**: The Client API can be moved or hidden via `CLIENT_API_PREFIX`.
 
 ### Rate Limiting
 

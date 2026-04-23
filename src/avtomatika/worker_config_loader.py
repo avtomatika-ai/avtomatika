@@ -11,16 +11,29 @@ from tomllib import load
 from typing import Any
 
 from .storage.base import StorageBackend
+from .utils.crypto import encrypt_token
 
 logger = getLogger(__name__)
 
 
-async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str) -> None:
+async def load_worker_configs_to_redis(
+    storage: StorageBackend, config_path: str, auth_mode: str = "mixed", redis_encryption_key: str | None = None
+) -> None:
     """
     Loads worker configurations from a TOML file into Redis.
     This allows for dynamic and secure management of worker tokens without
     restarting the orchestrator.
+
+    If auth_mode is 'mtls-only', raw tokens are NOT loaded into Redis for security.
+    If redis_encryption_key is provided, tokens are stored encrypted.
     """
+    if auth_mode == "mtls-only":
+        logger.info(
+            "WORKER_AUTH_MODE is 'mtls-only'. Skipping loading of static tokens "
+            f"from '{config_path}' to Redis for enhanced security."
+        )
+        return
+
     if not exists(config_path):
         logger.warning(
             f"Worker config file not found at '{config_path}'. "
@@ -46,9 +59,12 @@ async def load_worker_configs_to_redis(storage: StorageBackend, config_path: str
             logger.warning(f"No token found for worker_id '{worker_id}' in {config_path}. Skipping.")
             continue
         try:
-            # Store the raw token. HMAC verification requires identical keys.
-            await storage.set_worker_token(worker_id, token)
-            logger.info(f"Loaded token for worker_id '{worker_id}'.")
+            stored_token = token
+            if redis_encryption_key:
+                stored_token = encrypt_token(token, redis_encryption_key)
+
+            await storage.set_worker_token(worker_id, stored_token)
+            logger.info(f"Loaded token for worker_id '{worker_id}'{' (encrypted)' if redis_encryption_key else ''}.")
         except Exception as e:
             logger.error(f"Failed to store token for worker_id '{worker_id}' in Redis: {e}")
 
