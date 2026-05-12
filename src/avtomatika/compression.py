@@ -56,6 +56,7 @@ async def compression_middleware(
         not compress_func
         or not encoding
         or "Content-Encoding" in response.headers
+        or not hasattr(response, "body")
         or not isinstance(response.body, bytes)  # Can only compress bytes
     ):
         return response

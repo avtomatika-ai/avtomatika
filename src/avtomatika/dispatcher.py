@@ -9,6 +9,7 @@ from collections import defaultdict
 from logging import getLogger
 from time import time
 from typing import Any
+from uuid import uuid4
 
 from rxon.constants import WORKER_STATUS_DRAINING
 from rxon.models import InstalledArtifact, Resources, SkillInfo, TaskPayload
@@ -334,7 +335,7 @@ class Dispatcher:
             resource_requirements["transitions"] = task_info.get("transitions") or {}
 
         # Add skill version and type to requirements so _check_worker_compliance can find them
-        # Beta 10: Fallback to job_state if missing in task_info
+        # Fallback to job_state if missing in task_info
         resource_requirements["skill_version"] = task_info.get("skill_version") or job_state.get("skill_version")
         resource_requirements["skill_type"] = task_info.get("skill_type") or job_state.get("skill_type")
 
@@ -372,7 +373,7 @@ class Dispatcher:
 
             capable_workers = await self._get_workers_cached(candidate_ids)
             if not capable_workers:
-                # Beta 21 Resilience: If IDs are in index but data is missing,
+                # If IDs are in index but data is missing,
                 # it's a stale index. We just treat it as "no workers" and let it retry.
                 logger.debug(f"HLN: Stale index detected for '{task_type}'. IDs {candidate_ids} have no data.")
                 raise RuntimeError(f"No suitable workers for task type '{task_type}'")
@@ -497,7 +498,7 @@ class Dispatcher:
         task_params = task_info.get("params", {})
         filtered_metadata = {k: v for k, v in full_metadata.items() if k in task_params}
 
-        task_id = task_info.get("task_id") or job_id
+        task_id = task_info.get("task_id") or f"task-{uuid4()}"
         priority = task_info.get("priority", 0.0)
 
         # Deadline propagation (absolute timestamp)

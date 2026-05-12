@@ -88,6 +88,24 @@ Avtomatika is part of a larger ecosystem:
     ```bash
     pip install "avtomatika[all,test]"
     ```
+
+## Job Statuses
+
+Avtomatika jobs move through various states:
+
+| Status | Type | Description |
+| :--- | :--- | :--- |
+| `pending` | Intermediate | Job created, waiting for queue. |
+| `running` | Intermediate | Active execution of blueprint logic or tasks. |
+| `waiting_for_worker` | Intermediate | Task dispatched, waiting for a worker to pick it up. |
+| `waiting_for_human` | Intermediate | Paused, awaiting manual approval via webhook. |
+| `waiting_for_parallel` | Intermediate | Waiting for completion of all parallel sub-tasks. |
+| `finished` | **Terminal** | Successfully completed. **Result is visible.** |
+| `failed` | **Terminal** | Logic or worker failure. **Result is visible.** |
+| `cancelled` | **Terminal** | Manually cancelled by user or system. |
+| `error` | **Terminal** | Critical system or infrastructure error. |
+| `quarantined` | **Terminal** | Flagged for manual review (e.g., data contract violation). |
+
 ## Quick Start: Usage as a Library
 
 You can easily integrate and run the orchestrator engine within your own application.
@@ -470,11 +488,14 @@ Multiple Orchestrator instances can run behind a load balancer.
 ### Security & Data Protection
 *   **Envelope Encryption**: When `REDIS_ENCRYPTION_KEY` is provided, worker tokens are stored encrypted in Redis (AES-GCM).
 *   **Auth Modes**: Support for `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
+*   **Strict Client Isolation**: Jobs are strictly tied to the `client_token`. A client can only access, manage, or download files for jobs they created.
+*   **API Detail Policy**: By default, the API returns a minimal set of fields for security. Enable full details via `DETAILED_API_RESPONSES="true"`.
 *   **Configurable API Prefix**: The Client API can be moved or hidden via `CLIENT_API_PREFIX`.
 
 ### Rate Limiting
 
 Granular, context-aware Redis-based rate limiter (Heartbeats: 120/min, Polling: 60/min, General: 100/min).
+> **Note:** Workers receive a standard **`Retry-After`** header on block to manage smart backoff strategies.
 
 ### Dynamic Blueprint Loading
 

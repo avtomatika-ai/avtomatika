@@ -82,8 +82,9 @@ async def inventory_ok(context):
     """
     Llamado si el worker confirmó la disponibilidad de artículos.
     """
-    # Los datos devueltos por el worker están disponibles en state_history
-    worker_data = context.state_history.get("warehouse_info")
+    # Los datos devueltos por el worker están disponibles en el campo 'result'
+    # (es un atajo para el último paso en state_history)
+    worker_data = context.result
     print(f"Trabajo {context.job_id}: artículos en stock. Info del worker: {worker_data}")
     
     context.actions.go_to("finished_successfully")

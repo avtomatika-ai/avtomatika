@@ -69,6 +69,10 @@ async def test_presign_handler(aiohttp_client, app, s3_config):
     headers = {"X-Client-Token": "user_token_vip"}
 
     job_id = "test-job-upload"
+    await app_engine.storage.save_job_state(
+        job_id, {"id": job_id, "status": "running", "client_config": {"token": "user_token_vip"}}
+    )
+
     resp = await client.get(f"/api/v1/jobs/{job_id}/files/upload?filename=data.csv&expires_in=100", headers=headers)
 
     assert resp.status == 200
@@ -94,6 +98,10 @@ async def test_download_redirect_handler(aiohttp_client, app, s3_config):
     headers = {"X-Client-Token": "user_token_vip"}
 
     job_id = "test-job-download"
+    await app_engine.storage.save_job_state(
+        job_id, {"id": job_id, "status": "running", "client_config": {"token": "user_token_vip"}}
+    )
+
     filename = "result.mp4"
 
     # Request redirect, disable auto-following redirects to check status code
@@ -120,6 +128,10 @@ async def test_streaming_upload_handler(aiohttp_client, app, s3_config):
     headers = {"X-Client-Token": "user_token_vip", "Content-Type": "application/octet-stream"}
 
     job_id = "test-job-stream"
+    await app_engine.storage.save_job_state(
+        job_id, {"id": job_id, "status": "running", "client_config": {"token": "user_token_vip"}}
+    )
+
     filename = "input.data"
     payload = b"some binary content"
 

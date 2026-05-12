@@ -331,9 +331,17 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             self._quarantine_queue.append(job_id)
 
-    async def get_quarantined_jobs(self) -> list[str]:
+    async def get_quarantined_jobs(self, client_token: str | None = None) -> list[str]:
         async with self._lock:
-            return list(self._quarantine_queue)
+            if not client_token:
+                return list(self._quarantine_queue)
+
+            filtered = []
+            for job_id in self._quarantine_queue:
+                state = self._jobs.get(job_id)
+                if state and state.get("client_config", {}).get("token") == client_token:
+                    filtered.append(job_id)
+            return filtered
 
     async def deregister_worker(self, worker_id: str) -> None:
         async with self._lock:
@@ -378,6 +386,24 @@ class MemoryStorage(StorageBackend):
                 self._quotas[token] -= 1
                 return True
             return False
+
+    async def get_ttl(self, key: str) -> int:
+        async with self._lock:
+            now = monotonic()
+            # Check generic keys first (used for ratelimit)
+            if key in self._generic_key_ttls:
+                ttl = self._generic_key_ttls[key] - now
+                return int(ttl) if ttl > 0 else -2
+
+            # Check worker keys
+            for prefix in ["orchestrator:worker:info:", "orchestrator:worker:heartbeat:"]:
+                if key.startswith(prefix):
+                    worker_id = key[len(prefix) :]
+                    if worker_id in self._worker_ttls:
+                        ttl = self._worker_ttls[worker_id] - now
+                        return int(ttl) if ttl > 0 else -2
+
+            return -2
 
     async def flush_all(self) -> None:
         """

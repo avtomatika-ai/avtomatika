@@ -245,7 +245,7 @@ class WorkerService:
                     if updated_state.get("metadata"):
                         task["metadata"] = updated_state["metadata"]
 
-                    # Beta 10: Include required skill version/type in the task payload for worker validation
+                    # Include required skill version/type in the task payload for worker validation
                     if updated_state.get("skill_version"):
                         task["skill_version"] = updated_state["skill_version"]
                     if updated_state.get("skill_type"):
@@ -271,7 +271,7 @@ class WorkerService:
         # Ensure result matches protocol TaskResult
         try:
             validated_res = from_dict(TaskResult, result_payload)
-            # Beta 8: Handle optional worker_id - fill from authenticated identity if missing
+            # Handle optional worker_id - fill from authenticated identity if missing
             if validated_res.worker_id is None:
                 validated_res = validated_res._replace(worker_id=authenticated_worker_id)
 
@@ -323,7 +323,7 @@ class WorkerService:
 
         # Check if result matches skill's output_schema
         if result_status == TASK_STATUS_SUCCESS and skill_snapshot:
-            # Beta 8: Only validate if dialect is json-schema
+            # Only validate if dialect is json-schema
             if skill_snapshot.schema_dialect == "json-schema" and skill_snapshot.output_schema:
                 is_valid, error_msg = validate_data(worker_data_content, skill_snapshot.output_schema)
                 if not is_valid:
@@ -445,11 +445,12 @@ class WorkerService:
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": job_state.get("current_state"),
                 "event_type": "task_finished",
                 "duration_ms": duration_ms,
                 "worker_id": authenticated_worker_id,
-                "origin_task_id": validated_res.task_id,  # Beta 10: Trace graph back to origin task
+                "origin_task_id": validated_res.task_id,  # Trace graph back to origin task
                 "timestamp": result_payload.get("timestamp"),
                 "context_snapshot": {
                     **job_state,
@@ -682,12 +683,13 @@ class WorkerService:
         if event.target_job_id:
             job_state = await self.storage.get_job_state(event.target_job_id)
             if job_state and job_state.get("webhook_url"):
+                detailed = self.config.DETAILED_API_RESPONSES
                 webhook_payload = WebhookPayload(
                     event=f"worker_event:{event.event_type}",
                     job_id=event.target_job_id,
                     status=job_state.get("status", "running"),
                     result=event.payload,
-                    security=to_dict(event.security) if event.security else None,
+                    security=(to_dict(event.security) if event.security else None) if detailed else None,
                     metadata=event.metadata,
                     timestamp=event.timestamp,
                 )

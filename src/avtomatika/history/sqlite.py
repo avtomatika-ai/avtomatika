@@ -24,6 +24,7 @@ CREATE_JOB_HISTORY_TABLE = """
 CREATE TABLE IF NOT EXISTS job_history (
     event_id TEXT PRIMARY KEY,
     job_id TEXT NOT NULL,
+    client_token TEXT,
     timestamp REAL NOT NULL,
     state TEXT,
     event_type TEXT NOT NULL,
@@ -71,6 +72,16 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             await self._conn.execute("PRAGMA journal_mode=WAL;")
             await self._conn.execute(CREATE_JOB_HISTORY_TABLE)
             await self._conn.execute(CREATE_WORKER_HISTORY_TABLE)
+
+            # Migration: Add client_token column if it doesn't exist
+            try:
+                await self._conn.execute("ALTER TABLE job_history ADD COLUMN client_token TEXT;")
+                await self._conn.commit()
+                logger.info("Migrated SQLite: added client_token column to job_history.")
+            except Error:
+                # Column likely already exists
+                pass
+
             await self._conn.execute(CREATE_JOB_ID_INDEX)
             await self._conn.execute(CREATE_WORKER_ID_INDEX)
             await self._conn.commit()
@@ -110,19 +121,23 @@ class SQLiteHistoryStorage(HistoryStorageBase):
 
         query = """
             INSERT INTO job_history (
-                event_id, job_id, timestamp, state, event_type, duration_ms,
+                event_id, job_id, client_token, timestamp, state, event_type, duration_ms,
                 previous_state, next_state, worker_id, origin_task_id, attempt_number,
                 context_snapshot
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         now_ts = time()
 
         context_snapshot = event_data.get("context_snapshot")
         context_snapshot_json = dumps(context_snapshot).decode("utf-8") if context_snapshot else None
 
+        # Extract client_token from event_data
+        client_token = event_data.get("client_token") or event_data.get("metadata", {}).get("client")
+
         params = (
             str(uuid4()),
             event_data.get("job_id"),
+            client_token,
             now_ts,
             event_data.get("state"),
             event_data.get("event_type"),
@@ -185,17 +200,31 @@ class SQLiteHistoryStorage(HistoryStorageBase):
             logger.error(f"Failed to get job history for job_id {job_id}: {e}")
             return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        """Gets a list of the latest unique jobs with pagination."""
+    async def get_jobs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        client_token: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Gets a list of the latest unique jobs with pagination and optional filtering."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
 
-        query = """
+        where_clause = ""
+        params: list[Any] = []
+        if client_token:
+            where_clause = "WHERE client_token = ?"
+            params.append(client_token)
+
+        params.extend([limit, offset])
+
+        query = f"""
             WITH latest_events AS (
                 SELECT
                     *,
                     ROW_NUMBER() OVER(PARTITION BY job_id ORDER BY timestamp DESC) as rn
                 FROM job_history
+                {where_clause}
             )
             SELECT * FROM latest_events
             WHERE rn = 1
@@ -204,25 +233,32 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         """
         try:
             self._conn.row_factory = Row
-            async with self._conn.execute(query, (limit, offset)) as cursor:
+            async with self._conn.execute(query, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
                 return [self._format_row(row) for row in rows]
         except Error as e:
             logger.error(f"Failed to get jobs list: {e}")
             return []
 
-    async def get_job_summary(self) -> dict[str, int]:
+    async def get_job_summary(self, client_token: str | None = None) -> dict[str, int]:
         """Returns a summary of job statuses."""
         if not self._conn:
             raise RuntimeError("History storage is not initialized.")
 
-        query = """
+        where_clause = ""
+        params = []
+        if client_token:
+            where_clause = "AND client_token = ?"
+            params.append(client_token)
+
+        query = f"""
             WITH latest_events AS (
                 SELECT
                     json_extract(context_snapshot, '$.status') as status,
                     ROW_NUMBER() OVER(PARTITION BY job_id ORDER BY timestamp DESC) as rn
                 FROM job_history
                 WHERE json_valid(context_snapshot) AND json_extract(context_snapshot, '$.status') IS NOT NULL
+                {where_clause}
             )
             SELECT
                 status,
@@ -234,7 +270,7 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         summary = {}
         try:
             self._conn.row_factory = Row
-            async with self._conn.execute(query) as cursor:
+            async with self._conn.execute(query, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
                 for row in rows:
                     summary[row["status"]] = row["count"]

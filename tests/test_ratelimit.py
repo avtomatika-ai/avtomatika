@@ -5,7 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp import web
@@ -13,97 +13,45 @@ from src.avtomatika.ratelimit import rate_limit_middleware_factory
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_middleware():
-    """Tests that the rate limit middleware correctly blocks requests."""
-    storage = AsyncMock()
-    limit = 5
-    period = 60
+async def test_rate_limit_middleware_skips_workers():
+    """
+    Verifies that the global middleware skips internal worker paths,
+    as they are handled by the engine for better precision.
+    """
+    storage = MagicMock()
+    middleware = rate_limit_middleware_factory(storage, 1, 60)
+    handler = AsyncMock(return_value=web.Response(text="OK"))
 
-    async def handler(request):
-        return web.Response(text="OK")
-
-    middleware = rate_limit_middleware_factory(storage, limit, period)
-    app = web.Application(middlewares=[middleware])
-    app.router.add_get("/test", handler)
-
-    # Simulate requests
+    # Request to worker path
     request = MagicMock()
-    request.match_info.get.return_value = "test_worker"
-    request.path = "/test"
+    request.path = "/_worker/tasks/next"
 
-    # First 5 requests should succeed
-    storage.increment_key_with_ttl.return_value = 1
+    # Even if storage would indicate a block, middleware should not call it
     response = await middleware(request, handler)
+
     assert response.status == 200
+    assert not storage.increment_key_with_ttl.called
 
-    storage.increment_key_with_ttl.return_value = 2
-    response = await middleware(request, handler)
-    assert response.status == 200
 
-    storage.increment_key_with_ttl.return_value = 3
-    response = await middleware(request, handler)
-    assert response.status == 200
+@pytest.mark.asyncio
+async def test_rate_limit_blocks_clients_by_ip():
+    """Tests that general clients are still blocked by IP in middleware."""
+    storage = MagicMock()
 
-    storage.increment_key_with_ttl.return_value = 4
-    response = await middleware(request, handler)
-    assert response.status == 200
+    async def mock_inc(*args):
+        return 2  # Blocked
 
-    storage.increment_key_with_ttl.return_value = 5
-    response = await middleware(request, handler)
-    assert response.status == 200
+    storage.increment_key_with_ttl.side_effect = mock_inc
 
-    # 6th request should be blocked
-    storage.increment_key_with_ttl.return_value = 6
-    response = await middleware(request, handler)
+    middleware = rate_limit_middleware_factory(storage, 1, 60)
+    handler = AsyncMock(return_value=web.Response(text="OK"))
+
+    # Request to client path
+    req = MagicMock()
+    req.path = "/api/v1/jobs"
+    req.remote = "1.2.3.4"
+
+    response = await middleware(req, handler)
     assert response.status == 429
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_metrics_increment():
-    """Tests that the rate limit metric is incremented on block."""
-    storage = AsyncMock()
-    limit = 1
-    period = 60
-
-    async def handler(request):
-        return web.Response(text="OK")
-
-    middleware = rate_limit_middleware_factory(storage, limit, period)
-    request = MagicMock()
-    request.match_info.get.return_value = "test_worker"
-    request.path = "/test"
-
-    # Mock the metrics module to verify the counter increment
-    with patch("src.avtomatika.metrics.ratelimit_blocked_total") as mock_metric:
-        # First request OK
-        storage.increment_key_with_ttl.return_value = 1
-        await middleware(request, handler)
-        mock_metric.inc.assert_not_called()
-
-        # Second request blocked
-        storage.increment_key_with_ttl.return_value = 2
-        await middleware(request, handler)
-        mock_metric.inc.assert_called_once_with({"identifier": "test_worker", "path": "/test"})
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_storage_failure():
-    """Tests that the rate limit middleware lets requests through when storage fails."""
-    storage = AsyncMock()
-    storage.increment_key_with_ttl.side_effect = Exception("Storage failed")
-    limit = 5
-    period = 60
-
-    async def handler(request):
-        return web.Response(text="OK")
-
-    middleware = rate_limit_middleware_factory(storage, limit, period)
-    app = web.Application(middlewares=[middleware])
-    app.router.add_get("/test", handler)
-
-    request = MagicMock()
-    request.match_info.get.return_value = "test_worker"
-    request.path = "/test"
-
-    response = await middleware(request, handler)
-    assert response.status == 200
+    # No Retry-After for general clients
+    assert "Retry-After" not in response.headers

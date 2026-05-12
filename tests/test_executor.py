@@ -3,12 +3,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
 from src.avtomatika.blueprint import Blueprint
+from src.avtomatika.config import Config
 from src.avtomatika.context import ActionFactory
 from src.avtomatika.executor import JobExecutor
 
@@ -23,8 +22,13 @@ def mock_engine():
     engine.app = MagicMock()
     engine.app.get.return_value = None  # Disable services by default
     engine.send_job_webhook = AsyncMock()
-    engine.config = MagicMock()
-    engine.config.JOB_MAX_RETRIES = 3  # Default max retries for tests
+
+    # Use real Config or strictly specced mock to avoid lazy evaluation
+    config = Config()
+    config.JOB_MAX_RETRIES = 3
+    config.DETAILED_API_RESPONSES = True
+    engine.config = config
+
     return engine
 
 

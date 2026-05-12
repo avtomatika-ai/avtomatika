@@ -71,7 +71,7 @@ async def test_auth_with_encryption(storage, config):
     # Attempt authentication with the PLAIN token
     # It should pass because verify_worker_auth will decrypt the stored one for comparison
     authenticated_id = await verify_worker_auth(storage, config, raw_token, None, worker_id)
-    assert authenticated_id == worker_id
+    assert authenticated_id[0] == worker_id
 
 
 @pytest.mark.asyncio
@@ -130,7 +130,8 @@ async def test_mixed_tokens_support(storage, config):
         await storage.set_worker_token(worker_id_plain, "pass2")
 
     # Auth encrypted - OK
-    assert await verify_worker_auth(storage, config, "pass1", None, worker_id_enc) == worker_id_enc
+    auth_res = await verify_worker_auth(storage, config, "pass1", None, worker_id_enc)
+    assert auth_res[0] == worker_id_enc
 
     # Auth plain - FAILS because encryption is ACTIVE globally and it tries to decrypt "pass2" as Fernet
     # This is intended: once encryption is on, all master tokens in Redis MUST be encrypted.

@@ -42,10 +42,15 @@ class NoOpHistoryStorage(HistoryStorageBase):
     async def get_job_history(self, job_id: str) -> list[dict[str, Any]]:
         return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    async def get_jobs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        client_token: str | None = None,
+    ) -> list[dict[str, Any]]:
         return []
 
-    async def get_job_summary(self) -> dict[str, int]:
+    async def get_job_summary(self, client_token: str | None = None) -> dict[str, int]:
         return {}
 
     async def get_worker_history(

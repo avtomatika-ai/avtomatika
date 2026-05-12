@@ -25,10 +25,11 @@ CREATE_JOB_HISTORY_TABLE_PG = """
 CREATE TABLE IF NOT EXISTS job_history (
     event_id UUID PRIMARY KEY,
     job_id TEXT NOT NULL,
-    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    client_token TEXT,
+    timestamp TIMESTAMPTZ NOT NULL,
     state TEXT,
     event_type TEXT NOT NULL,
-    duration_ms BIGINT,
+    duration_ms INTEGER,
     previous_state TEXT,
     next_state TEXT,
     worker_id TEXT,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS job_history (
     attempt_number INTEGER,
     context_snapshot JSONB
 );
+
 """
 
 CREATE_WORKER_HISTORY_TABLE_PG = """
@@ -85,6 +87,15 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
                 async with self._pool.acquire() as conn:
                     await conn.execute(CREATE_JOB_HISTORY_TABLE_PG)
                     await conn.execute(CREATE_WORKER_HISTORY_TABLE_PG)
+
+                    # Migration: Add client_token column if it doesn't exist
+                    try:
+                        await conn.execute("ALTER TABLE job_history ADD COLUMN client_token TEXT;")
+                        logger.info("Migrated PostgreSQL: added client_token column to job_history.")
+                    except PostgresError:
+                        # Column likely already exists
+                        pass
+
                     await conn.execute(CREATE_JOB_ID_INDEX_PG)
                     await conn.execute(CREATE_WORKER_ID_INDEX_PG)
                 logger.info(f"PostgreSQL history storage initialized (TZ={self.tz_name}) after {attempt} attempts.")
@@ -116,15 +127,18 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
 
         query = """
             INSERT INTO job_history (
-                event_id, job_id, timestamp, state, event_type, duration_ms,
+                event_id, job_id, client_token, timestamp, state, event_type, duration_ms,
                 previous_state, next_state, worker_id, origin_task_id, attempt_number,
                 context_snapshot
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         """
         now = datetime.now(self.tz)
 
         context_snapshot = event_data.get("context_snapshot")
         context_snapshot_json = dumps(context_snapshot).decode("utf-8") if context_snapshot else None
+
+        # Extract client_token from event_data
+        client_token = event_data.get("client_token") or event_data.get("metadata", {}).get("client")
 
         duration_ms = event_data.get("duration_ms")
         if duration_ms is not None:
@@ -137,6 +151,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         params = (
             uuid4(),
             event_data.get("job_id"),
+            client_token,
             now,
             event_data.get("state"),
             event_data.get("event_type"),
@@ -215,41 +230,63 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             )
             return []
 
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    async def get_jobs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        client_token: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
 
-        query = """
+        where_clause = ""
+        params: list[Any] = []
+        if client_token:
+            where_clause = "WHERE client_token = $1"
+            params.append(client_token)
+
+        idx = len(params) + 1
+        params.extend([limit, offset])
+
+        query = f"""
             WITH latest_events AS (
                 SELECT
                     *,
                     ROW_NUMBER() OVER(PARTITION BY job_id ORDER BY timestamp DESC) as rn
                 FROM job_history
+                {where_clause}
             )
             SELECT * FROM latest_events
             WHERE rn = 1
             ORDER BY timestamp DESC
-            LIMIT $1 OFFSET $2;
+            LIMIT ${idx} OFFSET ${idx + 1};
         """
         try:
             async with self._pool.acquire() as conn:
-                rows = await conn.fetch(query, limit, offset)
+                rows = await conn.fetch(query, *params)
                 return [self._format_row(row) for row in rows]
         except PostgresError as e:
             logger.error(f"Failed to get jobs list from PostgreSQL: {e}")
             return []
 
-    async def get_job_summary(self) -> dict[str, int]:
+    async def get_job_summary(self, client_token: str | None = None) -> dict[str, int]:
         if not self._pool:
             raise RuntimeError("History storage is not initialized.")
 
-        query = """
+        where_clause = ""
+        params = []
+        if client_token:
+            where_clause = "AND client_token = $1"
+            params.append(client_token)
+
+        query = f"""
             WITH latest_events AS (
                 SELECT
                     context_snapshot->>'status' as status,
                     ROW_NUMBER() OVER(PARTITION BY job_id ORDER BY timestamp DESC) as rn
                 FROM job_history
                 WHERE context_snapshot->>'status' IS NOT NULL
+                {where_clause}
             )
             SELECT
                 status,
@@ -258,6 +295,17 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             WHERE rn = 1
             GROUP BY status;
         """
+        summary = {}
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(query, *params)
+                for row in rows:
+                    if row["status"]:
+                        summary[row["status"]] = row["count"]
+                return summary
+        except PostgresError as e:
+            logger.error(f"Failed to get job summary from PostgreSQL: {e}")
+            return {}
         summary = {}
         try:
             async with self._pool.acquire() as conn:

@@ -256,8 +256,8 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_quarantined_jobs(self) -> list[str]:
-        """Get a list of all job IDs from the quarantine queue (for testing)."""
+    async def get_quarantined_jobs(self, client_token: str | None = None) -> list[str]:
+        """Get a list of all job IDs from the quarantine queue, optionally filtered by owner."""
         raise NotImplementedError
 
     @abstractmethod
@@ -361,6 +361,16 @@ class StorageBackend(ABC):
     @abstractmethod
     async def get_worker_info(self, worker_id: str) -> dict[str, Any] | None:
         """Get complete information about a worker by its ID."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_ttl(self, key: str) -> int:
+        """Returns the remaining time-to-live for a key in seconds.
+
+        :param key: The key to check.
+        :return: Remaining TTL in seconds, or -2 if the key does not exist,
+                 or -1 if the key exists but has no associated expire.
+        """
         raise NotImplementedError
 
     @abstractmethod

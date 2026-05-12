@@ -89,15 +89,20 @@ class HistoryStorageBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_jobs(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
-        """Gets a paginated list of recent jobs.
+    async def get_jobs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        client_token: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Gets a paginated list of recent jobs, optionally filtered by client_token.
         Primarily returns the last event for each job.
         """
         raise NotImplementedError
 
     @abstractmethod
-    async def get_job_summary(self) -> dict[str, int]:
-        """Returns a summary of job statuses.
+    async def get_job_summary(self, client_token: str | None = None) -> dict[str, int]:
+        """Returns a summary of job statuses, optionally filtered by client_token.
         Example: {'running': 10, 'completed': 50, 'failed': 5}
         """
         raise NotImplementedError

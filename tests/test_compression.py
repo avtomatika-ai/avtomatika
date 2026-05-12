@@ -122,3 +122,22 @@ async def test_compression_failure_returns_original_response():
     finally:
         # Restore the original function
         src.avtomatika.compression._compress_gzip = original_compress
+
+
+@pytest.mark.asyncio
+async def test_compression_no_body_attribute():
+    """
+    Ensures that compression_middleware does not crash when a response
+    object lacks a 'body' attribute (e.g., web.StreamResponse).
+    """
+    request = Mock()
+    request.headers = {"Accept-Encoding": "gzip"}
+
+    async def handler(req):
+        # web.StreamResponse typically doesn't have a .body until prepared/written
+        return web.StreamResponse()
+
+    # This should not raise AttributeError
+    response = await compression_middleware(request, handler)
+    assert isinstance(response, web.StreamResponse)
+    assert not hasattr(response, "body")

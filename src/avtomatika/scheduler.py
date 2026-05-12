@@ -50,17 +50,28 @@ class Scheduler:
         now_ts = now_tz.timestamp()
 
         for i, job in enumerate(jobs):
-            last_run_ts = last_run_vals[i]
-            if last_run_ts and job.interval_seconds is not None and now_ts - float(last_run_ts) < job.interval_seconds:
-                continue
+            try:
+                last_run_ts = last_run_vals[i]
+                if (
+                    last_run_ts
+                    and job.interval_seconds is not None
+                    and now_ts - float(last_run_ts) < job.interval_seconds
+                ):
+                    continue
 
-            lock_key = f"scheduler:lock:interval:{job.name}"
-            if await self.storage.set_nx_ttl(lock_key, "locked", ttl=5):
-                try:
-                    await self._trigger_job(job)
-                    await self.storage.set_str(last_run_keys[i], str(now_ts))
-                except Exception as e:
-                    logger.error(f"Failed to trigger interval job {job.name}: {e}")
+                lock_key = f"scheduler:lock:interval:{job.name}"
+                # Use hostname/instance ID as lock holder for distributed traceability
+                holder = getattr(self.engine, "_consumer_name", "unknown")
+
+                if await self.storage.set_nx_ttl(lock_key, holder, ttl=5):
+                    try:
+                        logger.info(f"Instance '{holder}' triggered interval job {job.name}")
+                        await self._trigger_job(job)
+                        await self.storage.set_str(last_run_keys[i], str(now_ts))
+                    except Exception as e:
+                        logger.error(f"Failed to trigger interval job {job.name}: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error processing scheduled job {job.name}: {e}")
 
     async def run(self) -> None:
         self.load_config()

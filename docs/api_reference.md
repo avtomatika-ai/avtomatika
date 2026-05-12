@@ -76,10 +76,54 @@ The base path for these endpoints is configurable via the `CLIENT_API_PREFIX` en
 ### Get Job Status
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}`
--   **Description:** Returns the current state of the specified job.
+-   **Description:** Returns the current state of the specified job. The amount of detail depends on the server's `DETAILED_API_RESPONSES` setting.
+
+#### Job Statuses
+The system uses the following statuses to manage the job lifecycle:
+
+**Intermediate States:**
+*   `pending`: Job created and waiting to be queued.
+*   `running`: Job is actively being processed.
+*   `waiting_for_worker`: Waiting for a suitable worker to pick up the task.
+*   `waiting_for_human`: Awaiting manual approval or action (Human-in-the-loop).
+*   `waiting_for_parallel`: Waiting for all sub-tasks in a parallel branch to complete.
+
+**Terminal States:**
+*   `finished`: Job completed successfully. Final result is available.
+*   `failed`: Logic or worker error. Error details are available in the result.
+*   `cancelled`: Job was cancelled by a user or the system.
+*   `error`: Critical system error during execution.
+*   `quarantined`: Job placed in quarantine for manual review (e.g., due to contract violation).
+
 -   **Query Parameters:**
-    *   `fields` (string, optional): Comma-separated list of fields to return (e.g., `status,current_state`).
--   **Response (`200 OK`):** JSON object with `Job` state.
+    *   `fields` (string, optional): Comma-separated list of fields to return. In compact mode, only essential fields can be requested.
+
+**Security Note:** The `result` field is only populated and visible when the job reaches a terminal state (`finished` or `failed`). For jobs in intermediate states (`running`, `waiting`), the result is hidden to protect sensitive in-progress data.
+
+**Data Isolation:** Access is strictly limited to the client who created the job. You must provide the same `X-Client-Token` that was used to start the job. Any attempt to access a job ID belonging to another client will return a `404 Not Found` for security reasons (to avoid job ID enumeration).
+
+**Compact Response (Default):**
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "finished",
+  "result": { "output": "success" },
+  "blueprint_name": "my_flow"
+}
+```
+
+**Detailed Response (when DETAILED_API_RESPONSES=true):**
+```json
+{
+  "id": "...",
+  "status": "finished",
+  "result": { ... },
+  "blueprint_name": "...",
+  "state_history": { ... },
+  "initial_data": { ... },
+  "timestamp": 1715280000.0
+}
+```
 
 ### Get S3 Upload URL
 
@@ -111,7 +155,12 @@ The base path for these endpoints is configurable via the `CLIENT_API_PREFIX` en
 ### Get Job History
 
 -   **Endpoint:** `GET /api/v1/jobs/{job_id}/history`
--   **Description:** Returns the full event history for the specified job.
+-   **Description:** Returns the full event history for the specified job. In compact mode, `context_snapshot` fields in events are filtered.
+
+### Get Jobs List
+
+-   **Endpoint:** `GET /api/v1/jobs`
+-   **Description:** Returns a list of all jobs. In compact mode, `context_snapshot` for each job is filtered.
 -   **Response (`200 OK`):** Array of event objects.
 
 ### Get Blueprint Graph

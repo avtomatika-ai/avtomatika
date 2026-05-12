@@ -402,6 +402,10 @@ async def test_unversioned_route(aiohttp_client, app):
     headers = {AUTH_HEADER_CLIENT: "user_token_vip"}
     await storage.initialize_client_quota("user_token_vip", 5)
 
+    # Disable rate limiting for integration tests
+    app[ENGINE_KEY].config.RATE_LIMITING_ENABLED = False
+    app[ENGINE_KEY].config.DETAILED_API_RESPONSES = True  # Ensure full state is visible for tests
+
     resp = await client.post("/api/jobs/unversioned_flow", json={}, headers=headers)
     assert resp.status == 202
     job_id = (await resp.json())["job_id"]
@@ -476,6 +480,7 @@ async def test_task_cancellation_via_websocket_mocked(aiohttp_client, app):
             "status": "waiting_for_worker",
             "task_worker_id": worker_id,
             "current_task_id": task_id,
+            "client_config": {"token": "user_token_vip"},
         },
     )
 

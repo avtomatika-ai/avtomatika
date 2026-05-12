@@ -89,6 +89,24 @@ Avtomatika es parte de un ecosistema más grande:
     ```bash
     pip install "avtomatika[all,test]"
     ```
+
+## Estados del Trabajo (Job Statuses)
+
+Los trabajos en Avtomatika pasan por varios estados:
+
+| Estado | Tipo | Descripción |
+| :--- | :--- | :--- |
+| `pending` | Intermedio | Trabajo creado, esperando a ser encolado. |
+| `running` | Intermedio | Ejecución activa de la lógica o tareas. |
+| `waiting_for_worker` | Intermedio | Tarea enviada, esperando que un worker la recoja. |
+| `waiting_for_human` | Intermedio | Pausado, esperando aprobación manual vía webhook. |
+| `waiting_for_parallel` | Intermedio | Esperando que se completen las subtareas paralelas. |
+| `finished` | **Terminal** | Completado con éxito. **El resultado es visible.** |
+| `failed` | **Terminal** | Fallo de lógica o del worker. **El resultado es visible.** |
+| `cancelled` | **Terminal** | Cancelado manualmente por el usuario o el sistema. |
+| `error` | **Terminal** | Error crítico del sistema o de infraestructura. |
+| `quarantined` | **Terminal** | Marcado para revisión manual (ej. violación de contrato). |
+
 ## Inicio Rápido: Uso como Librería
 
 Puedes integrar y ejecutar fácilmente el motor del orquestador dentro de tu propia aplicación.
@@ -348,7 +366,14 @@ Para más detalles, consulta la [**Guía de Configuración**](https://github.com
 ### Seguridad y Protección de Datos
 *   **Envelope Encryption**: Si se establece `REDIS_ENCRYPTION_KEY`, los tokens de worker se cifran en Redis (AES-GCM).
 *   **Modos de Autenticación**: Soporte para `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
+*   **Aislamiento Estricto de Clientes**: Los trabajos están estrictamente vinculados al `client_token`. Un cliente solo puede acceder, gestionar o descargar archivos de los trabajos que creó.
+*   **Política de Detalle de API**: Por defecto, la API devuelve campos mínimos. Activa detalles completos mediante `DETAILED_API_RESPONSES="true"`.
 *   **Prefijo de API Configurable**: La API de cliente se puede mover o ocultar vía `CLIENT_API_PREFIX`.
+
+### Límite de Tasa
+
+Limitador de tasa granular basado en Redis (Heartbeats: 120/min, Polling: 60/min, General: 100/min).
+> **Nota:** Los workers reciben un encabezado estándar **`Retry-After`** al ser bloqueados para gestionar el backoff inteligente.
 
 ### Capa de Almacenamiento
 

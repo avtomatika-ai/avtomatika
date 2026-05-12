@@ -82,8 +82,9 @@ async def inventory_ok(context):
     """
     Вызывается, если воркер подтвердил наличие товара.
     """
-    # Данные, возвращенные воркером, доступны в state_history
-    worker_data = context.state_history.get("warehouse_info")
+    # Данные, возвращенные воркером, доступны в поле result 
+    # (это ярлык для последнего шага в state_history)
+    worker_data = context.result
     print(f"Job {context.job_id}: товар в наличии. Информация от воркера: {worker_data}")
     
     context.actions.go_to("finished_successfully")

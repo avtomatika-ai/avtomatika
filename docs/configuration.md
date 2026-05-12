@@ -184,6 +184,28 @@ In addition to configuration files, the Orchestrator is configured via environme
 | `RATE_LIMIT_HEARTBEAT_LIMIT` | Specific limit for worker heartbeat requests per period. | `120` |
 | `RATE_LIMIT_POLL_LIMIT` | Specific limit for worker task poll requests per period. | `60` |
 | `MAX_TRANSITIONS_PER_JOB` | **Infinite Loop Protection:** Maximum number of state transitions allowed for a single job before it is terminated. | `100` |
+| `DETAILED_API_RESPONSES` | **Detailed API Responses:** If `false` (default), the job status API returns only a minimal set of fields. | `false` |
+
+### 429 Response (Too Many Requests)
+When a limit is exceeded, the Orchestrator returns a standard **`Retry-After`** HTTP header.
+> **Note:** This header is returned **only to workers** (requests to `/_worker/*`) to assist with smart backoff strategies. Regular API clients receive a 429 without the wait time.
+
+---
+
+### Job Status Response Format
+The system supports two levels of detail for the `GET /api/v1/jobs/{id}` endpoint:
+
+1. **Compact Mode** (Default, `DETAILED_API_RESPONSES=false`):
+   Returns only 4 essential fields:
+   - `id` — Job identifier.
+   - `status` — Current lifecycle status.
+   - `result` — Data from the latest completed step.
+   - `blueprint_name` — Name of the blueprint.
+   
+   *Note:* The `?fields=...` parameter in this mode is restricted only to these 4 fields.
+
+2. **Detailed Mode** (`DETAILED_API_RESPONSES=true`):
+   Returns the full job state object, including `state_history`, `initial_data`, `client_config`, etc. In this mode, the `?fields` parameter can be used to request any field.
 | `WORKER_AUTH_MODE` | **Authentication mode:** `mixed` (tokens+mTLS), `mtls-only` (strict mTLS + STS tokens), or `token-only`. | `mixed` |
 
 ### Security & TLS (mTLS)
@@ -198,6 +220,9 @@ Configure these variables to enable HTTPS and Mutual TLS (Zero Trust).
 | `TLS_CA_PATH` | Path to the CA certificate bundle to verify client certificates. | `""` |
 | `TLS_REQUIRE_CLIENT_CERT` | If `true`, the server will reject connections without a valid client certificate (mTLS). | `false` |
 | `REDIS_ENCRYPTION_KEY` | **Envelope Encryption:** If provided, static worker tokens are stored encrypted in Redis (AES-GCM). | `""` |
+
+### Worker Authentication Performance
+To minimize CPU overhead during frequent heartbeats, Orchestrator caches verified worker token hashes in memory for **60 seconds**. This means changes to `workers.toml` may take up to a minute to propagate unless a manual reload is triggered via the API.
 
 ### S3 Storage (Optional)
 

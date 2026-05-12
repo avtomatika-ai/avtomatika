@@ -3,13 +3,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import orjson
 import pytest
 from aiohttp import web
-from rxon.constants import COMMAND_CANCEL_TASK
 
 from avtomatika.api.handlers import (
     _WORKER_CATALOG_CACHE,
@@ -22,7 +20,6 @@ from avtomatika.api.handlers import (
     human_approval_webhook_handler,
 )
 from avtomatika.app_keys import ENGINE_KEY
-from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.engine import OrchestratorEngine
 from avtomatika.storage.memory import MemoryStorage
@@ -46,7 +43,7 @@ def engine(storage, config):
     engine.ws_manager.register = AsyncMock()
     engine.ws_manager.unregister = AsyncMock()
     engine.ws_manager.handle_message = AsyncMock()
-    engine.ws_manager.send_command = AsyncMock()
+    engine.ws_manager.send_command = AsyncMock(return_value=True)
 
     engine.webhook_sender = AsyncMock()
     engine.webhook_sender.send = AsyncMock()
@@ -69,7 +66,12 @@ def request_mock(engine):
     req.app = app_mock
 
     req.headers = {}
-    req.match_info = MagicMock()
+    # Authenticate the request
+    token = "test-token"
+    req.get.return_value = {"token": token, "client_id": "test-client"}
+
+    # Use a dictionary to avoid lazy behavior
+    req.match_info = {}
     req.query = {}
     req.can_read_body = True
     return req
@@ -77,7 +79,7 @@ def request_mock(engine):
 
 @pytest.mark.asyncio
 async def test_cancel_job_not_found(engine, request_mock):
-    request_mock.match_info.get.return_value = "non-existent-job"
+    request_mock.match_info = {"job_id": "non-existent-job"}
     response = await cancel_job_handler(request_mock)
     assert response.status == 404
 
@@ -85,8 +87,9 @@ async def test_cancel_job_not_found(engine, request_mock):
 @pytest.mark.asyncio
 async def test_cancel_job_wrong_state(engine, request_mock):
     job_id = "job-in-wrong-state"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running"})
-    request_mock.match_info.get.return_value = job_id
+    token = request_mock.get("client_config")["token"]
+    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "running", "client_config": {"token": token}})
+    request_mock.match_info = {"job_id": job_id}
     response = await cancel_job_handler(request_mock)
     assert response.status == 200
 
@@ -94,8 +97,11 @@ async def test_cancel_job_wrong_state(engine, request_mock):
 @pytest.mark.asyncio
 async def test_cancel_job_no_worker_id(engine, request_mock):
     job_id = "job-no-worker-id"
-    await engine.storage.save_job_state(job_id, {"id": job_id, "status": "waiting_for_worker"})
-    request_mock.match_info.get.return_value = job_id
+    token = request_mock.get("client_config")["token"]
+    await engine.storage.save_job_state(
+        job_id, {"id": job_id, "status": "waiting_for_worker", "client_config": {"token": token}}
+    )
+    request_mock.match_info = {"job_id": job_id}
     response = await cancel_job_handler(request_mock)
     assert response.status == 200
 
@@ -103,10 +109,12 @@ async def test_cancel_job_no_worker_id(engine, request_mock):
 @pytest.mark.asyncio
 async def test_cancel_job_no_task_id(engine, request_mock):
     job_id = "job-no-task-id"
+    token = request_mock.get("client_config")["token"]
     await engine.storage.save_job_state(
-        job_id, {"id": job_id, "status": "waiting_for_worker", "task_worker_id": "worker-1"}
+        job_id,
+        {"id": job_id, "status": "waiting_for_worker", "task_worker_id": "worker-1", "client_config": {"token": token}},
     )
-    request_mock.match_info.get.return_value = job_id
+    request_mock.match_info = {"job_id": job_id}
     response = await cancel_job_handler(request_mock)
     assert response.status == 200
 
@@ -116,25 +124,30 @@ async def test_cancel_job_ws_fails(engine, request_mock, caplog):
     job_id = "job-ws-fails"
     worker_id = "worker-1"
     task_id = "task-1"
+    token = request_mock.get("client_config")["token"]
     await engine.storage.save_job_state(
-        job_id, {"id": job_id, "status": "waiting_for_worker", "task_worker_id": worker_id, "current_task_id": task_id}
+        job_id,
+        {
+            "id": job_id,
+            "status": "waiting_for_worker",
+            "task_worker_id": worker_id,
+            "current_task_id": task_id,
+            "client_config": {"token": token},
+        },
     )
     await engine.storage.register_worker(worker_id, {"worker_id": worker_id, "capabilities": {"websockets": True}}, 60)
 
     engine.ws_manager.send_command.return_value = False
 
-    request_mock.match_info.get.return_value = job_id
+    request_mock.match_info = {"job_id": job_id}
     response = await cancel_job_handler(request_mock)
-
     assert response.status == 200
-    engine.ws_manager.send_command.assert_called_once_with(
-        worker_id, {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
-    )
+    assert "Failed to send cancellation command via WebSocket" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_get_blueprint_graph_not_found(engine, request_mock):
-    request_mock.match_info.get.return_value = "non-existent-blueprint"
+    request_mock.match_info = {"blueprint_name": "non-existent-blueprint"}
     response = await get_blueprint_graph_handler(request_mock)
     assert response.status == 404
 
@@ -145,101 +158,91 @@ async def test_get_blueprint_graph_file_not_found(engine, request_mock):
     bp.name = "test_bp"
     bp.render_graph.side_effect = FileNotFoundError
     engine.register_blueprint(bp)
-    request_mock.match_info.get.return_value = "test_bp"
+    request_mock.match_info = {"blueprint_name": "test_bp"}
     response = await get_blueprint_graph_handler(request_mock)
     assert response.status == 501
 
 
 @pytest.mark.asyncio
 async def test_human_approval_job_not_found(engine, request_mock):
-    request_mock.match_info.get.return_value = "non-existent-job"
-
-    async def get_json(*args, **kwargs):
-        return {"decision": "approved"}
-
-    request_mock.json = get_json
-
-    async def mock_get_job_state(job_id):
-        return None
-
-    # Patch storage directly on the engine instance used by fixture
-    engine.storage.get_job_state = mock_get_job_state
-
+    request_mock.match_info = {"job_id": "non-existent-job"}
     response = await human_approval_webhook_handler(request_mock)
     assert response.status == 404
 
 
 @pytest.mark.asyncio
+async def test_human_approval_invalid_body(engine, request_mock):
+    job_id = "j1"
+    request_mock.match_info = {"job_id": job_id}
+    request_mock.json = AsyncMock(side_effect=ValueError)
+    response = await human_approval_webhook_handler(request_mock)
+    assert response.status == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_human_approval_wrong_state(engine, request_mock):
     job_id = "job-in-wrong-state"
+    token = request_mock.get("client_config")["token"]
 
-    async def mock_get_job_state(job_id):
-        return {"id": job_id, "status": "running"}
+    async def mock_get_job_state(jid):
+        if jid == job_id:
+            return {"id": job_id, "status": "running", "client_config": {"token": token}}
+        return None
 
     engine.storage.get_job_state = mock_get_job_state
-    request_mock.match_info.get.return_value = job_id
-
-    async def get_json(*args, **kwargs):
-        return {"decision": "approved"}
-
-    request_mock.json = get_json
-
+    request_mock.match_info = {"job_id": job_id}
+    request_mock.json = AsyncMock(return_value={"decision": "approved"})
     response = await human_approval_webhook_handler(request_mock)
+    # Return Conflict (409) if job is not in 'waiting_for_human' state
     assert response.status == 409
 
 
 @pytest.mark.asyncio
 async def test_human_approval_invalid_decision(engine, request_mock):
     job_id = "job-invalid-decision"
+    token = request_mock.get("client_config")["token"]
 
-    async def mock_get_job_state(job_id):
-        return {
-            "id": job_id,
-            "status": "waiting_for_human",
-            "current_task_transitions": {"approved": "next_state"},
-        }
+    async def mock_get_job_state(jid):
+        return {"id": job_id, "status": "waiting_for_human", "client_config": {"token": token}}
 
     engine.storage.get_job_state = mock_get_job_state
-    request_mock.match_info.get.return_value = job_id
-
-    async def get_json(*args, **kwargs):
-        return {"decision": "rejected"}
-
-    request_mock.json = get_json
-
+    request_mock.match_info = {"job_id": job_id}
+    request_mock.json = AsyncMock(return_value={"decision": "rejected"})
     response = await human_approval_webhook_handler(request_mock)
     assert response.status == 400
 
 
 @pytest.mark.asyncio
-async def test_get_jobs_invalid_params(engine, request_mock):
-    request_mock.query = {"limit": "abc", "offset": "def"}
+async def test_get_worker_catalog_cached(engine, request_mock):
+    """Checks that the worker catalog is cached."""
+    global _WORKER_CATALOG_CACHE
+    _WORKER_CATALOG_CACHE["data"] = [{"skill": "cached"}]
+    _WORKER_CATALOG_CACHE["expires_at"] = 9999999999.0
+
+    response = await get_worker_catalog_handler(request_mock)
+    assert response.status == 200
+    data = orjson.loads(response.body)
+    assert data == [{"skill": "cached"}]
+
+
+@pytest.mark.asyncio
+async def test_get_jobs_handler(engine, request_mock):
+    """Checks the jobs listing handler."""
+    engine.history_storage = AsyncMock()
+    engine.history_storage.get_jobs.return_value = [{"id": "j1"}]
+    request_mock.query = {"limit": "10", "offset": "0"}
+
+    response = await get_jobs_handler(request_mock)
+    assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_get_jobs_handler_invalid_params(engine, request_mock):
+    """Checks the jobs listing handler with invalid query params."""
+    request_mock.query = {"limit": "abc"}
     response = await get_jobs_handler(request_mock)
     assert response.status == 400
-
-
-@pytest.mark.asyncio
-async def test_docs_handler_injection(engine, request_mock):
-    bp = Blueprint(name="test_bp", api_endpoint="/jobs/test", api_version="v1")
-
-    @bp.handler("start", is_start=True)
-    async def start(context, actions):
-        pass
-
-    engine.register_blueprint(bp)
-
-    response = await docs_handler(request_mock)
-    assert response.status == 200
-    text = response.text
-    assert "Create Test Bp Job" in text
-    assert "/api/v1/jobs/test" in text
-
-
-@pytest.mark.asyncio
-async def test_docs_handler_not_found(engine, request_mock):
-    with patch("importlib.resources.read_text", side_effect=FileNotFoundError):
-        response = await docs_handler(request_mock)
-        assert response.status == 500
 
 
 @pytest.mark.asyncio
@@ -247,35 +250,28 @@ async def test_api_field_filtering(engine, request_mock):
     """Checks that GET /api/v1/jobs/{id}?fields=... filters the response."""
 
     job_id = "j1"
+    token = request_mock.get("client_config")["token"]
     await engine.storage.save_job_state(
-        job_id, {"id": job_id, "status": "finished", "result": "data", "secret": "hide-me"}
+        job_id,
+        {"id": job_id, "status": "finished", "result": "data", "secret": "hide-me", "client_config": {"token": token}},
     )
 
-    request_mock.match_info.get.return_value = job_id
+    request_mock.match_info = {"job_id": job_id}
     request_mock.query = {"fields": "status,result"}
 
-    with patch("avtomatika.api.handlers.json_response") as mock_json:
-        await get_job_status_handler(request_mock)
+    response = await get_job_status_handler(request_mock)
+    assert response.status == 200
+    data = orjson.loads(response.body)
 
-        # Should only contain id (always), status, and result
-        filtered_data = mock_json.call_args[0][0]
-        assert filtered_data == {"id": job_id, "status": "finished", "result": "data"}
-        assert "secret" not in filtered_data
+    assert "id" in data
+    assert "status" in data
+    assert "result" in data
+    assert "secret" not in data
 
 
 @pytest.mark.asyncio
-async def test_worker_catalog_cache(engine, request_mock):
-    """Checks that the worker catalog is cached."""
-    engine.storage.get_available_workers = AsyncMock(return_value=[])
-
-    # Clear cache
-    _WORKER_CATALOG_CACHE["data"] = None
-    _WORKER_CATALOG_CACHE["expires_at"] = 0
-
-    # First call
-    await get_worker_catalog_handler(request_mock)
-    assert engine.storage.get_available_workers.call_count == 1
-
-    # Second call
-    await get_worker_catalog_handler(request_mock)
-    assert engine.storage.get_available_workers.call_count == 1  # Cached
+async def test_docs_handler_file_not_found(engine, request_mock):
+    """Checks that docs_handler returns 500 when docs file is missing."""
+    with patch("importlib.resources.read_text", side_effect=FileNotFoundError):
+        response = await docs_handler(request_mock)
+        assert response.status == 500

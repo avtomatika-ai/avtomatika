@@ -37,17 +37,17 @@ async def test_mixed_mode_auth(mock_storage, config):
 
     # 1. mTLS
     res = await verify_worker_auth(mock_storage, config, None, "worker1", "worker1")
-    assert res == "worker1"
+    assert res[0] == "worker1"
 
     # 2. Individual Token
     mock_storage.get_worker_token.return_value = "token1"
     res = await verify_worker_auth(mock_storage, config, "token1", None, "worker1")
-    assert res == "worker1"
+    assert res[0] == "worker1"
 
     # 3. Global Token
     mock_storage.get_worker_token.return_value = None  # Reset individual token
     res = await verify_worker_auth(mock_storage, config, "global-secret", None, "any-worker")
-    assert res == "any-worker"
+    assert res[0] == "any-worker"
 
 
 @pytest.mark.asyncio
@@ -57,12 +57,12 @@ async def test_mtls_only_mode_auth(mock_storage, config):
 
     # 1. mTLS - OK
     res = await verify_worker_auth(mock_storage, config, None, "worker1", "worker1")
-    assert res == "worker1"
+    assert res[0] == "worker1"
 
     # 2. STS Token - OK
     mock_storage.verify_worker_access_token.return_value = "worker1"
     res = await verify_worker_auth(mock_storage, config, "sts-token", None, "worker1")
-    assert res == "worker1"
+    assert res[0] == "worker1"
 
     # 3. Static Token - REJECTED
     mock_storage.verify_worker_access_token.return_value = None  # Ensure it fails STS check
@@ -87,16 +87,16 @@ async def test_token_only_mode_auth(mock_storage, config):
     # 2. Static Token - OK
     mock_storage.get_worker_token.return_value = "token1"
     res = await verify_worker_auth(mock_storage, config, "token1", None, "worker1")
-    assert res == "worker1"
+    assert res[0] == "worker1"
 
     # 3. Global Token - OK
     mock_storage.get_worker_token.return_value = None  # Reset
     res = await verify_worker_auth(mock_storage, config, "global-secret", None, "any-worker")
-    assert res == "any-worker"
+    assert res[0] == "any-worker"
 
     # 4. Token + mTLS - OK (mTLS is ignored in favor of token processing)
     res = await verify_worker_auth(mock_storage, config, "global-secret", "worker1", "any-worker")
-    assert res == "any-worker"
+    assert res[0] == "any-worker"
 
 
 @pytest.mark.asyncio
@@ -124,7 +124,7 @@ async def test_worker_token_encryption(mock_storage, config):
 
     # 2. Authenticate - should succeed as it decrypts internally
     res = await verify_worker_auth(mock_storage, config, token, None, worker_id)
-    assert res == worker_id
+    assert res[0] == worker_id
 
     # 3. Authenticate with wrong encryption key - should fail
     config.REDIS_ENCRYPTION_KEY = "wrong-key"

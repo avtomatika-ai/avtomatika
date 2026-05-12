@@ -203,7 +203,7 @@ class RedisStorage(StorageBackend):
             return None
         try:
             res = unpackb(data, raw=False)
-            # Beta 20 Fix: Deep normalization to handle Redis Lua cmsgpack artifacts
+            # Deep normalization to handle Redis Lua cmsgpack artifacts
             return RedisStorage._normalize_unpacked(res)
         except Exception as e:
             logger.error(f"Failed to unpack msgpack data: {e}")
@@ -910,8 +910,11 @@ class RedisStorage(StorageBackend):
             if "NOGROUP" in str(e):
                 logger.warning("Redis stream group lost. Re-initializing...")
                 self._group_created = False
+                # Try to re-initialize once immediately, fail-safe on further errors
                 try:
                     await self.initialize()
+                    # Recursive retry after re-init
+                    return await self.dequeue_job(block=block)
                 except Exception as e2:
                     logger.error(f"Failed to re-initialize Redis group: {e2}")
                 return None
@@ -923,9 +926,29 @@ class RedisStorage(StorageBackend):
     async def quarantine_job(self, job_id: str) -> None:
         await self._redis.lpush("orchestrator:quarantine_queue", job_id)
 
-    async def get_quarantined_jobs(self) -> list[str]:
-        jobs = await self._redis.lrange("orchestrator:quarantine_queue", 0, -1)
-        return [j.decode("utf-8") for j in jobs]
+    async def get_quarantined_jobs(self, client_token: str | None = None) -> list[str]:
+        raw_ids = await self._redis.lrange("orchestrator:quarantine_queue", 0, -1)
+        job_ids = [j.decode("utf-8") for j in raw_ids]
+
+        if not client_token:
+            return job_ids
+
+        # Filter by owner by checking job states
+        # We use a pipeline for performance
+        async with self._redis.pipeline(transaction=False) as pipe:
+            for job_id in job_ids:
+                pipe.get(f"orchestrator:job:state:{job_id}")
+            states = await pipe.execute()
+
+        filtered_ids = []
+        for i, raw_state in enumerate(states):
+            if not raw_state:
+                continue
+            state = self._unpack(raw_state)
+            if state.get("client_config", {}).get("token") == client_token:
+                filtered_ids.append(job_ids[i])
+
+        return filtered_ids
 
     async def increment_key_with_ttl(self, key: str, ttl: int) -> int:
         async with self._redis.pipeline(transaction=True) as pipe:
@@ -972,6 +995,9 @@ class RedisStorage(StorageBackend):
             raise
         return cast(bool, res)
 
+    async def get_ttl(self, key: str) -> int:
+        return cast(int, await self._redis.ttl(key))
+
     async def flush_all(self) -> None:
         await self._redis.flushdb()
 
@@ -979,10 +1005,7 @@ class RedisStorage(StorageBackend):
         return cast(int, await self._redis.xlen(self._stream_key))
 
     async def get_active_worker_count(self) -> int:
-        c = 0
-        async for _ in self._redis.scan_iter("orchestrator:worker:info:*"):
-            c += 1
-        return c
+        return cast(int, await self._redis.zcard("orchestrator:index:workers:all"))
 
     async def set_nx_ttl(self, key: str, value: str, ttl: int) -> bool:
         return cast(bool, await self._redis.set(key, value, nx=True, ex=ttl))

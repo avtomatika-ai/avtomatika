@@ -25,6 +25,7 @@ try:
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
     tracer = trace.get_tracer(__name__)
+    propagator = TraceContextTextMapPropagator()
 except ImportError:
     logger = getLogger(__name__)
     logger.info("OpenTelemetry not found. Tracing will be disabled.")
@@ -57,8 +58,9 @@ except ImportError:
             return None
 
     trace = NoOpTracer()
+    tracer = trace
     inject = NoOpPropagate().inject
-    TraceContextTextMapPropagator = NoOpTraceContextTextMapPropagator()  # Instantiate the class
+    propagator = NoOpTraceContextTextMapPropagator()
 
 from .app_keys import S3_SERVICE_KEY
 from .constants import (
@@ -141,7 +143,8 @@ class JobExecutor:
                 await self.history_storage.log_job_event(
                     {
                         "job_id": job_id,
-                        "state": job_state.get("current_state"),
+                        "client_token": job_state.get("client_config", {}).get("token"),
+                        "state": job_state["current_state"],
                         "event_type": "job_failed",
                         "duration_ms": duration_ms,
                         "timestamp": time(),
@@ -155,16 +158,17 @@ class JobExecutor:
             await self.history_storage.log_job_event(
                 {
                     "job_id": job_id,
-                    "state": job_state.get("current_state"),
+                    "client_token": job_state.get("client_config", {}).get("token"),
+                    "state": job_state["current_state"],
                     "event_type": "state_started",
-                    "origin_task_id": job_state.get("current_task_id"),  # Beta 10: Trace origin task
+                    "origin_task_id": job_state.get("current_task_id"),  # Trace origin task
                     "attempt_number": job_state.get("retry_count", 0) + 1,
                     "timestamp": time(),
                     "context_snapshot": job_state,
                 },
             )
 
-            parent_context = TraceContextTextMapPropagator().extract(
+            parent_context = propagator.extract(
                 carrier=job_state.get("tracing_context", {}) or {},
             )
 
@@ -256,7 +260,7 @@ class JobExecutor:
                     await handler(**params_to_inject)
 
                     # Sync context state back to job_state for persistence
-                    # Beta 21: update_context results should go into initial_data for tests consistency
+                    # update_context results should go into initial_data for tests consistency
                     if action_factory.context_updates:
                         if "initial_data" not in job_state or job_state["initial_data"] is None:
                             job_state["initial_data"] = {}
@@ -324,7 +328,13 @@ class JobExecutor:
 
                 except Exception as e:
                     duration_ms = int((monotonic() - start_time) * 1000)
-                    await self._handle_failure(job_state, e, duration_ms)
+                    # For errors, we also want to ensure the result (even if partial) is captured
+                    if hasattr(self, "_handle_failure"):
+                        await self._handle_failure(job_state, e, duration_ms)
+                    else:
+                        job_state["status"] = JOB_STATUS_FAILED
+                        job_state["error_message"] = str(e)
+                        await self._handle_terminal_reached(job_state, JOB_STATUS_FAILED, duration_ms)
         finally:
             await self.storage.ack_job(message_id)
             if message_id in self._processing_messages:
@@ -340,9 +350,19 @@ class JobExecutor:
         current_state = job_state["current_state"]
         logger.info(f"Job {job_id} reached terminal state '{current_state}' with status '{status}'")
 
+        # Automatically extract the final result into a top-level 'result' field
+        # ONLY when the job reaches a terminal state.
+        state_history = job_state.get("state_history", {})
+        if current_state in state_history:
+            job_state["result"] = state_history[current_state]
+        elif not job_state.get("result") and state_history:
+            latest_key = list(state_history.keys())[-1]
+            job_state["result"] = state_history[latest_key]
+
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": current_state,
                 "event_type": "job_completed",
                 "duration_ms": duration_ms,
@@ -400,6 +420,7 @@ class JobExecutor:
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": previous_state,
                 "event_type": "state_finished",
                 "origin_task_id": job_state.get("current_task_id"),
@@ -429,6 +450,7 @@ class JobExecutor:
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": current_state,
                 "event_type": "task_dispatched",
                 "duration_ms": duration_ms,
@@ -626,6 +648,7 @@ class JobExecutor:
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": current_state,
                 "event_type": "state_failed",
                 "duration_ms": duration_ms,
@@ -648,9 +671,8 @@ class JobExecutor:
             logger.critical(
                 f"Job {job_id} has failed handler execution {max_retries + 1} times. Moving to quarantine.",
             )
-            job_state["status"] = JOB_STATUS_QUARANTINED
-            job_state["error_message"] = str(error)
-            await self.storage.save_job_state(job_id, job_state)
+            # Use the formal terminal handler to ensure result extraction and webhooks
+            await self._handle_terminal_reached(job_state, JOB_STATUS_QUARANTINED, duration_ms)
             await self.storage.quarantine_job(job_id)
 
             s3_service = self.engine.app.get(S3_SERVICE_KEY)

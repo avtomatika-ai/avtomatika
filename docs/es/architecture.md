@@ -24,16 +24,22 @@ Avtomatika está optimizado para un rendimiento máximo y una latencia mínima:
 
 2.  **Protocolos y Algoritmos Estandarizados**:
     *   **Smart Matching Unificado (RXON)**: Uso de la lógica formalizada del protocolo para la selección de workers. Soporte **GE (Greater or Equal)** para cualquier propiedad numérica (VRAM, RAM, CPU).
-    *   **Normalización Profunda (Beta 20 Fix)**: La capa de almacenamiento implementa el desempaquetado recursivo de Msgpack para eliminar artefactos de Redis Lua, garantizando el 100% de integridad de los datos.
+    *   **Normalización Profunda**: La capa de almacenamiento implementa el desempaquetado recursivo de Msgpack para eliminar artefactos de Redis Lua, garantizando el 100% de integridad de los datos.
     *   **Work Stealing**: Los workers inactivos pueden "robar" tareas de forma atómica de colegas sobrecargados en tiempo O(1).
 
-## Seguridad (Zero Trust Architecture)
+    3.  **Límite de Tasa Inteligente (Distribuido)**:
+    *   **Protección Anti-Spoofing**: Los límites de tasa para los workers están vinculados al hash criptográfico de sus credenciales. Esto hace imposible eludir los límites rotando identificadores de worker.
+    *   **Atomicidad**: Uso de Redis para sincronizar los límites entre múltiples instancias del orquestador.
 
-Avtomatika implementa un modelo de seguridad multicapa:
-*   **Verificación de Cadena de Identidad (Identity Chain)**: Cada señal o evento se verifica a lo largo de toda su ruta de propagación. No solo confiamos en el último remitente, verificamos el origen.
-*   **mTLS (Mutual TLS)**: Autenticación mutua obligatoria entre Orchestrator y Workers mediante certificados.
-*   STS (Security Token Service): Rotación automática de tokens de acceso de corta duración.
-*   **Soporte para Firmas**: El motor está preparado para verificar firmas digitales en el `SecurityContext` para asegurar la integridad de las tareas de extremo a extremo.
+    ## Seguridad (Zero Trust Architecture)
+
+    Avtomatika implementa un modelo de seguridad multicapa:
+    *   **Verificación de Cadena de Identidad (Identity Chain)**: Cada señal o evento se verifica a lo largo de toda su ruta de propagación. No solo confiamos en el último remitente, verificamos el origen.
+    *   **mTLS (Mutual TLS)**: Autenticación mutua obligatoria entre Orchestrator y Workers mediante certificados.
+    *   **STS (Security Token Service)**: Rotación automática de tokens de acceso de corta duración.
+    *   **Privacidad de la API**: Control estricto del detalle de las respuestas mediante `DETAILED_API_RESPONSES`. Los secretos y los snapshots de contexto técnico se filtran automáticamente en todos los puntos finales y webhooks.
+    *   **Soporte para Firmas**: El motor está preparado para verificar firmas digitales en el `SecurityContext` para asegurar la integridad de las tareas de extremo a extremo.
+
 
 ## Componentes Clave
 

@@ -53,9 +53,40 @@ La ruta base para estos puntos finales es configurable a través de la variable 
 
 ### Obtener Estado del Trabajo
 -   **Punto final:** `GET /api/v1/jobs/{job_id}`
--   **Descripción:** Devuelve el estado actual del trabajo.
+-   **Descripción:** Devuelve el estado actual del trabajo. El nivel de detalle depende de la configuración `DETAILED_API_RESPONSES` del servidor.
+
+#### Estados del Trabajo (Job Statuses)
+El sistema utiliza los siguientes estados para gestionar el ciclo de vida del trabajo:
+
+**Estados Intermedios:**
+*   `pending`: Trabajo creado y esperando a ser encolado.
+*   `running`: El trabajo se está procesando activamente.
+*   `waiting_for_worker`: Esperando a que un worker adecuado recoja la tarea.
+*   `waiting_for_human`: Esperando aprobación o acción manual (Human-in-the-loop).
+*   `waiting_for_parallel`: Esperando a que se completen todas las subtareas en una rama paralela.
+
+**Estados Terminales:**
+*   `finished`: Trabajo completado con éxito. El resultado final está disponible.
+*   `failed`: Error de lógica o del worker. Los detalles del error están disponibles.
+*   `cancelled`: El trabajo fue cancelado por un usuario o por el sistema.
+*   `error`: Error crítico del sistema durante la ejecución.
+*   `quarantined`: Trabajo puesto en cuarentena para revisión manual (por ejemplo, debido a una violación del contrato).
+
 -   **Parámetros:** `?fields=status,result` — filtrado de campos devueltos.
--   **Respuesta (`200 OK`):** JSON del trabajo.
+
+**Nota de seguridad:** El campo `result` solo se completa y es visible cuando el trabajo alcanza un estado terminal (`finished` o `failed`). Para trabajos en estados intermedios (`running`, `waiting`), el resultado se oculta para proteger los datos confidenciales en curso.
+
+**Aislamiento de datos:** El acceso está estrictamente limitado al cliente que creó el trabajo. Debe proporcionar el mismo `X-Client-Token` que se utilizó para iniciar el trabajo. Cualquier intento de acceder a un ID de trabajo perteneciente a otro cliente devolverá un `404 Not Found` por razones de seguridad (para evitar la enumeración de ID de trabajo).
+
+**Respuesta Compacta (Por defecto):**
+```json
+{
+  "id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "finished",
+  "result": { "output": "success" },
+  "blueprint_name": "my_flow"
+}
+```
 
 ### Operaciones con S3
 -   `GET /api/v1/jobs/{job_id}/files/upload` — obtener URL de subida.
@@ -63,12 +94,14 @@ La ruta base para estos puntos finales es configurable a través de la variable 
 -   `GET /api/v1/jobs/{job_id}/files/download/{filename}` — enlace estable de descarga.
 
 ### Gestión y Diagnóstico
--   `POST /api/v1/jobs/{job_id}/cancel` — cancelar tarea activa.
--   `GET /api/v1/jobs/{job_id}/history` — historial completo de eventos del trabajo.
+-   `POST /api/v1/jobs/{job_id}/cancel` — cancela una tarea activa.
+-   `GET /api/v1/jobs/{job_id}/history` — historial completo de eventos del trabajo. En modo compacto, los campos `context_snapshot` en los eventos se filtran.
+-   `GET /api/v1/jobs` — lista de todos los trabajos. En modo compacto, el `context_snapshot` de cada trabajo se filtra.
 -   `GET /api/v1/blueprints/{blueprint_name}/graph` — estructura del blueprint en formato DOT.
--   `GET /api/v1/workers` — lista de workers activos.
+-   `GET /api/v1/workers` — lista de todos los workers activos.
 -   `GET /api/v1/dashboard` — estadísticas agregadas del sistema.
--   `GET /api/v1/workers/catalog` — catálogo de habilidades (caché 10 seg).
+-   `GET /api/v1/workers/catalog` — catálogo de habilidades (caché 10s).
+
 
 ---
 

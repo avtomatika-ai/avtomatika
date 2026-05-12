@@ -162,7 +162,33 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 | `WORK_STEALING_ENABLED` | Si es `true`, los workers inactivos pueden robar tareas de colegas cargados. | `true` |
 | `HISTORY_DATABASE_URI` | URI para el almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` |
 | `RATE_LIMITING_ENABLED` | Habilitar middleware de límite de tasa. | `true` |
+| `RATE_LIMIT_LIMIT` | Límite máximo de solicitudes por periodo. | `100` |
+| `RATE_LIMIT_PERIOD` | Periodo de límite de tasa en segundos. | `60` |
+| `RATE_LIMIT_HEARTBEAT_LIMIT` | Límite específico para latidos (heartbeats). | `120` |
+| `RATE_LIMIT_POLL_LIMIT` | Límite específico para sondeo de tareas (polling). | `60` |
 | `MAX_TRANSITIONS_PER_JOB` | **Protección de Bucle Infinito:** Límite de transiciones por trabajo. | `100` |
+| `DETAILED_API_RESPONSES` | **Respuestas de API Detalladas:** Si es `false` (por defecto), la API de estado devuelve solo un conjunto básico de campos. | `false` |
+
+### Respuesta 429 (Too Many Requests)
+Cuando se excede un límite, el Orquestador devuelve un encabezado HTTP estándar **`Retry-After`**.
+> **Nota:** Este encabezado se devuelve **solo a los workers** (solicitudes a `/_worker/*`) para ayudar con las estrategias de backoff. Los clientes normales de la API reciben un 429 sin el tiempo de espera.
+
+---
+
+### Formato de respuesta de estado del trabajo
+El sistema admite dos niveles de detalle para el endpoint `GET /api/v1/jobs/{id}`:
+
+1. **Modo Compacto** (Por defecto, `DETAILED_API_RESPONSES=false`):
+   Devuelve solo 4 campos esenciales:
+   - `id` — Identificador del trabajo.
+   - `status` — Estado actual del ciclo de vida.
+   - `result` — Resultado del último paso completado.
+   - `blueprint_name` — Nombre del blueprint.
+   
+   *Nota:* El parámetro `?fields=...` en este modo está restringido solo a estos 4 campos.
+
+2. **Modo Detallado** (`DETAILED_API_RESPONSES=true`):
+   Devuelve el objeto completo del estado del trabajo, incluyendo `state_history`, `initial_data`, `client_config`, etc.
 | `WORKER_AUTH_MODE` | **Modo de autenticación:** `mixed` (tokens+mTLS), `mtls-only` (mTLS estricto + STS), `token-only`. | `mixed` |
 
 ### Seguridad y TLS (mTLS)
@@ -175,6 +201,9 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 | `TLS_CA_PATH` | Ruta al paquete CA para verificar certificados de cliente. | `""` |
 | `TLS_REQUIRE_CLIENT_CERT` | Si es `true`, el servidor rechazará conexiones sin certificado válido (mTLS). | `false` |
 | `REDIS_ENCRYPTION_KEY` | **Cifrado de Sobres:** Si se proporciona, los tokens de worker se cifran en Redis (AES-GCM). | `""` |
+
+### Rendimiento de la autenticación de workers
+Para minimizar la sobrecarga de CPU durante los heartbeats frecuentes, el Orquestador almacena en caché los hashes de los tokens de los workers verificados en la memoria durante **60 segundos**. Esto significa que los cambios en `workers.toml` pueden tardar hasta un minuto en propagarse a menos que se active una recarga manual a través de la API.
 
 ### Almacenamiento S3 (Opcional)
 

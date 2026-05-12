@@ -105,16 +105,12 @@ class OrchestratorEngine:
 
         middlewares = [compression_middleware]
         if config.RATE_LIMITING_ENABLED:
-            overrides = {
-                "heartbeat": config.RATE_LIMIT_HEARTBEAT_LIMIT,
-                "tasks/next": config.RATE_LIMIT_POLL_LIMIT,
-            }
+            # Client API global rate limits
             middlewares.append(
                 rate_limit_middleware_factory(
                     self.storage,
                     config.RATE_LIMIT_LIMIT,
                     config.RATE_LIMIT_PERIOD,
-                    overrides=overrides,
                 )
             )
 
@@ -226,7 +222,41 @@ class OrchestratorEngine:
             elif hasattr(payload, "worker_id"):
                 worker_id_hint = payload.worker_id
 
-        auth_worker_id = await verify_worker_auth(self.storage, self.config, token, cert_identity, worker_id_hint)
+        auth_worker_id, cred_hash = await verify_worker_auth(
+            self.storage, self.config, token, cert_identity, worker_id_hint
+        )
+
+        # Core-level rate limiting for workers.
+        # This ensures individual limits even behind NAT or with shared tokens,
+        # as we now have the verified auth_worker_id AND the credential hash.
+        # The key is tied to the token hash to prevent bypassing limits by spoofing worker_id.
+        if self.config.RATE_LIMITING_ENABLED:
+            limit = self.config.RATE_LIMIT_LIMIT
+            if message_type == "poll":
+                limit = self.config.RATE_LIMIT_POLL_LIMIT
+            elif message_type == "heartbeat":
+                limit = self.config.RATE_LIMIT_HEARTBEAT_LIMIT
+
+            rate_limit_key = f"ratelimit:worker:{cred_hash}:{auth_worker_id}:{message_type}"
+            try:
+                count = await self.storage.increment_key_with_ttl(rate_limit_key, self.config.RATE_LIMIT_PERIOD)
+                if count > limit:
+                    metrics.ratelimit_blocked_total.inc({"identifier": auth_worker_id, "path": f"rxon:{message_type}"})
+                    ttl = await self.storage.get_ttl(rate_limit_key)
+                    retry_after = str(max(1, ttl)) if ttl > 0 else "1"
+
+                    # Raise exception that will be caught by the listener and turned into 429
+                    resp = web.json_response(
+                        {"error": "Too Many Requests"}, status=429, headers={"Retry-After": retry_after}
+                    )
+                    raise web.HTTPTooManyRequests(
+                        text=resp.body.decode(), content_type="application/json", headers={"Retry-After": retry_after}
+                    )
+            except web.HTTPException:
+                raise
+            except Exception:
+                # If storage fails, we allow the message to proceed
+                pass
 
         if self.worker_service is None:
             raise web.HTTPInternalServerError(text="WorkerService is not initialized.")
@@ -500,6 +530,7 @@ class OrchestratorEngine:
         await self.history_storage.log_job_event(
             {
                 "job_id": job_id,
+                "client_token": job_state.get("client_config", {}).get("token"),
                 "state": "pending",
                 "event_type": "job_created",
                 "context_snapshot": job_state,
@@ -559,13 +590,21 @@ class OrchestratorEngine:
         if not webhook_url:
             return
 
+        detailed = self.config.DETAILED_API_RESPONSES
+
+        # Result selection: use specific 'result' field if available,
+        # fallback to state_history only if detailed mode is on.
+        result = job_state.get("result")
+        if not result and detailed:
+            result = job_state.get("state_history")
+
         payload = WebhookPayload(
             event=event,
             job_id=job_state["id"],
             status=job_state["status"],
-            result=job_state.get("state_history"),  # Or specific result
+            result=result,
             error=job_state.get("error_message"),
-            security=job_state.get("security"),
+            security=job_state.get("security") if detailed else None,
             metadata=job_state.get("metadata"),
             timestamp=job_state.get("timestamp"),
         )
@@ -607,6 +646,7 @@ class OrchestratorEngine:
             await self.history_storage.log_job_event(
                 {
                     "job_id": job_id,
+                    "client_token": job_state.get("client_config", {}).get("token"),
                     "state": job_state.get("current_state"),
                     "event_type": "task_finished",
                     "worker_id": worker_id,
@@ -660,7 +700,9 @@ class OrchestratorEngine:
             worker_info = await self.storage.get_worker_info(worker_id)
             if worker_info and worker_info.get("capabilities", {}).get("websockets"):
                 command = {"command": COMMAND_CANCEL_TASK, "task_id": task_id, "job_id": job_id}
-                await self.ws_manager.send_command(worker_id, command)
+                success = await self.ws_manager.send_command(worker_id, command)
+                if not success:
+                    logger.warning(f"Failed to send cancellation command via WebSocket to worker {worker_id}")
 
         logger.info(f"Job {job_id} has been cancelled.")
         return True

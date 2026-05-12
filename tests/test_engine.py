@@ -3,13 +3,12 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
+from src.avtomatika.blueprint import Blueprint
 
 import avtomatika.engine as engine_mod
 from avtomatika.app_keys import (
@@ -55,10 +54,15 @@ def engine(storage, config):
 
 @pytest.mark.asyncio
 async def test_register_blueprint(engine):
-    mock_bp = MagicMock()
-    mock_bp.name = "test_bp"
-    engine.register_blueprint(mock_bp)
-    assert engine.blueprints["test_bp"] == mock_bp
+    bp = Blueprint(name="test_bp")
+
+    @bp.handler(is_start=True)
+    async def start():
+        pass
+
+    engine.register_blueprint(bp)
+    assert engine.blueprints["test_bp"] == bp
+    assert engine.blueprint_contracts["test_bp"] is not None
 
 
 @pytest.mark.asyncio

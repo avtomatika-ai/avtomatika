@@ -50,11 +50,13 @@ class TaskFiles:
         job_id: str,
         base_local_dir: str | Path,
         history: HistoryStorageBase | None = None,
+        client_token: str | None = None,
     ):
         self._provider = provider
         self._bucket = bucket
         self._job_id = job_id
         self._history = history
+        self._client_token = client_token
         self._s3_prefix = f"jobs/{job_id}/"
         self.local_dir = Path(base_local_dir) / job_id
 
@@ -263,6 +265,7 @@ class TaskFiles:
             await self._history.log_job_event(
                 {
                     "job_id": self._job_id,
+                    "client_token": self._client_token,
                     "event_type": "s3_operation",
                     "state": "running",
                     "context_snapshot": context_snapshot,
@@ -435,7 +438,7 @@ class S3Service(BlobProvider):
             ),
         )
 
-    def get_task_files(self, job_id: str) -> TaskFiles | None:
+    def get_task_files(self, job_id: str, client_token: str | None = None) -> TaskFiles | None:
         if not self._enabled or not self._store or not self._semaphore:
             return None
 
@@ -445,6 +448,7 @@ class S3Service(BlobProvider):
             job_id,
             self.config.TASK_FILES_DIR,
             self._history,
+            client_token=client_token,
         )
 
     def generate_presigned_url(self, key: str, method: str = "GET", expires_in: int = 3600) -> str:

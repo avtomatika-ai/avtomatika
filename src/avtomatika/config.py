@@ -115,6 +115,8 @@ class Config:
 
         self.MAX_TRANSITIONS_PER_JOB: int = int(getenv("MAX_TRANSITIONS_PER_JOB", 100))
 
+        self.DETAILED_API_RESPONSES: bool = getenv("DETAILED_API_RESPONSES", "false").lower() == "true"
+
     @property
     def encrypt_worker_tokens(self) -> bool:
         """Returns True if envelope encryption for worker tokens is enabled."""

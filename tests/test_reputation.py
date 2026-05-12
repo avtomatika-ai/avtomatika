@@ -3,19 +3,22 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from src.avtomatika.config import Config
+from src.avtomatika.engine import OrchestratorEngine
 from src.avtomatika.reputation import ReputationCalculator
 
 
 @pytest.fixture
 def mock_engine():
-    engine = MagicMock()
+    engine = MagicMock(spec=OrchestratorEngine)
     engine.storage = AsyncMock()
     engine.history_storage = AsyncMock()
+    engine.config = Config()
+    engine.config.REPUTATION_WEIGHT_HISTORY = 0.7
+    engine.config.REPUTATION_WEIGHT_INITIAL = 0.3
     return engine
 
 

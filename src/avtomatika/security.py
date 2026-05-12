@@ -31,10 +31,10 @@ async def verify_worker_auth(
     token: str | None,
     cert_identity: str | None,
     worker_id_hint: str | None,
-) -> str:
+) -> tuple[str, str]:
     """
     Verifies worker authentication using token or mTLS.
-    Returns authenticated worker_id.
+    Returns (authenticated_worker_id, credential_hash).
     Raises ValueError (400), PermissionError (401/403) on failure.
     """
     mode = config.WORKER_AUTH_MODE
@@ -44,7 +44,7 @@ async def verify_worker_auth(
             raise PermissionError(
                 f"Unauthorized: Certificate CN '{cert_identity}' does not match worker_id '{worker_id_hint}'"
             )
-        return cert_identity
+        return cert_identity, cert_identity
 
     if not token:
         if mode == "mtls-only":
@@ -83,14 +83,14 @@ async def verify_worker_auth(
             raise PermissionError(
                 f"Unauthorized: Access Token belongs to '{token_worker_id}', but request is for '{worker_id_hint}'"
             )
-        return token_worker_id
+        return token_worker_id, hashed_provided_token
 
     if mode == "mtls-only":
         raise PermissionError("Unauthorized: Invalid authentication method.")
 
     if not worker_id_hint:
         if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
-            return "unknown_authenticated_by_global_token"
+            return "unknown_authenticated_by_global_token", hashed_provided_token
 
         raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
 
@@ -104,11 +104,11 @@ async def verify_worker_auth(
             expected_token = decrypted
 
         if token == expected_token:
-            return worker_id_hint
+            return worker_id_hint, hashed_provided_token
         raise PermissionError("Unauthorized: Invalid individual worker token")
 
     if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
-        return worker_id_hint
+        return worker_id_hint, hashed_provided_token
 
     raise PermissionError("Unauthorized: No valid token found")
 

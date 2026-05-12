@@ -3,16 +3,16 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from rxon.models import InstalledArtifact, Resources
 from rxon.utils import from_dict
+from src.avtomatika.config import Config
 from src.avtomatika.context import ActionFactory
 from src.avtomatika.dispatcher import Dispatcher
+from src.avtomatika.storage.base import StorageBackend
 
 # --- Sample Worker Data ---
 GPU_WORKER = {
@@ -43,14 +43,16 @@ CPU_WORKER = {
 
 @pytest.fixture
 def mock_storage():
-    storage = MagicMock()
+    storage = MagicMock(spec=StorageBackend)
     storage.find_workers_for_skill = AsyncMock(return_value=[])
     storage.find_hot_workers = AsyncMock(return_value=[])
     storage.find_workers_by_hot_skill = AsyncMock(return_value=[])
     storage.get_workers = AsyncMock(return_value=[])
+    storage.get_worker_info = AsyncMock(return_value=None)
     storage.enqueue_task_for_worker = AsyncMock()
     storage.save_job_state = AsyncMock()
     storage.increment_worker_load = AsyncMock()
+    storage.decrement_worker_load = AsyncMock()
     return storage
 
 
@@ -66,8 +68,11 @@ def mock_session():
 
 @pytest.fixture
 def mock_config():
-    mock_conf = MagicMock()
+    mock_conf = MagicMock(spec=Config)
     mock_conf.WORKER_TOKEN = "test-token"
+    mock_conf.DISPATCHER_SOFT_LIMIT = 3
+    mock_conf.DISPATCHER_MAX_CANDIDATES = 50
+    mock_conf.WORK_STEALING_ENABLED = True
     return mock_conf
 
 
@@ -85,23 +90,27 @@ async def test_dispatch_selects_worker_and_queues_task(dispatcher, mock_storage)
     }
     mock_storage.find_workers_for_skill.return_value = ["worker-123"]
     mock_storage.get_workers.return_value = [mock_worker]
-    mock_storage.enqueue_task_for_worker = AsyncMock()
 
-    job_state = {"id": "job-abc", "tracing_context": {}}
+    job_id = "job-abc"
+    job_state = {"id": job_id, "tracing_context": {}, "blueprint_name": "test-bp"}
     task_info = {"type": "test_task", "params": {"x": 1}}
+
     await dispatcher.dispatch(job_state, task_info)
 
     mock_storage.find_workers_for_skill.assert_called_once_with("test_task")
     mock_storage.get_workers.assert_called_once_with(["worker-123"])
-    mock_storage.enqueue_task_for_worker.assert_called_once()
 
-    # Check the data passed to enqueue_task_for_worker
-    called_args, _ = mock_storage.enqueue_task_for_worker.call_args
-    assert called_args[0] == mock_worker["worker_id"]  # worker_id
-    payload = called_args[1]  # task_payload
-    assert payload["job_id"] == job_state["id"]
-    assert payload["type"] == task_info["type"]
-    assert "task_id" in payload
+    # Check the full structure passed to enqueue_task_for_worker
+    mock_storage.enqueue_task_for_worker.assert_called_once()
+    called_wid, called_task, called_priority = mock_storage.enqueue_task_for_worker.call_args[0]
+
+    assert called_wid == "worker-123"
+    assert called_task["job_id"] == job_id
+    assert called_task["task_id"].startswith("task-")
+    assert called_task["params"]["x"] == 1
+    assert "tracing_context" in called_task
+    assert called_task["type"] == task_info["type"]
+    assert isinstance(called_priority, (int, float))
 
 
 @pytest.mark.asyncio
