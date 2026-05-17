@@ -304,7 +304,6 @@ class Dispatcher:
         if not sorted_workers:
             raise RuntimeError(f"No worker meets the maximum cost ({max_cost}) for task '{task_type}'")
 
-        # Get queue lengths
         worker_queue_lens = {}
         for w in sorted_workers:
             wid = w["worker_id"]
@@ -321,7 +320,7 @@ class Dispatcher:
         # Find the one with the minimum queue among candidates
         return min(sorted_workers, key=lambda w: worker_queue_lens[w["worker_id"]])
 
-    async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]) -> None:
+    async def dispatch(self, job_state: dict[str, Any], task_info: dict[str, Any]) -> dict[str, Any]:
         job_id = job_state["id"]
         task_type = task_info.get("type")
         if not task_type:
@@ -531,9 +530,58 @@ class Dispatcher:
             logger.info(
                 f"Task {task_id} with priority {priority} successfully enqueued for worker {worker_id}",
             )
-            job_state["current_task_id"] = task_id
-            job_state["task_worker_id"] = worker_id
-            await self.storage.save_job_state(job_id, job_state)
+
+            # Record dispatch details in state ATOMICALLY
+            now_ts = time()
+
+            async def _update_dispatch_state(state: dict[str, Any]) -> dict[str, Any]:
+                is_parallel = task_id in (state.get("active_branches") or [])
+                if is_parallel:
+                    branch_workers = state.setdefault("branch_worker_ids", {}) or {}
+                    branch_workers[task_id] = worker_id
+                    state["branch_worker_ids"] = branch_workers
+
+                    branch_dispatched = state.setdefault("branch_dispatched_at", {}) or {}
+                    branch_dispatched[task_id] = now_ts
+                    state["branch_dispatched_at"] = branch_dispatched
+                else:
+                    state["assigned_worker_id"] = worker_id
+                    state["task_dispatched_at"] = now_ts
+
+                state["current_task_id"] = task_id
+                state["task_worker_id"] = worker_id
+                return state
+
+            updated_state = await self.storage.update_job_state_atomic(job_id, _update_dispatch_state)
+            if isinstance(updated_state, dict):
+                job_state.update(updated_state)
+
+            # 4. Add to Watcher
+            # For parallel branches, we watch the specific branch task ID
+            # to allow independent timeouts and avoid field collisions.
+            is_parallel = task_id in (job_state.get("active_branches") or [])
+            watch_key = f"{job_id}:{task_id}" if is_parallel else job_id
+
+            # Recalculate timeout relative to this specific dispatch
+            timeout_val = job_state.get("result_deadline")
+            if timeout_val is not None:
+                try:
+                    timeout_at = float(timeout_val)
+                except (TypeError, ValueError):
+                    timeout_at = now_ts + 30.0  # Emergency fallback
+            else:
+                # Fallback to local worker timeout from dispatch time
+                raw_timeout = task_info.get("timeout_seconds")
+                if raw_timeout is not None:
+                    execution_timeout = float(raw_timeout)
+                else:
+                    execution_timeout = float(getattr(self.config, "WORKER_TIMEOUT_SECONDS", 30.0))
+
+                timeout_at = now_ts + execution_timeout
+
+            await self.storage.add_job_to_watch(watch_key, timeout_at)
+
+            return job_state
 
         except Exception as e:
             logger.exception(

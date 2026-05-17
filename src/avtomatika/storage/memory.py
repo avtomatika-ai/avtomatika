@@ -7,6 +7,7 @@
 
 from asyncio import CancelledError, Lock, PriorityQueue, Queue, QueueEmpty, wait_for
 from collections.abc import Callable
+from fnmatch import fnmatch
 from inspect import iscoroutinefunction
 from time import monotonic
 from typing import Any, cast
@@ -492,6 +493,25 @@ class MemoryStorage(StorageBackend):
     async def get_worker_token(self, worker_id: str) -> str | None:
         async with self._lock:
             return self._worker_tokens.get(worker_id)
+
+    async def find_worker_token(self, worker_id: str) -> str | None:
+        async with self._lock:
+            # 1. Try direct match
+            token = self._worker_tokens.get(worker_id)
+            if token:
+                return token
+
+            # 2. Try patterns
+            for key, val in self._worker_tokens.items():
+                if key.startswith("pattern:"):
+                    pattern = key.removeprefix("pattern:")
+                    if fnmatch(worker_id, pattern):
+                        return val
+            return None
+
+    async def get_all_worker_tokens(self) -> dict[str, str]:
+        async with self._lock:
+            return self._worker_tokens.copy()
 
     async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
         async with self._lock:

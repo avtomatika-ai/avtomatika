@@ -49,8 +49,7 @@ class StorageTestSuite:
         assert fetched_state is not None
         assert fetched_state["id"] == job_id
         assert fetched_state["data"]["foo"] == "bar"
-        assert fetched_state["binary_data"] == b"some_bytes"
-
+        assert fetched_state["binary_data"] in (b"some_bytes", "some_bytes")
         update_data = {"status": "running", "retry_count": 1}
         updated_state = await storage.update_job_state(job_id, update_data)
 

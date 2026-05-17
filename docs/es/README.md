@@ -11,11 +11,12 @@
 ## 🚀 Características Principales
 
 - **State-Machine Driven**: Blueprints declarativos en Python para lógica compleja.
-- **Almacenamiento Redis de Alto Rendimiento**: Indexación **ZSET** para gestión atómica de workers y serialización **Msgpack**.
-- **Seguridad Zero Trust**: Autenticación obligatoria de workers y **Protección contra Reenvío** (ventana de tiempo de 60s).
+- **Almacenamiento Redis de Alto Rendimiento**: **Actualizaciones de estado atómicas** vía Lua scripts y serialización **Msgpack**.
+- **Seguridad Zero Trust**: Autenticación obligatoria de workers, **patrones de tokens** para escalado dinámico y **protección contra reenvío**.
 - **Almacenamiento de Blobs Enchufable**: Soporte completo para S3 a través de la interfaz `BlobProvider` (potenciado por `obstore`).
-- **Lógica Jerárquica**: Soporte para blueprints hijos (Ghosts) y ejecución paralela con agregación de resultados.
+- **Lógica Jerárquica**: Soporte para blueprints hijos (Ghosts) y **ejecución paralela con aislamiento de estado por rama**.
 - **Observability**: Seguimiento distribuido con **OpenTelemetry** y métricas en tiempo real.
+
 
 Este documento sirve como una guía completa para desarrolladores que buscan construir pipelines (blueprints) e integrar el Orquestador en sus aplicaciones.
 
@@ -279,6 +280,8 @@ async def transcode_video(initial_data, actions):
 
 ### 3. Ejecución Paralela y Agregación (Fan-out/Fan-in)
 
+Ejecución de múltiples tareas simultáneamente. **Aislamiento de estado por rama** evita condiciones de carrera.
+
 ```python
 actions.dispatch_parallel(tasks=tasks_to_dispatch, aggregate_into="aggregate_results")
 
@@ -347,7 +350,7 @@ POST /api/v1/jobs/my_flow
 ### Archivos de Configuración
 
 -   **`clients.toml`**: Clientes API, tokens y cuotas.
--   **`workers.toml`**: Tokens individuales para workers.
+-   **`workers.toml`**: Tokens individuales para workers. Soporta **patrones fnmatch** (ej. `cpu-worker-*`) para escalado dinámico.
 -   **`schedules.toml`**: Tareas periódicas.
 
 Para más detalles, consulta la [**Guía de Configuración**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/configuration.md).
@@ -355,7 +358,7 @@ Para más detalles, consulta la [**Guía de Configuración**](https://github.com
 ### Concurrencia y Rendimiento
 
 *   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Límite de manejadores internos (default: `1000`).
-*   **`WATCHER_LIMIT`**: Reacción ante таймауты por ciclo (default: `500`).
+*   **`WATCHER_LIMIT`**: Reacción ante tiempos de espera por ciclo (default: `500`).
 *   **`DISPATCHER_MAX_CANDIDATES`**: Límite de chequeos de cumplimiento (default: `50`).
 
 ### Observabilidad

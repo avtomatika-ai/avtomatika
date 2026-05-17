@@ -176,7 +176,6 @@ async def _verify_job_ownership_robust(engine: Any, job_id: str, request: web.Re
         raise web.HTTPUnauthorized(text="Client authentication required")
     expected_token = client_config.get("token")
 
-    # Check fast storage first
     job_state = await engine.storage.get_job_state(job_id)
     if job_state:
         owner_token = job_state.get("client_config", {}).get("token")
@@ -198,7 +197,6 @@ async def _verify_job_ownership_robust(engine: Any, job_id: str, request: web.Re
     if not owner_token or owner_token != expected_token:
         raise web.HTTPForbidden(text="Access denied: You do not own this job")
 
-    # Return the last known state from history
     last_event = history[-1]
     snapshot = last_event.get("context_snapshot")
     if snapshot and isinstance(snapshot, dict):

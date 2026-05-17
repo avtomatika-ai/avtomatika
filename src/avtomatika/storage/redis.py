@@ -7,6 +7,7 @@
 
 from asyncio import CancelledError, get_running_loop
 from collections.abc import Callable
+from fnmatch import fnmatch
 from inspect import iscoroutinefunction
 from logging import getLogger
 from os import getenv
@@ -213,31 +214,39 @@ class RedisStorage(StorageBackend):
     def _normalize_unpacked(data: Any) -> Any:
         """
         Recursively ensures that nested msgpack-encoded bytes (from Redis Lua)
-        are properly restored to their original structures.
+        are properly restored to their original structures and bytes are decoded.
         """
         if isinstance(data, dict):
             # Decode keys and recurse into values
             return {
-                (k.decode() if isinstance(k, bytes) else k): RedisStorage._normalize_unpacked(v)
+                (k.decode("utf-8") if isinstance(k, bytes) else str(k)): RedisStorage._normalize_unpacked(v)
                 for k, v in data.items()
             }
         elif isinstance(data, list):
             return [RedisStorage._normalize_unpacked(i) for i in data]
         elif isinstance(data, bytes):
-            # Attempt to unpack as msgpack if it looks like a collection
+            # 1. Try to unpack as msgpack if it looks like a collection
             try:
                 if len(data) > 0 and (data[0] & 0xF0 in (0x80, 0x90, 0xD0, 0xDE, 0xDF)):
                     unpacker = msgpack.Unpacker(strict_map_key=False, raw=False)
                     unpacker.feed(data)
                     unpacked = unpacker.unpack()
                     # Ensure full consumption
-                    for _ in unpacker:
-                        raise ValueError("Trailing data found")
-
-                    if isinstance(unpacked, (dict, list)):
+                    try:
+                        next(unpacker)
+                        # If we get here, there was trailing data, so it might not be a single msgpack object
+                    except StopIteration:
+                        # Success: it's a valid single msgpack object
                         return RedisStorage._normalize_unpacked(unpacked)
             except Exception:
                 pass
+
+            # 2. Try to decode as UTF-8 string
+            try:
+                return data.decode("utf-8")
+            except UnicodeDecodeError:
+                # If it's not a valid UTF-8, keep as bytes (e.g. binary blob)
+                return data
         return data
 
     async def _pack_async(self, data: Any) -> bytes:
@@ -1029,6 +1038,32 @@ class RedisStorage(StorageBackend):
     async def get_worker_token(self, worker_id: str) -> str | None:
         token = await self._redis.get(f"orchestrator:worker:token:{worker_id}")
         return token.decode("utf-8") if token else None
+
+    async def find_worker_token(self, worker_id: str) -> str | None:
+        # 1. Try direct match
+        token = await self.get_worker_token(worker_id)
+        if token:
+            return token
+
+        # 2. Try patterns
+        prefix = "orchestrator:worker:token:pattern:"
+        async for key in self._redis.scan_iter(f"{prefix}*"):
+            val = await self._redis.get(key)
+            if val:
+                pattern = key.decode("utf-8").removeprefix(prefix)
+                if fnmatch(worker_id, pattern):
+                    return str(val.decode("utf-8"))
+        return None
+
+    async def get_all_worker_tokens(self) -> dict[str, str]:
+        tokens = {}
+        prefix = "orchestrator:worker:token:"
+        async for key in self._redis.scan_iter(f"{prefix}*"):
+            val = await self._redis.get(key)
+            if val:
+                worker_id = key.decode("utf-8").removeprefix(prefix)
+                tokens[worker_id] = val.decode("utf-8")
+        return tokens
 
     async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
         await self._redis.set(f"orchestrator:sts:token:{token}", worker_id, ex=ttl)

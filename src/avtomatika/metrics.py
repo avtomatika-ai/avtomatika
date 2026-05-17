@@ -32,7 +32,6 @@ def init_metrics() -> None:
     global tasks_ignored_total, tasks_hot_dispatched_total, loop_lag_seconds
 
     if "orchestrator_jobs_total" in REGISTRY.collectors:
-        # Get existing metrics if they are already registered
         jobs_total = REGISTRY.collectors.get("orchestrator_jobs_total")
         jobs_failed_total = REGISTRY.collectors.get("orchestrator_jobs_failed_total")
         job_duration_seconds = REGISTRY.collectors.get("orchestrator_job_duration_seconds")

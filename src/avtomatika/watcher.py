@@ -49,14 +49,26 @@ class Watcher:
                         if timed_out_job_ids:
                             logger.warning(f"Found {len(timed_out_job_ids)} timed out jobs. Processing...")
 
-                            async def _process_single(job_id: str) -> None:
+                            async def _process_single(job_key: str) -> None:
                                 async with semaphore:
                                     try:
-                                        job_state = await self.storage.get_job_state(job_id)
-                                        if job_state:
-                                            await self.engine.handle_job_timeout(job_state)
+                                        if ":" in job_key:
+                                            # Parallel branch timeout
+                                            jid, tid = job_key.split(":", 1)
+                                            job_state = await self.storage.get_job_state(jid)
+                                            if job_state:
+                                                logger.warning(f"Watcher: Task {tid} for job {jid} timed out.")
+                                                await self.engine.handle_task_failure(
+                                                    job_state, tid, "Worker task timed out (parallel branch)."
+                                                )
+                                        else:
+                                            # Standard job timeout
+                                            job_state = await self.storage.get_job_state(job_key)
+                                            if job_state:
+                                                logger.warning(f"Watcher: Job {job_key} timed out.")
+                                                await self.engine.handle_job_timeout(job_state)
                                     except Exception:
-                                        logger.exception(f"Failed to process timeout for job {job_id}")
+                                        logger.exception(f"Failed to process timeout for {job_key}")
 
                             tasks = [_process_single(jid) for jid in timed_out_job_ids]
                             await asyncio.gather(*tasks, return_exceptions=True)

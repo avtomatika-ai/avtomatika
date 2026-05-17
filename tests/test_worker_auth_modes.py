@@ -20,6 +20,7 @@ def mock_storage():
     storage = MagicMock()
     storage.verify_worker_access_token = AsyncMock(return_value=None)
     storage.get_worker_token = AsyncMock(return_value=None)
+    storage.find_worker_token = AsyncMock(return_value=None)
     return storage
 
 
@@ -40,12 +41,12 @@ async def test_mixed_mode_auth(mock_storage, config):
     assert res[0] == "worker1"
 
     # 2. Individual Token
-    mock_storage.get_worker_token.return_value = "token1"
+    mock_storage.find_worker_token.return_value = "token1"
     res = await verify_worker_auth(mock_storage, config, "token1", None, "worker1")
     assert res[0] == "worker1"
 
     # 3. Global Token
-    mock_storage.get_worker_token.return_value = None  # Reset individual token
+    mock_storage.find_worker_token.return_value = None  # Reset individual token
     res = await verify_worker_auth(mock_storage, config, "global-secret", None, "any-worker")
     assert res[0] == "any-worker"
 
@@ -66,7 +67,7 @@ async def test_mtls_only_mode_auth(mock_storage, config):
 
     # 3. Static Token - REJECTED
     mock_storage.verify_worker_access_token.return_value = None  # Ensure it fails STS check
-    mock_storage.get_worker_token.return_value = "token1"
+    mock_storage.find_worker_token.return_value = "token1"
     with pytest.raises(PermissionError, match="Invalid authentication method"):
         await verify_worker_auth(mock_storage, config, "token1", None, "worker1")
 
@@ -85,12 +86,12 @@ async def test_token_only_mode_auth(mock_storage, config):
         await verify_worker_auth(mock_storage, config, None, "worker1", "worker1")
 
     # 2. Static Token - OK
-    mock_storage.get_worker_token.return_value = "token1"
+    mock_storage.find_worker_token.return_value = "token1"
     res = await verify_worker_auth(mock_storage, config, "token1", None, "worker1")
     assert res[0] == "worker1"
 
     # 3. Global Token - OK
-    mock_storage.get_worker_token.return_value = None  # Reset
+    mock_storage.find_worker_token.return_value = None  # Reset
     res = await verify_worker_auth(mock_storage, config, "global-secret", None, "any-worker")
     assert res[0] == "any-worker"
 
@@ -120,7 +121,7 @@ async def test_worker_token_encryption(mock_storage, config):
 
     # 1. Encrypt token for storage simulation
     cipher = encrypt_token(token, config.REDIS_ENCRYPTION_KEY)
-    mock_storage.get_worker_token.return_value = cipher
+    mock_storage.find_worker_token.return_value = cipher
 
     # 2. Authenticate - should succeed as it decrypts internally
     res = await verify_worker_auth(mock_storage, config, token, None, worker_id)

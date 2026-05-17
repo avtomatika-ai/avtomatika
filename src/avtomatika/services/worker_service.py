@@ -103,7 +103,7 @@ class WorkerService:
             raise PermissionError("Missing required timestamp for replay protection")
 
         if secret is None:
-            secret = await self.storage.get_worker_token(worker_id)
+            secret = await self.storage.find_worker_token(worker_id)
             # Decrypt if encryption is enabled
             if secret and self.config.REDIS_ENCRYPTION_KEY and self.config.encrypt_worker_tokens:
                 decrypted = decrypt_token(secret, self.config.REDIS_ENCRYPTION_KEY)
@@ -204,6 +204,32 @@ class WorkerService:
             }
         )
 
+    async def _verify_job_ownership_robust(
+        self,
+        job_id: str,
+        task_id: str,
+        payload_worker_id: str,
+        job_state: dict[str, Any],
+    ) -> bool:
+        """
+        Verify that the worker sending the result is actually the one
+        assigned to this specific task (considering parallel branches).
+        """
+        is_parallel = task_id in (job_state.get("active_branches") or [])
+        if is_parallel:
+            branch_workers = job_state.get("branch_worker_ids") or {}
+            assigned_worker_id = branch_workers.get(task_id)
+        else:
+            assigned_worker_id = job_state.get("assigned_worker_id")
+
+        if assigned_worker_id and assigned_worker_id != payload_worker_id:
+            logger.critical(
+                f"HIJACKING ATTEMPT? Job {job_id} task {task_id} assigned to '{assigned_worker_id}', "
+                f"but result received from '{payload_worker_id}'. Ignoring result."
+            )
+            return False
+        return True
+
     async def get_next_task(self, worker_id: str) -> dict[str, Any] | None:
         """
         Retrieves the next task for a worker using long-polling configuration.
@@ -213,13 +239,25 @@ class WorkerService:
 
         if task:
             job_id = task.get("job_id")
+            task_id = task.get("task_id", job_id)
             if job_id:
                 now = monotonic()
 
                 async def _mark_picked_up(state: dict[str, Any]) -> dict[str, Any]:
-                    state["task_picked_up_at"] = now
-                    # Update assignment in case of work stealing
-                    state["assigned_worker_id"] = worker_id
+                    is_parallel = task_id in (state.get("active_branches") or [])
+                    if is_parallel:
+                        branch_picked = state.setdefault("branch_picked_up_at", {}) or {}
+                        branch_picked[task_id] = now
+                        state["branch_picked_up_at"] = branch_picked
+
+                        # Update assignment in case of work stealing
+                        branch_workers = state.setdefault("branch_worker_ids", {}) or {}
+                        branch_workers[task_id] = worker_id
+                        state["branch_worker_ids"] = branch_workers
+                    else:
+                        state["task_picked_up_at"] = now
+                        state["assigned_worker_id"] = worker_id
+                        state["task_worker_id"] = worker_id
                     return state
 
                 try:
@@ -237,7 +275,10 @@ class WorkerService:
                         )
                         new_timeout_at = now + execution_timeout
 
-                    await self.storage.add_job_to_watch(job_id, new_timeout_at)
+                    # Update Watcher (Parallel-aware)
+                    is_parallel = task_id in (updated_state.get("active_branches") or [])
+                    watch_key = f"{job_id}:{task_id}" if is_parallel else job_id
+                    await self.storage.add_job_to_watch(watch_key, new_timeout_at)
 
                     # Enrich task with security context and metadata from the job state
                     if updated_state.get("security"):
@@ -348,18 +389,23 @@ class WorkerService:
                     f"dialect '{skill_snapshot.schema_dialect}' not supported for native validation."
                 )
 
-        # Verify that the worker submitting the result is the one assigned to the task
-        task_worker_id = job_state.get("task_worker_id")
-        if task_worker_id and task_worker_id != authenticated_worker_id:
-            logger.critical(
-                f"HIJACKING ATTEMPT DETECTED: Worker {authenticated_worker_id} tried to submit result "
-                f"for job {job_id} task {task_id}, which is assigned to worker {task_worker_id}."
-            )
+        # Verify that the worker submitting the result is the one assigned to the task (Parallel-aware)
+        if not await self._verify_job_ownership_robust(job_id, task_id, authenticated_worker_id, job_state):
             return {
                 "status": "ignored",
                 "reason": IGNORED_REASON_MISMATCH,
                 "message": "Forbidden: This task is assigned to a different worker.",
             }
+
+        # Record when it was picked up if provided (Parallel-aware)
+        if picked_up := result_payload.get("picked_up_at"):
+            is_parallel = task_id in (job_state.get("active_branches") or [])
+            if is_parallel:
+                branch_picked = job_state.setdefault("branch_picked_up_at", {}) or {}
+                branch_picked[task_id] = picked_up
+                job_state["branch_picked_up_at"] = branch_picked
+            else:
+                job_state["task_picked_up_at"] = picked_up
 
         # SAFETY CHECK: Verify that the submitted task_id matches the current task of the job.
         # Skip this check for parallel branches as they have their own branch IDs.
@@ -732,11 +778,10 @@ class WorkerService:
                         cancel_ids = []
                         for tid in current_tasks:
                             js = await self.storage.get_job_state(tid)
-                            if (
-                                not js
-                                or js.get("status") in TERMINAL_STATES
-                                or js.get("status") == JOB_STATUS_CANCELLED
-                            ):
+                            # Only cancel if job is explicitly found and in a terminal state.
+                            # We don't cancel if js is None because tid might be a task_id
+                            # that doesn't map directly to a job_id key in storage.
+                            if js and (js.get("status") in TERMINAL_STATES or js.get("status") == JOB_STATUS_CANCELLED):
                                 cancel_ids.append(tid)
                         if cancel_ids:
                             response_data[HB_RESP_CANCEL_TASKS] = cancel_ids

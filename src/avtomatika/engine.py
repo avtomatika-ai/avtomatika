@@ -62,6 +62,7 @@ from .constants import (
     JOB_STATUS_FAILED,
     JOB_STATUS_PENDING,
     JOB_STATUS_QUARANTINED,
+    JOB_STATUS_WAITING_FOR_PARALLEL,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
 from .dispatcher import Dispatcher
@@ -544,42 +545,59 @@ class OrchestratorEngine:
     async def handle_task_failure(self, job_state: dict[str, Any], task_id: str, error_message: str | None) -> None:
         """Handles a transient task failure by retrying or quarantining."""
         job_id = job_state["id"]
-        retry_count = job_state.get("retry_count", 0)
+
+        # SAFETY: If job is already finished, ignore failure event
+        if job_state.get("status") in TERMINAL_STATES:
+            return
+
+        is_parallel = task_id in (job_state.get("active_branches") or [])
+
+        retry_count_key = f"retry_count_{task_id}" if is_parallel else "retry_count"
+        retry_count = job_state.get(retry_count_key, 0)
         max_retries = self.config.JOB_MAX_RETRIES
 
         if retry_count < max_retries:
-            job_state["retry_count"] = retry_count + 1
-            logger.info(f"Retrying task for job {job_id}. Attempt {retry_count + 1}/{max_retries}.")
+            job_state[retry_count_key] = retry_count + 1
+            logger.info(f"Retrying task {task_id} for job {job_id}. Attempt {retry_count + 1}/{max_retries}.")
 
-            task_info = job_state.get("current_task_info")
+            if is_parallel:
+                task_info = job_state.get("parallel_tasks_info", {}).get(task_id)
+            else:
+                task_info = job_state.get("current_task_info")
+
             if not task_info:
-                logger.error(f"Cannot retry job {job_id}: missing 'current_task_info' in job state.")
-                job_state["status"] = JOB_STATUS_FAILED
-                job_state["error_message"] = "Cannot retry: original task info not found."
-                await self.storage.save_job_state(job_id, job_state)
-                await self.send_job_webhook(job_state, "job_failed")
+                logger.error(f"Cannot retry task {task_id} for job {job_id}: missing task info in job state.")
+                if not is_parallel:
+                    job_state["status"] = JOB_STATUS_FAILED
+                    job_state["error_message"] = f"Cannot retry {task_id}: original task info not found."
+                    await self.storage.save_job_state(job_id, job_state)
+                    await self.send_job_webhook(job_state, "job_failed")
                 return
 
             now_mono = get_running_loop().time()
 
             # Recalculate timeout for retry, respecting existing deadlines
-            dispatch_deadline = job_state.get("dispatch_deadline")
-            result_deadline = job_state.get("result_deadline")
-            execution_timeout = task_info.get("timeout_seconds") or self.config.WORKER_TIMEOUT_SECONDS
+            execution_timeout = task_info.get("timeout_seconds") or getattr(self.config, "WORKER_TIMEOUT_SECONDS", 30.0)
+            timeout_at = now_mono + execution_timeout
 
-            deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
-            timeout_at = min(deadlines) if deadlines else now_mono + execution_timeout
+            if not is_parallel:
+                job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
+                job_state["task_dispatched_at"] = now_mono
+                await self.storage.add_job_to_watch(job_id, timeout_at)
+            else:
+                # For parallel branches, we keep the main job status as is (waiting for parallel)
+                job_state["status"] = JOB_STATUS_WAITING_FOR_PARALLEL
+                await self.storage.remove_job_from_watch(f"{job_id}:{task_id}")
+                await self.storage.add_job_to_watch(f"{job_id}:{task_id}", timeout_at)
 
-            job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
-            job_state["task_dispatched_at"] = now_mono
             await self.storage.save_job_state(job_id, job_state)
-            await self.storage.add_job_to_watch(job_id, timeout_at)
-
             await self.dispatcher.dispatch(job_state, task_info)
         else:
-            logger.critical(f"Job {job_id} has failed {max_retries + 1} times. Moving to quarantine.")
+            logger.critical(
+                f"Task {task_id} for job {job_id} has failed {max_retries + 1} times. Moving to quarantine."
+            )
             job_state["status"] = JOB_STATUS_QUARANTINED
-            job_state["error_message"] = f"Task failed after {max_retries + 1} attempts: {error_message}"
+            job_state["error_message"] = f"Task {task_id} failed after {max_retries + 1} attempts: {error_message}"
             await self.storage.save_job_state(job_id, job_state)
             await self.storage.quarantine_job(job_id)
             await self.send_job_webhook(job_state, "job_quarantined")

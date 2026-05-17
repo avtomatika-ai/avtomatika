@@ -579,6 +579,7 @@ class JobExecutor:
         job_state["aggregation_target"] = aggregate_into
         job_state["active_branches"] = branch_task_ids
         job_state["aggregation_results"] = {}
+        job_state["parallel_tasks_info"] = {}
         await self.storage.save_job_state(job_id, job_state)
 
         # Dispatch each task as a "branch"
@@ -598,6 +599,12 @@ class JobExecutor:
                 "skill_type": task_info.get("skill_type"),
                 **task_info,
             }
+            # Update local state so the next iteration includes this branch's info
+            job_state.setdefault("parallel_tasks_info", {})[branch_id] = full_task_info
+
+            # Dispatch. The dispatcher returns the LATEST job_state from Redis.
+            # We MUST update our local reference to avoid 'lost updates'.
+            job_state = await self.dispatcher.dispatch(job_state, full_task_info)
 
             now = time()
             dispatch_timeout = task_info.get("dispatch_timeout_seconds")
@@ -622,7 +629,6 @@ class JobExecutor:
                 f"{job_id}:{branch_id}",
                 timeout_at,
             )  # Watch each branch
-            await self.dispatcher.dispatch(job_state, full_task_info)
 
     async def _handle_failure(
         self,

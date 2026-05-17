@@ -5,6 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import logging
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from time import time
@@ -16,6 +17,8 @@ from .config import Config
 from .constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
 from .storage.base import StorageBackend
 from .utils.crypto import decrypt_token
+
+logger = logging.getLogger(__name__)
 
 Handler = Callable[[web.Request], Awaitable[web.Response]]
 
@@ -94,7 +97,8 @@ async def verify_worker_auth(
 
         raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
 
-    expected_token = await storage.get_worker_token(worker_id_hint)
+    expected_token = await storage.find_worker_token(worker_id_hint)
+
     if expected_token:
         # Decrypt if encryption is enabled
         if config.REDIS_ENCRYPTION_KEY and config.encrypt_worker_tokens:

@@ -11,10 +11,10 @@
 ## 🚀 Key Features
 
 - **State-Machine Driven**: Declarative Python Blueprints for complex logic.
-- **High-Performance Redis Storage**: **ZSET indexing** for atomic worker management and **Msgpack** serialization.
+- **High-Performance Redis Storage**: **Atomic state updates** via Lua scripts and **Msgpack** serialization.
 - **Zero Trust Security**: Mandatory worker authentication and **Replay Protection** via a 60s timestamp window.
 - **Pluggable Blob Storage**: Support for S3-compatible storage via the `BlobProvider` interface (powered by `obstore`).
-- **Hierarchical Logic**: Support for child blueprints (Ghosts) and parallel execution with aggregation.
+- **Hierarchical Logic**: Support for child blueprints (Ghosts) and **Parallel execution with isolated branch state**.
 - **Observability**: Distributed tracing with **OpenTelemetry** and real-time metrics.
 
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
@@ -266,6 +266,7 @@ Avtomatika is engineered for high-load environments with thousands of concurrent
     *   **Identity Chain Verification**: Validates the entire bubbling path for events in deep holarchies.
     *   **mTLS & STS**: Mutual authentication and short-lived token rotation for secure communication.
     *   **Signature Support**: Ready for protocol-level digital signatures for end-to-end task verification.
+    *   **Atomic State Management**: Uses Redis transactions and Lua scripts to ensure consistency under extreme parallel loads.
 
 ## Blueprint Cookbook: Key Features
 
@@ -307,7 +308,7 @@ If the worker returns a status not listed in `transitions`, the job will automat
 
 ### 3. Parallel Execution and Aggregation (Fan-out/Fan-in)
 
-Run multiple tasks simultaneously and gather their results.
+Run multiple tasks simultaneously and gather their results. **Isolated branch state** prevents race conditions when multiple branches report results simultaneously.
 
 ```python
 # 1. Fan-out: Dispatch multiple tasks to be aggregated into a single state
@@ -446,7 +447,7 @@ The orchestrator's behavior can be configured through environment variables. Add
 ### Configuration Files
 
 -   **`clients.toml`**: Defines API clients, their tokens, plans, and quotas.
--   **`workers.toml`**: Defines individual tokens for workers to enhance security.
+-   **`workers.toml`**: Defines individual tokens for workers to enhance security. Supports **fnmatch patterns** (e.g., `cpu-worker-*`) for dynamic scaling.
 -   **`schedules.toml`**: Defines periodic tasks (CRON-like) for the native scheduler.
 
 For detailed specifications and examples, please refer to the [**Configuration Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/configuration.md).

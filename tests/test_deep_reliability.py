@@ -42,11 +42,10 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
         "current_state": "step1",
         "status": JOB_STATUS_WAITING_FOR_WORKER,
         "current_task_id": task_id,
-        "task_worker_id": worker_a,
+        "assigned_worker_id": worker_a,
         "current_task_transitions": {"success": "done"},
     }
     await storage.save_job_state(job_id, job_state)
-
     result_payload = {
         "job_id": job_id,
         "task_id": task_id,
@@ -76,7 +75,7 @@ async def test_job_hijacking_prevention(aiohttp_client, app):
 
     # Verify job state remains unchanged (still waiting for worker_a)
     final_state = await storage.get_job_state(job_id)
-    assert final_state["task_worker_id"] == worker_a
+    assert final_state["assigned_worker_id"] == worker_a
     assert final_state["status"] == JOB_STATUS_WAITING_FOR_WORKER
 
 

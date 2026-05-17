@@ -335,6 +335,16 @@ class StorageBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def find_worker_token(self, worker_id: str) -> str | None:
+        """Finds a token for a worker, supporting pattern matching."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_all_worker_tokens(self) -> dict[str, str]:
+        """Retrieves all registered worker tokens (including patterns)."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def save_worker_access_token(self, worker_id: str, token: str, ttl: int) -> None:
         """Saves a temporary access token for a worker (STS)."""
         raise NotImplementedError

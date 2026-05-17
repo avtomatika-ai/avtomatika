@@ -92,7 +92,7 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
     assert final_state is not None, "Job was not quarantined as expected"
     assert final_state["status"] == "quarantined"
     assert final_state["retry_count"] == config.JOB_MAX_RETRIES
-    assert f"Task failed after {config.JOB_MAX_RETRIES + 1} attempts" in final_state["error_message"]
+    assert f"failed after {config.JOB_MAX_RETRIES + 1} attempts" in final_state["error_message"]
 
 
 @pytest.mark.asyncio

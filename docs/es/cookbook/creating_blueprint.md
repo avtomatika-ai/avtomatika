@@ -119,7 +119,7 @@ async def finished_successfully(context):
 
 En el archivo principal de tu aplicación donde ejecutas `OrchestratorEngine`, registra el blueprint creado.
 
-Когда llamas a `register_blueprint()`, el motor realiza automáticamente una **verificación de integridad**. Asegura que:
+Cuando llamas a `register_blueprint()`, el motor realiza automáticamente una **verificación de integridad**. Asegura que:
 1.  El blueprint tiene exactamente un estado inicial.
 2.  Todas las transiciones conducen a estados existentes (sin transiciones "colgantes").
 3.  Todos los estados son alcanzables desde el estado inicial (sin "código muerto").
