@@ -89,6 +89,19 @@ Avtomatika implements a strict Zero Trust model for worker-orchestrator communic
 *   **mTLS (Mutual TLS)**: Mandatory mutual authentication between Orchestrator and Workers using certificates.
 *   **STS (Security Token Service)**: Automatic rotation of short-lived access tokens via the `/_worker/auth/token` endpoint.
 
+## Contract Enforcement
+
+A critical element of protection is the strict validation of input and output data through `output_schema`.
+
+1.  **Two-Level Validation**:
+    *   **Worker-side**: The Worker SDK validates the result before sending, preventing the transmission of obviously incorrect data.
+    *   **Orchestrator-side**: The Orchestrator core re-validates the data before saving it to `state_history`. Any deviation moves the task to `failed` status with a `CONTRACT_VIOLATION` code.
+
+2.  **Schema Hierarchy (Schema Priority)**:
+    *   **Blueprint Priority**: If a schema is explicitly defined in the blueprint (`actions.dispatch_task(..., output_schema=...)`), it has absolute priority. The Orchestrator will ignore worker declarations and apply the "law of the blueprint."
+    *   **Worker Declaration**: If no schema is specified in the blueprint, the schema provided by the worker during registration is used.
+    *   **Safe Defaults**: By default, schemas are configured with `additionalProperties: false`, which prevents **State Injection** — an attempt by a worker to inject fields into the orchestrator's memory that were not intended by the logic.
+
 ## Key Orchestrator Components
 
 ### 1. `OrchestratorEngine`

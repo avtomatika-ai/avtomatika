@@ -3,8 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import asyncio
 import uuid
 from unittest.mock import AsyncMock, MagicMock
@@ -226,7 +224,7 @@ async def test_executor_logs_history_integration(sqlite_storage: SQLiteHistorySt
     mock_dispatcher = AsyncMock()
     mock_engine.dispatcher = mock_dispatcher
 
-    executor = JobExecutor(mock_engine, sqlite_storage)
+    executor = JobExecutor(mock_engine, sqlite_storage, metrics=MagicMock())
     executor.storage = job_storage  # Manually set the storage
     executor.dispatcher = mock_dispatcher
 

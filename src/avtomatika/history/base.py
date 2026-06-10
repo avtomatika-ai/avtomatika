@@ -45,6 +45,12 @@ class HistoryStorageBase(ABC):
 
     async def log_job_event(self, event_data: dict[str, Any]) -> None:
         """Queues a job event for logging."""
+        # Auto-extract tracing context if missing at root but present in snapshot
+        if not event_data.get("tracing_context") and "context_snapshot" in event_data:
+            snapshot = event_data["context_snapshot"]
+            if isinstance(snapshot, dict) and "tracing_context" in snapshot:
+                event_data["tracing_context"] = snapshot["tracing_context"]
+
         try:
             self._queue.put_nowait(("job", event_data))
         except QueueFull:

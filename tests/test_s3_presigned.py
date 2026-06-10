@@ -1,15 +1,16 @@
+from unittest.mock import AsyncMock, MagicMock, patch
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 
-from avtomatika.app_keys import ENGINE_KEY, S3_SERVICE_KEY
+from avtomatika.app_keys import (
+    ENGINE_KEY,
+    S3_SERVICE_KEY,
+)
 from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
 from avtomatika.s3 import S3Service
@@ -26,7 +27,7 @@ def s3_config():
 
 
 def test_generate_presigned_url_logic(s3_config):
-    service = S3Service(s3_config)
+    service = S3Service(s3_config, history=MagicMock(), metrics=MagicMock())
     assert service._enabled
 
     task_files = service.get_task_files("job-123")
@@ -62,7 +63,7 @@ async def test_presign_handler(aiohttp_client, app, s3_config):
     app_engine.config.S3_DEFAULT_BUCKET = s3_config.S3_DEFAULT_BUCKET
 
     # Re-initialize S3Service in app
-    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage)
+    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage, metrics=MagicMock())
 
     client = await aiohttp_client(app)
 
@@ -92,7 +93,7 @@ async def test_download_redirect_handler(aiohttp_client, app, s3_config):
     app_engine.config.S3_SECRET_KEY = s3_config.S3_SECRET_KEY
     app_engine.config.S3_DEFAULT_BUCKET = s3_config.S3_DEFAULT_BUCKET
 
-    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage)
+    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage, metrics=MagicMock())
 
     client = await aiohttp_client(app)
     headers = {"X-Client-Token": "user_token_vip"}
@@ -122,7 +123,7 @@ async def test_streaming_upload_handler(aiohttp_client, app, s3_config):
     app_engine.config.S3_SECRET_KEY = s3_config.S3_SECRET_KEY
     app_engine.config.S3_DEFAULT_BUCKET = s3_config.S3_DEFAULT_BUCKET
 
-    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage)
+    app[S3_SERVICE_KEY] = S3Service(app_engine.config, app_engine.history_storage, metrics=MagicMock())
 
     client = await aiohttp_client(app)
     headers = {"X-Client-Token": "user_token_vip", "Content-Type": "application/octet-stream"}

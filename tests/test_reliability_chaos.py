@@ -3,23 +3,23 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakeredis.aioredis import FakeRedis
+from rxon.constants import AUTH_HEADER_WORKER
 
-from avtomatika.constants import AUTH_HEADER_WORKER
+from avtomatika.app_keys import (
+    STORAGE_KEY,
+)
 from avtomatika.dispatcher import Dispatcher
 from avtomatika.engine import OrchestratorEngine
 from avtomatika.executor import JobExecutor
 from avtomatika.storage.memory import MemoryStorage
 from avtomatika.storage.redis import RedisStorage
 from avtomatika.ws_manager import WebSocketManager
-from tests.conftest import STORAGE_KEY
 
 
 def make_valid_worker_payload(worker_id: str, **kwargs) -> dict[str, Any]:
@@ -113,9 +113,10 @@ async def test_executor_resilience_to_storage_exceptions(config, redis_storage):
     Executor should perform exponential backoff and continue.
     """
     engine = OrchestratorEngine(redis_storage, config)
-    engine.dispatcher = Dispatcher(redis_storage, config)
+    engine.setup()
+    engine.dispatcher = Dispatcher(redis_storage, config, metrics=MagicMock())
 
-    executor = JobExecutor(engine, engine.history_storage)
+    executor = JobExecutor(engine, engine.history_storage, metrics=MagicMock())
 
     # Mock dequeue_job to raise an exception
     original_dequeue = redis_storage.dequeue_job
@@ -171,7 +172,7 @@ async def test_dispatcher_null_safety_complex_payloads(redis_storage, config):
     """
     Reliability: Dispatcher should handle missing or null resource_requirements and params.
     """
-    dispatcher = Dispatcher(redis_storage, config)
+    dispatcher = Dispatcher(redis_storage, config, metrics=MagicMock())
 
     job_state = {"id": "j1"}
     # Maliciously empty task_info

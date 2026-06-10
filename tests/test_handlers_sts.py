@@ -91,5 +91,5 @@ async def test_issue_token_with_mtls(engine):
 
         response = await engine.handle_rxon_message("sts_token", payload=None, context=context)
 
-        assert response == expected_token
+        assert response == expected_token._asdict()
         engine.worker_service.issue_access_token.assert_awaited_once_with("worker-1")

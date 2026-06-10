@@ -6,12 +6,12 @@
 
 
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "avtomatika"
-version = "1.0b25"
+version = "1.0b26"
 description = "A state-machine based orchestrator for long-running AI and other jobs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,45 +27,41 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "rxon==1.0b12",
-    "aiohttp~=3.13",
-    "python-json-logger~=4.1",
-    "graphviz~=0.21",
-    "zstandard~=0.24",
-    "aioprometheus~=23.12",
-    "msgpack~=1.1",
-    "orjson~=3.11",
-    "cryptography~=41.0.0",
+    "rxon==1.0b13",
+    "aiohttp~=3.14.1",
+    "python-json-logger~=4.1.0",
+    "graphviz~=0.21.0",
+    "zstandard~=0.25.0",
+    "msgpack~=1.1.2",
+    "orjson~=3.11.9",
+    "cryptography~=48.0.1",
 ]
 
 [project.optional-dependencies]
-redis = ["redis~=7.2"]
-s3 = ["obstore~=0.9.3", "aiofiles~=25.1"]
-history = ["aiosqlite~=0.22", "asyncpg~=0.30"]
+redis = ["redis~=8.0.0"]
+s3 = ["obstore~=0.10.1", "aiofiles~=25.1.0"]
+history = ["aiosqlite~=0.22.0", "asyncpg~=0.31.0"]
 telemetry = [
-    "opentelemetry-api~=1.41",
-    "opentelemetry-sdk~=1.41",
-    "opentelemetry-exporter-otlp~=1.41",
+    "opentelemetry-api~=1.42.0",
+    "opentelemetry-sdk~=1.42.0",
+    "opentelemetry-exporter-otlp~=1.42.0",
     "opentelemetry-instrumentation-aiohttp-client~=0.59b0",
-]
-test = [
-    "pytest~=9.0",
-    "pytest-asyncio~=1.1",
-    "fakeredis~=2.35",
-    "pytest-aiohttp~=1.1",
-    "pytest-mock~=3.14",
-    "aioresponses~=0.7",
-    "backports.zstd~=1.5",
-    "opentelemetry-instrumentation-aiohttp-client",
-    "obstore~=0.9.3",
-    "aiofiles~=25.1",
-    "docker",
 ]
 all = [
     "avtomatika[redis]",
+    "avtomatika[s3]",
     "avtomatika[history]",
     "avtomatika[telemetry]",
-    "avtomatika[s3]",
+]
+test = [
+    "avtomatika[all]",
+    "pytest~=9.0.0",
+    "pytest-asyncio~=1.4.0",
+    "fakeredis~=2.36.0",
+    "pytest-aiohttp~=1.1.0",
+    "pytest-mock~=3.15.0",
+    "aioresponses~=0.7.0",
+    "docker~=7.1.0",
 ]
 
 [project.urls]
@@ -86,9 +82,6 @@ markers = [
     "e2e: marks tests as end-to-end tests",
 ]
 filterwarnings = [
-    "ignore:coroutine 'AsyncMockMixin._execute_mock_call' was never awaited:RuntimeWarning",
-    "ignore:coroutine 'test_webhook_sender_concurrency.<locals>.slow_post' was never awaited:RuntimeWarning",
-    "ignore:coroutine 'AsyncMockMixin' was never awaited:RuntimeWarning",
 ]
 
 [tool.ruff]
@@ -101,7 +94,6 @@ select = ["E", "W", "F", "I", "B", "A", "SIM", "C4", "PLC", "UP", "TID"]
 ignore = ["TID252"]
 
 [tool.ruff.lint.pyupgrade]
-# Enforce native union types (X | Y) instead of Union/Optional
 keep-runtime-typing = false
 
 [tool.ruff.lint.isort]

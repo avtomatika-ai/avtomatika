@@ -1,11 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2026 Dmitrii Gagarin aka madgagarin
-
-from unittest.mock import AsyncMock, MagicMock
-
 import msgpack
 import pytest
 
@@ -118,7 +117,7 @@ async def test_executor_applies_context_updates(engine):
     storage = MemoryStorage()
     history = AsyncMock()
 
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
     executor.storage = storage
 
     job_id = "test-context-sync"
@@ -158,7 +157,7 @@ async def test_executor_context_update_persistence(engine):
     """HAPPY PATH: ensure context updates are persisted even if transition fails later."""
     storage = MemoryStorage()
     history = AsyncMock()
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
     executor.storage = storage
 
     job_id = "test-persistence"

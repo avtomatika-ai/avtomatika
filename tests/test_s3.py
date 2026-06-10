@@ -213,7 +213,7 @@ async def test_job_executor_s3_injection(config):
         pass
 
     engine.register_blueprint(bp)
-    executor = JobExecutor(engine, mock_history)
+    executor = JobExecutor(engine, mock_history, metrics=MagicMock())
 
     job_id = "test-job-s3"
     job_state = {
@@ -254,7 +254,7 @@ async def test_job_executor_s3_auto_cleanup(config):
         pass
 
     engine.register_blueprint(bp)
-    executor = JobExecutor(engine, mock_history)
+    executor = JobExecutor(engine, mock_history, metrics=MagicMock())
 
     job_id = "job-cleanup-on"
     job_state = {
@@ -283,7 +283,7 @@ async def test_job_executor_s3_auto_cleanup(config):
     engine2.app[S3_SERVICE_KEY] = mock_s3_2
     engine2.register_blueprint(bp)
 
-    executor2 = JobExecutor(engine2, mock_history)
+    executor2 = JobExecutor(engine2, mock_history, metrics=MagicMock())
     job_id2 = "job-cleanup-off"
     job_state2 = {
         "id": job_id2,
@@ -297,3 +297,44 @@ async def test_job_executor_s3_auto_cleanup(config):
 
     await executor2._process_job(job_id2, "msg-2")
     mock_task_files2.cleanup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_s3_service_metrics():
+    """Verifies that S3Service records metrics for operations."""
+    config = MagicMock()
+    config.S3_ENDPOINT_URL = "http://localhost"
+    config.S3_ACCESS_KEY = "key"
+    config.S3_SECRET_KEY = "secret"
+    config.S3_DEFAULT_BUCKET = "bucket"
+
+    config.S3_MAX_CONCURRENCY = 5
+    metrics = MagicMock()
+
+    with patch("avtomatika.s3.S3Store") as MockStore:
+        mock_store_inst = MockStore.return_value
+        mock_store_inst.upload = AsyncMock()
+        mock_store_inst.download = AsyncMock()
+
+        service = S3Service(config, metrics=metrics)
+
+        with (
+            patch("avtomatika.s3.aiopen", MagicMock()),
+            patch("avtomatika.s3.parse_uri", return_value=("b", "k", "u")),
+            patch("avtomatika.s3.put_async", AsyncMock()),
+        ):
+            await service.upload("local.txt", "s3://b/k")
+
+        metrics.s3_operations_total.add.assert_called_with(1, {"operation": "upload", "status": "success"})
+        metrics.s3_operation_duration_seconds.record.assert_called()
+
+        metrics.s3_operations_total.add.reset_mock()
+
+        with (
+            patch("avtomatika.s3.aiopen", MagicMock()),
+            patch("avtomatika.s3.parse_uri", return_value=("b", "k", "u")),
+            patch("avtomatika.s3.get_async", AsyncMock()),
+        ):
+            await service.download("s3://b/k", "local.txt")
+
+        metrics.s3_operations_total.add.assert_called_with(1, {"operation": "download", "status": "success"})

@@ -1,40 +1,26 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-# Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+from avtomatika.metrics import create_metrics
 
 
-from aioprometheus.collectors import REGISTRY
-from src.avtomatika.metrics import init_metrics
+def test_create_metrics():
+    """Tests that metrics are initialized correctly using OTel."""
+    cache = {}
+    metrics = create_metrics(instrument_cache=cache)
+
+    assert metrics.jobs_total is not None
+    assert "orchestrator_jobs_total" in cache
 
 
-def test_init_metrics():
-    """Tests that metrics are initialized and registered correctly."""
-    # Clear the registry to ensure a clean state
-    REGISTRY.collectors.clear()
+def test_metrics_idempotency():
+    """Verifies that create_metrics uses the provided cache for idempotency."""
+    cache = {}
+    metrics1 = create_metrics(instrument_cache=cache)
+    metrics2 = create_metrics(instrument_cache=cache)
 
-    init_metrics()
-
-    assert "orchestrator_jobs_total" in REGISTRY.collectors
-    assert "orchestrator_jobs_failed_total" in REGISTRY.collectors
-    assert "orchestrator_job_duration_seconds" in REGISTRY.collectors
-    assert "orchestrator_task_queue_length" in REGISTRY.collectors
-    assert "orchestrator_active_workers" in REGISTRY.collectors
+    assert metrics1.jobs_total == metrics2.jobs_total
 
 
-def test_init_metrics_idempotent():
-    """Tests that calling init_metrics multiple times does not raise an error."""
-    # Clear the registry to ensure a clean state
-    REGISTRY.collectors.clear()
-
-    init_metrics()
-    init_metrics()
-
-    assert "orchestrator_jobs_total" in REGISTRY.collectors
-
-
-def test_loop_lag_metric_exists():
-    """Verifies that the loop lag metric is registered."""
-    init_metrics()
-    assert "orchestrator_loop_lag_seconds" in REGISTRY.collectors
+def test_set_gauge():
+    """Tests the manual gauge update helper."""
+    metrics = create_metrics(instrument_cache={})
+    metrics.set_gauge("task_queue_length", 42.0)
+    assert metrics._gauge_values["task_queue_length"] == 42.0

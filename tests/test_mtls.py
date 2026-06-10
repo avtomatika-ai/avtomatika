@@ -112,6 +112,8 @@ async def test_mtls_worker_authentication(pki, mtls_config):
     """
     storage = MemoryStorage()
     engine = OrchestratorEngine(storage, mtls_config)
+    engine.setup()
+    engine.setup()
 
     # Start the server manually to get the real port
     engine.setup()

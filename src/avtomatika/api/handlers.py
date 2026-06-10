@@ -13,23 +13,24 @@ from typing import Any, cast
 from uuid import uuid4
 
 from aiohttp import web
-from aioprometheus import REGISTRY, render
 from orjson import OPT_INDENT_2, dumps, loads
-from rxon.schema import validate_data
-
-from .. import metrics
-from ..app_keys import (
-    ENGINE_KEY,
-    S3_SERVICE_KEY,
-)
-from ..blueprint import Blueprint
-from ..client_config_loader import load_client_configs_to_redis
-from ..constants import (
+from rxon.constants import (
     JOB_STATUS_PENDING,
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_HUMAN,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
+from rxon.schema import validate_data
+
+from ..app_keys import (
+    CLIENT_CONFIG_KEY,
+    ENGINE_KEY,
+    S3_SERVICE_KEY,
+)
+from ..blueprint import Blueprint
+from ..client_config_loader import load_client_configs_to_redis
+from ..metrics import LABEL_BLUEPRINT
+from ..security import AUTH_HEADER_CLIENT
 from ..utils.json import json_response
 from ..worker_config_loader import load_worker_configs_to_redis
 
@@ -38,11 +39,6 @@ logger = getLogger(__name__)
 
 async def status_handler(_request: web.Request) -> web.Response:
     return json_response({"status": "ok"})
-
-
-async def metrics_handler(_request: web.Request) -> web.Response:
-    content, _ = render(REGISTRY, _request.headers.getall("Accept", []))
-    return web.Response(body=content, content_type="text/plain")
 
 
 def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], Any]:
@@ -59,7 +55,7 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
         except Exception:
             return json_response({"error": "Invalid JSON body"}, status=400)
 
-        client_config = request["client_config"]
+        client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
 
         contract = engine.blueprint_contracts.get(blueprint.name, {})
         input_schema = contract.get("input_schema")
@@ -106,7 +102,7 @@ def create_job_handler_factory(blueprint: Blueprint) -> Callable[[web.Request], 
             await engine.storage.add_job_to_watch(job_id, monotonic() + dispatch_timeout)
 
         await engine.storage.enqueue_job(job_id)
-        metrics.jobs_total.inc({metrics.LABEL_BLUEPRINT: blueprint.name})
+        engine.metrics.jobs_total.add(1, {LABEL_BLUEPRINT: blueprint.name})
         return json_response({"status": "accepted", "job_id": job_id}, status=202)
 
     return handler
@@ -117,7 +113,14 @@ def _filter_job_state(
 ) -> dict[str, Any]:
     """Helper to filter job state based on security settings and user request."""
     # Base fields that are always safe to return in compact mode
-    compact_fields = {"id", "job_id", "status", "blueprint_name", "context_snapshot"}
+    compact_fields = {
+        "id",
+        "job_id",
+        "status",
+        "blueprint_name",
+        "context_snapshot",
+        "child_job_id",
+    }
 
     # Define terminal states for access control
     terminal_states = {"finished", "failed", "error", "quarantined", "cancelled"}
@@ -137,12 +140,13 @@ def _filter_job_state(
 
         result_data = {k: v for k, v in state.items() if k in allowed}
     else:
-        # Detailed mode: start with full state (or requested subset)
+        # Detailed mode: allow everything EXCEPT explicitly sensitive system fields
+        sensitive_fields = {"client_config", "security", "internal_load"}
         if requested_fields:
             requested_fields.add("id")
-            result_data = {k: v for k, v in state.items() if k in requested_fields}
+            result_data = {k: v for k, v in state.items() if k in requested_fields and k not in sensitive_fields}
         else:
-            result_data = state.copy()
+            result_data = {k: v for k, v in state.items() if k not in sensitive_fields}
 
         # Even in detailed mode, 'result' is only for terminal states to prevent work tracking
         if not is_terminal and "result" in result_data:
@@ -157,7 +161,7 @@ def _filter_job_state(
 
 def _verify_job_ownership(job_state: dict[str, Any], request: web.Request) -> None:
     """Verifies that the client making the request is the owner of the job."""
-    client_config = request.get("client_config")
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config")
     if not client_config:
         # This should not happen if middleware is correctly applied, but let's be safe
         raise web.HTTPUnauthorized(text="Client authentication required")
@@ -171,17 +175,39 @@ async def _verify_job_ownership_robust(engine: Any, job_id: str, request: web.Re
     """Verifies ownership. Returns job_state if found in Redis or history, else None.
     Raises HTTPForbidden if not owner, HTTPUnauthorized if no client token.
     """
-    client_config = request.get("client_config")
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config")
+
     if not client_config:
-        raise web.HTTPUnauthorized(text="Client authentication required")
+        # If middleware was not applied (e.g. in public sub-app), try to verify token manually
+        token = request.headers.get(AUTH_HEADER_CLIENT)
+        if token:
+            client_config = await engine.storage.get_client_config(token)
+            if not client_config:
+                raise web.HTTPUnauthorized(text="Unauthorized: Invalid client token")
+        else:
+            raise web.HTTPUnauthorized(text="Client authentication required")
+
     expected_token = client_config.get("token")
 
     job_state = await engine.storage.get_job_state(job_id)
     if job_state:
+        # Check direct ownership
         owner_token = job_state.get("client_config", {}).get("token")
-        if not owner_token or owner_token != expected_token:
-            raise web.HTTPForbidden(text="Access denied: You do not own this job")
-        return cast(dict[str, Any], job_state)
+        if owner_token and owner_token == expected_token:
+            return cast(dict[str, Any], job_state)
+
+        # Check ownership inheritance (if it's a child job)
+        parent_id = job_state.get("parent_job_id")
+        if parent_id:
+            # We recursively check up the chain
+            try:
+                parent_state = await _verify_job_ownership_robust(engine, parent_id, request)
+                if parent_state:
+                    return cast(dict[str, Any], job_state)
+            except (web.HTTPForbidden, web.HTTPUnauthorized):
+                pass
+
+        raise web.HTTPForbidden(text="Access denied: You do not own this job")
 
     # Fallback to history for expired jobs
     history = await engine.history_storage.get_job_history(job_id)
@@ -291,17 +317,15 @@ async def get_workers_handler(request: web.Request) -> web.Response:
     return json_response(workers)
 
 
-# Cache for worker catalog
-_WORKER_CATALOG_CACHE: dict[str, Any] = {"data": None, "expires_at": 0.0}
-
-
 async def get_worker_catalog_handler(request: web.Request) -> web.Response:
     """Aggregates all unique skills and their contracts from online workers."""
-    now = monotonic()
-    if _WORKER_CATALOG_CACHE["data"] is not None and now < _WORKER_CATALOG_CACHE["expires_at"]:
-        return json_response(_WORKER_CATALOG_CACHE["data"])
-
     engine = request.app[ENGINE_KEY]
+    now = monotonic()
+
+    cache = engine.worker_catalog_cache
+    if cache["data"] is not None and now < cache["expires_at"]:
+        return json_response(cache["data"])
+
     workers = await engine.storage.get_available_workers()
 
     catalog = {}
@@ -332,13 +356,12 @@ async def get_worker_catalog_handler(request: web.Request) -> web.Response:
                 catalog[skill_name]["worker_types"].add(worker.get("worker_type", "unknown"))
                 catalog[skill_name]["total_reputation"] += worker.get("reputation", 1.0)
 
-    # Final calculations
     for item in catalog.values():
         item["worker_types"] = list(item["worker_types"])
         item["average_reputation"] = round(item.pop("total_reputation") / item["providers_count"], 4)
 
-    _WORKER_CATALOG_CACHE["data"] = catalog
-    _WORKER_CATALOG_CACHE["expires_at"] = now + 10.0  # 10s cache
+    cache["data"] = catalog
+    cache["expires_at"] = now + 10.0
 
     return json_response(catalog)
 
@@ -351,7 +374,7 @@ async def get_jobs_handler(request: web.Request) -> web.Response:
     except ValueError:
         return json_response({"error": "Invalid limit/offset parameter"}, status=400)
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
 
     jobs = await engine.history_storage.get_jobs(limit=limit, offset=offset, client_token=client_token)
@@ -370,7 +393,7 @@ async def get_jobs_handler(request: web.Request) -> web.Response:
 async def get_dashboard_handler(request: web.Request) -> web.Response:
     engine = request.app[ENGINE_KEY]
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
 
     worker_count = await engine.storage.get_active_worker_count()
@@ -426,7 +449,7 @@ async def human_approval_webhook_handler(request: web.Request) -> web.Response:
 async def get_quarantined_jobs_handler(request: web.Request) -> web.Response:
     engine = request.app[ENGINE_KEY]
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
 
     job_ids = await engine.storage.get_quarantined_jobs(client_token=client_token)
@@ -441,8 +464,6 @@ async def get_quarantined_jobs_handler(request: web.Request) -> web.Response:
     # Filter sensitive data
     detailed = engine.config.DETAILED_API_RESPONSES
     for job in jobs:
-        # If storage returns full objects, filter them
-        # (Assuming get_quarantined_jobs returns a list of job states)
         if isinstance(job, dict):
             filtered = _filter_job_state(job, detailed)
             job.clear()
@@ -471,7 +492,7 @@ async def get_job_file_upload_handler(request: web.Request) -> web.Response:
     if not s3_service or not s3_service._enabled:
         return json_response({"error": "S3 support is not enabled"}, status=501)
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
     task_files = s3_service.get_task_files(job_id, client_token=client_token)
     if not task_files:
@@ -502,7 +523,7 @@ async def stream_job_file_upload_handler(request: web.Request) -> web.Response:
     if not s3_service or not s3_service._enabled:
         return json_response({"error": "S3 support is not enabled"}, status=501)
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
     task_files = s3_service.get_task_files(job_id, client_token=client_token)
     if not task_files:
@@ -533,7 +554,7 @@ async def get_job_file_download_handler(request: web.Request) -> web.StreamRespo
     if not s3_service or not s3_service._enabled:
         raise web.HTTPNotImplemented(text="S3 support is not enabled")
 
-    client_config = request.get("client_config", {})
+    client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config", {})
     client_token = client_config.get("token")
     task_files = s3_service.get_task_files(job_id, client_token=client_token)
     if not task_files:

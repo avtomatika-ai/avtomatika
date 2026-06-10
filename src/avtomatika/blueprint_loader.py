@@ -33,14 +33,12 @@ def load_blueprints_from_dir(engine: "OrchestratorEngine", blueprints_dir: str) 
 
     logger.info(f"Scanning for blueprints in: {blueprints_dir}")
 
-    # Use absolute path for reliability
     abs_dir = path.resolve()
 
     for file in abs_dir.glob("*.py"):
         if file.name == "__init__.py":
             continue
 
-        # Create a unique module name for the dynamic import
         module_name = f"avtomatika.dynamic_blueprints.{file.stem}"
         try:
             spec = spec_from_file_location(module_name, str(file))

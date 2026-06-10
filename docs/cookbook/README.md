@@ -21,28 +21,28 @@ simple_pipeline = Blueprint(
 )
 
 @simple_pipeline.handler(is_start=True)
-async def start(context, actions):
+async def start(actions):
     actions.go_to("step_A")
 
 @simple_pipeline.handler("step_A")
-async def handler_A(context, actions):
+async def handler_A(initial_data, actions):
     actions.dispatch_task(
         task_type="simple_task",
-        params=context.initial_data,
+        params=initial_data,
         transitions={"success": "step_B", "failure": "failed"}
     )
 
 @simple_pipeline.handler("step_B")
-async def handler_B(context, actions):
+async def handler_B(actions):
     actions.go_to("finished")
 
 @simple_pipeline.handler(is_end=True)
-async def finished(context, actions):
-    print(f"Pipeline {context.job_id} completed successfully.")
+async def finished(job_id, actions):
+    print(f"Pipeline {job_id} completed successfully.")
 
 @simple_pipeline.handler(is_end=True)
-async def failed(context, actions):
-    print(f"Pipeline {context.job_id} failed.")
+async def failed(job_id, actions):
+    print(f"Pipeline {job_id} failed.")
 ```
 
 ### **Recipe 2: Implementing "Human-in-the-Loop" (Moderation)**
@@ -58,31 +58,31 @@ moderation_pipeline = Blueprint(
 )
 
 @moderation_pipeline.handler(is_start=True)
-async def generate_data(context, actions):
+async def generate_data(initial_data, actions):
     actions.dispatch_task(
         task_type="data_generation",
-        params=context.initial_data,
+        params=initial_data,
         transitions={"success": "awaiting_approval", "failure": "failed"}
     )
 
 
 @moderation_pipeline.handler(is_end=True)
-async def process_approved_data(context, actions):
+async def process_approved_data(actions):
     actions.go_to("finished")
 
 @moderation_pipeline.handler(is_end=True)
-async def rejected_by_moderator(context, actions):
-    print(f"Job {context.job_id} was rejected by moderator.")
+async def rejected_by_moderator(job_id, actions):
+    print(f"Job {job_id} was rejected by moderator.")
 
 @moderation_pipeline.handler(is_end=True)
-async def failed(context, actions):
-    print(f"Job {context.job_id} failed.")
+async def failed(job_id, actions):
+    print(f"Job {job_id} failed.")
 
 @moderation_pipeline.handler
-async def awaiting_approval(context, actions):
+async def awaiting_approval(job_id, actions):
     actions.await_human_approval(
         integration="telegram",
-        message=f"Approval required for Job {context.job_id}",
+        message=f"Approval required for Job {job_id}",
         transitions={
             "approved": "process_approved_data",
             "rejected": "rejected_by_moderator"
@@ -90,7 +90,7 @@ async def awaiting_approval(context, actions):
     )
 
 @moderation_pipeline.handler
-async def process_approved_data(context, actions):
+async def process_approved_data(actions):
     actions.go_to("finished")
 ```
 
@@ -117,12 +117,12 @@ parallel_bp = Blueprint(
 )
 
 @parallel_bp.handler(is_start=True)
-async def start_parallel_tasks(context, actions):
+async def start_parallel_tasks(job_id, actions):
     """
     This handler starts two tasks that will run in parallel.
     Both tasks upon successful completion will transition the process to 'aggregate_results' state.
     """
-    logger.info(f"Job {context.job_id}: Starting parallel tasks.")
+    logger.info(f"Job {job_id}: Starting parallel tasks.")
 
     # Start task A
     actions.dispatch_task(
@@ -139,11 +139,11 @@ async def start_parallel_tasks(context, actions):
     )
 
 @parallel_bp.aggregator
-async def aggregate_results(context, actions):
+async def aggregate_results(job_id, context, state_history, actions):
     """
     This handler will be called only after both task_A and task_B complete successfully.
     """
-    logger.info(f"Job {context.job_id}: Aggregating results.")
+    logger.info(f"Job {job_id}: Aggregating results.")
 
     processed_results = {}
     # context.aggregation_results contains results of both tasks
@@ -151,18 +151,18 @@ async def aggregate_results(context, actions):
         if result.get("status") == "success":
             processed_results[task_id] = result.get("data")
 
-    context.state_history["aggregated_data"] = processed_results
-    logger.info(f"Job {context.job_id}: Aggregated data: {processed_results}")
+    state_history["aggregated_data"] = processed_results
+    logger.info(f"Job {job_id}: Aggregated data: {processed_results}")
     actions.go_to("end")
 
 @parallel_bp.handler(is_end=True)
-async def end_flow(context, actions):
-    final_data = context.state_history.get("aggregated_data")
-    logger.info(f"Job {context.job_id}: Process complete. Final data: {final_data}")
+async def end_flow(job_id, state_history, actions):
+    final_data = state_history.get("aggregated_data")
+    logger.info(f"Job {job_id}: Process complete. Final data: {final_data}")
 
 @parallel_bp.handler(is_end=True)
-async def failed(context, actions):
-    logger.error(f"Job {context.job_id} failed.")
+async def failed(job_id, actions):
+    logger.error(f"Job {job_id} failed.")
 
 ```
 *Note: If at least one of the parallel tasks fails (transitions to `failed` state), the aggregator handler will not be called, and the entire `Job` will immediately transition to `failed` state.*
@@ -224,21 +224,21 @@ multilingual_pipeline = Blueprint(
 )
 
 @multilingual_pipeline.handler(is_start=True)
-async def start_multilingual(context, actions):
+async def start_multilingual(actions):
     # This step just passes control further, where conditional logic will trigger
     actions.go_to("process_text")
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'en'")
-async def process_english_text(context, actions):
-    actions.dispatch_task(task_type="process_en", params=context.initial_data, transitions={"success": "finished"})
+@multilingual_pipeline.handler("process_text").when("initial_data.language == 'en'")
+async def process_english_text(initial_data, actions):
+    actions.dispatch_task(task_type="process_en", params=initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'de'")
-async def process_german_text(context, actions):
-    actions.dispatch_task(task_type="process_de", params=context.initial_data, transitions={"success": "finished"})
+@multilingual_pipeline.handler("process_text").when("initial_data.language == 'de'")
+async def process_german_text(initial_data, actions):
+    actions.dispatch_task(task_type="process_de", params=initial_data, transitions={"success": "finished"})
 
 @multilingual_pipeline.handler("finished", is_end=True)
-async def multilingual_finished(context, actions):
-    print(f"Job {context.job_id} finished processing.")
+async def multilingual_finished(job_id, actions):
+    print(f"Job {job_id} finished processing.")
 ```
 
 ### **Recipe 6: Choosing Task Dispatch Strategy**
@@ -255,18 +255,18 @@ critical_pipeline = Blueprint(
 )
 
 @critical_pipeline.handler(is_start=True)
-async def start_critical_task(context, actions):
+async def start_critical_task(initial_data, actions):
     actions.dispatch_task(
         task_type="critical_computation",
-        params=context.initial_data,
+        params=initial_data,
         # Specify worker selection strategy
         dispatch_strategy="least_connections",
         transitions={"success": "finished"}
     )
 
 @critical_pipeline.handler("finished", is_end=True)
-async def critical_finished(context, actions):
-    print(f"Critical task {context.job_id} finished.")
+async def critical_finished(job_id, actions):
+    print(f"Critical task {job_id} finished.")
 ```
 *Note: Available strategies: `default`, `round_robin`, `least_connections`.*
 
@@ -286,21 +286,21 @@ priority_pipeline = Blueprint(
 )
 
 @priority_pipeline.handler(is_start=True)
-async def start_priority_task(context, actions):
+async def start_priority_task(initial_data, actions):
     # Assign different priority depending on input data
-    is_urgent = context.initial_data.get("is_urgent", False)
+    is_urgent = initial_data.get("is_urgent", False)
 
     actions.dispatch_task(
         task_type="computation",
-        params=context.initial_data,
+        params=initial_data,
         # Urgent tasks get priority 10, others - 0
         priority=10.0 if is_urgent else 0.0,
         transitions={"success": "finished"}
     )
 
 @priority_pipeline.handler("finished", is_end=True)
-async def priority_finished(context, actions):
-    print(f"Task {context.job_id} finished.")
+async def priority_finished(job_id, actions):
+    print(f"Task {job_id} finished.")
 
 ```
 *Note: If multiple tasks have the same priority, they will be executed in arrival order (FIFO) within that priority.*
@@ -320,10 +320,10 @@ cost_optimized_pipeline = Blueprint(
 )
 
 @cost_optimized_pipeline.handler(is_start=True)
-async def start_cost_optimized_task(context, actions):
+async def start_cost_optimized_task(initial_data, actions):
     actions.dispatch_task(
         task_type="image_compression",
-        params=context.initial_data,
+        params=initial_data,
         # Select cheapest worker
         dispatch_strategy="cheapest",
         # But only if its cost ($/sec) is no more than 0.05
@@ -332,11 +332,11 @@ async def start_cost_optimized_task(context, actions):
     )
 
 @cost_optimized_pipeline.handler("finished", is_end=True)
-async def cost_optimized_finished(context, actions):
+async def cost_optimized_finished(actions):
     print("Job finished with cost optimization.")
 
 @cost_optimized_pipeline.handler("too_expensive", is_end=True)
-async def cost_optimized_failed(context, actions):
+async def cost_optimized_failed(actions):
     print("Job failed because no workers met the cost criteria.")
 ```
 *Note: `cheapest` strategy uses worker's `cost_per_second` field. If no worker meets `max_cost`, pipeline won't find an executor and will fail.*
@@ -347,7 +347,7 @@ async def cost_optimized_failed(context, actions):
 
 **Concept:**
 1.  **Initialization:** When creating a blueprint, you can "attach" one or more data stores to it. Each store is essentially a Redis wrapper providing key-value access.
-2.  **Access in Handlers:** Inside any handler of this blueprint, you can access these stores via `context.data_stores`.
+2.  **Access in Handlers:** Inside any handler of this blueprint, you can access these stores via `data_stores`.
 3.  **Persistence:** Data in `data_store` persists between handler calls and even between different `job_id` of the same blueprint.
 
 ```python
@@ -364,29 +364,29 @@ analytics_bp.add_data_store("request_counter", {"total_requests": 0})
 
 
 @analytics_bp.handler("start", is_start=True)
-async def count_request(context, actions):
+async def count_request(data_stores, state_history, actions):
     # 2. Access store via context and increment counter.
     #    Operations are atomic as Redis is single-threaded.
-    current_count = await context.data_stores.request_counter.get("total_requests")
+    current_count = await data_stores.request_counter.get("total_requests")
     new_count = current_count + 1
-    await context.data_stores.request_counter.set("total_requests", new_count)
+    await data_stores.request_counter.set("total_requests", new_count)
 
     # Save current counter value to history of this specific job
-    context.state_history["request_number"] = new_count
+    state_history["request_number"] = new_count
 
     actions.go_to("finished")
 
 @analytics_bp.handler("finished", is_end=True)
-async def show_result(context, actions):
-    request_num = context.state_history.get("request_number")
-    print(f"Job {context.job_id} processed. Request number {request_num}.")
+async def show_result(job_id, state_history, actions):
+    request_num = state_history.get("request_number")
+    print(f"Job {job_id} processed. Request number {request_num}.")
 
 ```
 
 **How it works:**
 
 -   `analytics_bp.add_data_store("request_counter", ...)` creates an `AsyncDictStore` instance that lives as long as the Orchestrator lives.
--   `context.data_stores.request_counter` provides access to this instance. `data_stores` is a dynamic object whose attributes correspond to created store names.
+-   `data_stores.request_counter` provides access to this instance. `data_stores` is a dynamic object whose attributes correspond to created store names.
 -   Every time you run this pipeline (`/v1/jobs/analytics`), it will increment **the same** counter because `data_store` is bound to blueprint, not specific `job_id`.
 
 ### **Recipe 10: Cancelling a Running Task**
@@ -435,10 +435,10 @@ cancellable_pipeline = Blueprint(
 )
 
 @cancellable_pipeline.handler(is_start=True)
-async def start_long_task(context, actions):
+async def start_long_task(initial_data, actions):
     actions.dispatch_task(
         task_type="long_video_processing",
-        params=context.initial_data,
+        params=initial_data,
         transitions={
             "success": "finished_successfully",
             "failure": "task_failed",
@@ -447,16 +447,16 @@ async def start_long_task(context, actions):
     )
 
 @cancellable_pipeline.handler(is_end=True)
-async def finished_successfully(context, actions):
-    print(f"Job {context.job_id} finished successfully.")
+async def finished_successfully(job_id, actions):
+    print(f"Job {job_id} finished successfully.")
 
 @cancellable_pipeline.handler(is_end=True)
-async def task_failed(context, actions):
-    print(f"Job {context.job_id} failed.")
+async def task_failed(job_id, actions):
+    print(f"Job {job_id} failed.")
 
 @cancellable_pipeline.handler(is_end=True)
-async def task_cancelled(context, actions):
-    print(f"Job {context.job_id} successfully cancelled.")
+async def task_cancelled(job_id, actions):
+    print(f"Job {job_id} successfully cancelled.")
 ```
 
 #### **Step 3: Run Job**
@@ -583,13 +583,13 @@ async def fast_process(context, task_files, actions):
 Worker SDK has built-in S3 support. If task parameters (`params`) contain a value starting with `s3://`, SDK automatically downloads file to temp directory and substitutes URI with local path. Similarly, if your handler returns local file path, SDK uploads it to S3 and returns `s3://` URI to Orchestrator.
 
 **Prerequisites:**
-- Install `aioboto3` dependency: `pip install orchestrator-worker[s3]`
+- Install `obstore` dependency: `pip install avtomatika-worker[s3]`
 - Configure environment variables for S3 access:
   ```bash
   export S3_ENDPOINT_URL="http://your-s3-host:9000"
-  export S3_ACCESS_KEY_ID="your-access-key"
-  export S3_SECRET_ACCESS_KEY="your-secret-key"
-  export S3_BUCKET_NAME="my-processing-bucket"
+  export S3_ACCESS_KEY="your-access-key"
+  export S3_SECRET_KEY="your-secret-key"
+  export S3_DEFAULT_BUCKET="my-processing-bucket"
   ```
 
 #### **Step 1: Code in Worker**
@@ -622,11 +622,11 @@ async def process_video(params: dict, **kwargs) -> dict:
 Blueprint simply passes S3 URI as parameter.
 ```python
 @s3_pipeline.handler(is_start=True)
-async def start_s3_task(context, actions):
+async def start_s3_task(initial_data, actions):
     actions.dispatch_task(
         task_type="process_video_from_s3",
         # Pass S3 URI
-        params={"video_path": context.initial_data.get("s3_uri")},
+        params={"video_path": initial_data.get("s3_uri")},
         transitions={"success": "finished"}
     )
 ```
@@ -674,10 +674,10 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 Blueprint can have different branches for different outcomes.
 ```python
 @error_handling_bp.handler(is_start=True)
-async def start_api_call(context, actions):
+async def start_api_call(initial_data, actions):
     actions.dispatch_task(
         task_type="fetch_external_data",
-        params=context.initial_data,
+        params=initial_data,
         transitions={
             "success": "finished_successfully",
             "failure": "handle_failure" # Common handler for all errors
@@ -685,13 +685,13 @@ async def start_api_call(context, actions):
     )
 
 @error_handling_bp.handler(is_end=True)
-async def handle_failure(context, actions):
+async def handle_failure(job_id, context, actions):
     # Here we can analyze `job_state` to understand if task was quarantined or just failed.
-    job_state = await context.storage.get_job_state(context.job_id)
+    job_state = await context.storage.get_job_state(job_id)
     if job_state.get("status") == "quarantined":
-        print(f"Job {context.job_id} quarantined due to a permanent error.")
+        print(f"Job {job_id} quarantined due to a permanent error.")
     else:
-        print(f"Job {context.job_id} failed.")
+        print(f"Job {job_id} failed.")
 ```
 
 ### **Recipe 14: Nested Blueprints (Sub-blueprints)**
@@ -709,24 +709,24 @@ from avtomatika import Blueprint
 text_processing_bp = Blueprint(name="text_processor")
 
 @text_processing_bp.handler("start", is_start=True)
-async def process(context, actions):
+async def process(initial_data, state_history, actions):
     # ... some text processing logic ...
-    text = context.initial_data.get("text", "")
+    text = initial_data.get("text", "")
     if not text:
         # If input invalid, end blueprint with failure.
         actions.go_to("failed")
     else:
         # Result can be saved in `state_history` of child blueprint.
         # Although not passed directly, it's available for debugging in history.
-        context.state_history["processed_text"] = text.upper()
+        state_history["processed_text"] = text.upper()
         actions.go_to("finished")
 
 @text_processing_bp.handler("finished", is_end=True)
-async def text_processing_finished(context, actions):
+async def text_processing_finished(actions):
     pass
 
 @text_processing_bp.handler("failed", is_end=True)
-async def text_processing_failed(context, actions):
+async def text_processing_failed(actions):
     pass
 
 
@@ -738,12 +738,12 @@ main_pipeline = Blueprint(
 )
 
 @main_pipeline.handler("start", is_start=True)
-async def parent_start(context, actions):
+async def parent_start(actions):
     actions.go_to("process_user_text")
 
 @main_pipeline.handler
-async def process_user_text(context, actions):
-    user_text = context.initial_data.get("raw_text", "")
+async def process_user_text(initial_data, actions):
+    user_text = initial_data.get("raw_text", "")
     actions.run_blueprint(
         blueprint_name="text_processor",
         initial_data={"text": user_text},
@@ -751,11 +751,11 @@ async def process_user_text(context, actions):
     )
 
 @main_pipeline.handler
-async def final_step_handler(context, actions):
+async def final_step_handler(state_history, actions):
     # Child blueprint result saved in `state_history`.
     # Key generated automatically. We can find it by iterating keys.
     sub_job_result = None
-    for key, value in context.state_history.items():
+    for key, value in state_history.items():
         if key.startswith("sub_job_") and "outcome" in value:
             sub_job_result = value
             break
@@ -768,16 +768,16 @@ async def final_step_handler(context, actions):
     actions.go_to("finished")
 
 @main_pipeline.handler
-async def sub_job_failed_handler(context, actions):
+async def sub_job_failed_handler(actions):
     print("Sub-blueprint failed, handling failure in parent.")
     actions.go_to("failed")
 
 @main_pipeline.handler("finished", is_end=True)
-async def main_finished(context, actions):
+async def main_finished(actions):
     pass
 
 @main_pipeline.handler("failed", is_end=True)
-async def main_failed(context, actions):
+async def main_failed(actions):
     pass
 ```
 
@@ -801,23 +801,23 @@ from avtomatika import Blueprint
 conditional_pipeline = Blueprint(name="conditional_flow")
 
 @conditional_pipeline.handler(is_start=True)
-async def start(context, actions):
+async def start(actions):
     actions.go_to("process_data")
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'A'")
-async def process_a(context, actions):
+@conditional_pipeline.handler("process_data").when("initial_data.type == 'A'")
+async def process_a(actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'B'")
-async def process_b(context, actions):
+@conditional_pipeline.handler("process_data").when("initial_data.type == 'B'")
+async def process_b(actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
 @conditional_pipeline.handler(is_end=True)
-async def finished(context, actions):
+async def finished(actions):
     print("Finished.")
 
 @conditional_pipeline.handler(is_end=True)
-async def failed(context, actions):
+async def failed(actions):
     print("Failed.")
 
 # Now generate its diagram
@@ -878,23 +878,23 @@ premium_features_bp = Blueprint(
 )
 
 @premium_features_bp.handler(is_start=True)
-async def start_premium_flow(context, actions):
+async def start_premium_flow(initial_data, client, actions):
     # Get configuration of client who made request
-    client_config = context.client.config
+    client_config = client.config
 
     # Use client parameters for conditional logic
     if client_config.get("plan") == "premium":
         # Use more powerful worker for premium clients
         actions.dispatch_task(
             task_type="high_quality_generation",
-            params=context.initial_data,
+            params=initial_data,
             transitions={"success": "finished"}
         )
     elif "en" in client_config.get("languages", []):
          # Standard worker for free English-speaking clients
         actions.dispatch_task(
             task_type="standard_quality_generation",
-            params=context.initial_data,
+            params=initial_data,
             transitions={"success": "finished"}
         )
     else:
@@ -902,11 +902,11 @@ async def start_premium_flow(context, actions):
         actions.go_to("failed", error_message="Language not supported for your plan")
 
 @premium_features_bp.handler("finished", is_end=True)
-async def premium_finished(context, actions):
+async def premium_finished(actions):
     pass
 
 @premium_features_bp.handler("failed", is_end=True)
-async def premium_failed(context, actions):
+async def premium_failed(actions):
     pass
 ```
 
@@ -931,20 +931,20 @@ validation_bp = Blueprint(
 )
 
 @validation_bp.handler(is_start=True)
-async def validate_input(context, actions):
+async def validate_input(initial_data, state_history, actions):
     """
     Validates input data and decides where to direct process.
     """
-    user_id = context.initial_data.get("user_id")
-    document_type = context.initial_data.get("document_type")
+    user_id = initial_data.get("user_id")
+    document_type = initial_data.get("document_type")
 
     if not user_id or not document_type:
         actions.go_to("invalid_input_failed")
         return
 
     # Save validated data to state_history for use in other handlers
-    context.state_history["validated_user"] = user_id
-    context.state_history["doc_type"] = document_type
+    state_history["validated_user"] = user_id
+    state_history["doc_type"] = document_type
 
     # Routing based on document type
     if document_type == "invoice":
@@ -955,8 +955,8 @@ async def validate_input(context, actions):
 # ... (other handlers) ...
 
 @validation_bp.handler(is_end=True)
-async def invalid_input_failed(context, actions):
-    print(f"Job {context.job_id} failed due to invalid input.")
+async def invalid_input_failed(job_id, actions):
+    print(f"Job {job_id} failed due to invalid input.")
 
 ```
 
@@ -979,27 +979,27 @@ finalization_bp = Blueprint(name="finalization_example")
 # ... (intermediate steps leading to different outcomes) ...
 
 @finalization_bp.handler(is_end=True)
-async def cleanup_and_notify_success(context, actions):
+async def cleanup_and_notify_success(job_id, state_history, actions):
     """
     Executed on successful completion.
     """
-    temp_file = context.state_history.get("temp_file_path")
+    temp_file = state_history.get("temp_file_path")
     if temp_file and os.path.exists(temp_file):
         os.remove(temp_file)
-        print(f"Job {context.job_id}: Temporary file {temp_file} deleted.")
+        print(f"Job {job_id}: Temporary file {temp_file} deleted.")
 
-    # send_success_email(context.initial_data.get("user_email"))
-    print(f"Job {context.job_id} finished successfully. Notification sent.")
+    # send_success_email(initial_data.get("user_email"))
+    print(f"Job {job_id} finished successfully. Notification sent.")
 
 
 @finalization_bp.handler(is_end=True)
-async def handle_rejection(context, actions):
+async def handle_rejection(job_id, state_history, actions):
     """
     Executed if process was rejected.
     """
-    rejection_reason = context.state_history.get("rejection_reason", "No reason provided")
-    print(f"Job {context.job_id} was rejected. Reason: {rejection_reason}")
-    # send_rejection_notification(context.initial_data.get("user_email"), rejection_reason)
+    rejection_reason = state_history.get("rejection_reason", "No reason provided")
+    print(f"Job {job_id} was rejected. Reason: {rejection_reason}")
+    # send_rejection_notification(initial_data.get("user_email"), rejection_reason)
 
 ```
 Using `is_start` and `is_end` this way makes your pipelines more structured, reliable, and easier to understand.
@@ -1020,10 +1020,10 @@ gpu_intensive_pipeline = Blueprint(
 )
 
 @gpu_intensive_pipeline.handler
-async def start_gpu_task(context, actions):
+async def start_gpu_task(initial_data, actions):
     actions.dispatch_task(
         task_type="video_montage",
-        params=context.initial_data,
+        params=initial_data,
         # Dispatcher looks for worker whose devices list contains a GPU
         # matching the requirements and has required model installed
         resource_requirements={

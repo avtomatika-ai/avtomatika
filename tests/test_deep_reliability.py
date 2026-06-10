@@ -1,16 +1,12 @@
+from unittest.mock import ANY, MagicMock, patch
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
-from unittest.mock import ANY, patch
-
 import pytest
-
-from avtomatika.blueprint import Blueprint
-from avtomatika.constants import (
+from rxon.constants import (
     AUTH_HEADER_WORKER,
     IGNORED_REASON_MISMATCH,
     IGNORED_REASON_STALE,
@@ -18,9 +14,13 @@ from avtomatika.constants import (
     JOB_STATUS_RUNNING,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
+
+from avtomatika.app_keys import (
+    STORAGE_KEY,
+)
+from avtomatika.blueprint import Blueprint
 from avtomatika.engine import OrchestratorEngine
 from avtomatika.executor import JobExecutor
-from tests.conftest import STORAGE_KEY
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_infinite_loop_prevention(config, redis_storage):
         # Set a very small limit for testing
         config.MAX_TRANSITIONS_PER_JOB = 5
 
-        executor = JobExecutor(engine, engine.history_storage)
+        executor = JobExecutor(engine, engine.history_storage, metrics=MagicMock())
 
         job_id = "looping-job"
         await redis_storage.save_job_state(
@@ -191,7 +191,7 @@ async def test_race_condition_protection(config, redis_storage):
     engine.setup()
     await engine.on_startup(engine.app)
     try:
-        executor = JobExecutor(engine, engine.history_storage)
+        executor = JobExecutor(engine, engine.history_storage, metrics=MagicMock())
 
         job_id = "race-job"
         # Set to terminal state

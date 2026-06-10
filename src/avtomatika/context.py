@@ -112,7 +112,7 @@ class ActionFactory:
         task_type: str,
         params: dict[str, Any],
         transitions: dict[str, str],
-        skill_version: str = "1.0.0",  # Default for backward compatibility
+        skill_version: str | None = None,
         event_transitions: dict[str, str] | None = None,
         dispatch_strategy: str = "default",
         resource_requirements: dict[str, Any] | None = None,
@@ -128,7 +128,6 @@ class ActionFactory:
         self._check_for_existing_action()
         logger.debug(f"Job {self._job_id}: Dispatching task '{task_type}' (version {skill_version})")
 
-        # If resource_hint is provided, inject it into params for the Dispatcher
         if resource_hint:
             params["resource_hint"] = resource_hint
 

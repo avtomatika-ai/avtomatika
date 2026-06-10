@@ -11,11 +11,12 @@
 ## 🚀 Key Features
 
 - **State-Machine Driven**: Declarative Python Blueprints for complex logic.
-- **High-Performance Redis Storage**: **Atomic state updates** via Lua scripts and **Msgpack** serialization.
-- **Zero Trust Security**: Mandatory worker authentication and **Replay Protection** via a 60s timestamp window.
-- **Pluggable Blob Storage**: Support for S3-compatible storage via the `BlobProvider` interface (powered by `obstore`).
-- **Hierarchical Logic**: Support for child blueprints (Ghosts) and **Parallel execution with isolated branch state**.
-- **Observability**: Distributed tracing with **OpenTelemetry** and real-time metrics.
+- **High-Performance**: **ZSET-based** queue indexing, **Work Stealing** mechanism (Lua), and atomic state transitions.
+- **Zero Trust Security**: Full `SecurityContext` implementation, automatic HMAC SHA256 signing, and identity chain verification.
+- **Data Protection**: **Envelope Encryption** for tokens in Redis, strict client isolation, and Replay Protection.
+- **File Management**: High-performance Async S3 streaming via the `obstore` library.
+- **Automation**: Automatic transition discovery via **AST analysis** of handler code.
+- **Observability**: **End-to-End** distributed tracing with **OpenTelemetry** and real-time metrics.
 
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
 
@@ -48,6 +49,9 @@ The project is based on a simple yet powerful architectural pattern that separat
 *   **Blueprints (Blueprint)** — The Script. Each blueprint is a detailed plan (a state machine) for a specific business process. It describes the steps (states) and the rules for transitioning between them.
 *   **Workers (Worker)** — The Team of Specialists. These are independent, specialized executors. Each worker knows how to perform a specific set of tasks (e.g., "process video," "send email") and reports back to the Orchestrator.
 
+### Why does this matter?
+In the **HLN** architecture, the Orchestrator acts as a "Ghost" (Internal logic), while Workers act as "Shells" (Execution interface). Thanks to the **Shell-Stacking** principle, any Orchestrator can be encased in a worker shell, allowing for the construction of infinite fractal networks (**Holarchies**).
+
 ## Ecosystem
 
 Avtomatika is part of a larger ecosystem:
@@ -74,7 +78,7 @@ Avtomatika is part of a larger ecosystem:
     pip install "avtomatika[history]"
     ```
 
-*   **Install with telemetry support (Prometheus, OpenTelemetry):**
+*   **Install with telemetry support (OpenTelemetry):**
     ```bash
     pip install "avtomatika[telemetry]"
     ```
@@ -105,6 +109,18 @@ Avtomatika jobs move through various states:
 | `cancelled` | **Terminal** | Manually cancelled by user or system. |
 | `error` | **Terminal** | Critical system or infrastructure error. |
 | `quarantined` | **Terminal** | Flagged for manual review (e.g., data contract violation). |
+
+### Modern Observability
+Avtomatika is built with deep observability in mind using the **OpenTelemetry** standard. It provides:
+- **Distributed Tracing**: Track requests across the entire HLN network (Orchestrator ↔ Worker).
+- **Real-time Metrics**: Monitor queue lengths, worker health, and job latencies.
+- **OTLP Native**: Push telemetry data directly to Jaeger, Prometheus, or Grafana.
+
+To enable telemetry support during installation:
+```bash
+pip install "avtomatika[telemetry]"
+```
+See the [**Observability Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/observability.md) for configuration details.
 
 ## Quick Start: Usage as a Library
 
@@ -233,20 +249,27 @@ This is the most important injected argument. It tells the orchestrator what to 
 *   `actions.await_human_approval(...)`: Pauses the workflow for external input.
 *   `actions.run_blueprint(...)`: Starts a child workflow.
 
-### Backward Compatibility: The `context` Object
+### Granular Dependency Injection
 
-For backward compatibility or if you prefer to have a single object, you can still ask for `context`.
+Avtomatika uses modern dependency injection for handlers. Instead of receiving a single, large `context` object, your handler can ask for exactly what it needs as function arguments. The engine will automatically provide them.
 
 ```python
-# This handler is equivalent to the one above.
-@bp.handler
-async def publish_video(context):
-    output_path = context.state_history.get("output_path")
-    duration = context.state_history.get("duration")
-
-    print(f"Job {context.job_id}: Publishing video at {output_path} ({duration}s).")
-    context.actions.go_to("complete")
+@bp.handler("analyze")
+async def analyze(initial_data, state_history, actions):
+    # Field names are automatically matched and injected
+    print(f"Processing {initial_data.get('file')}")
+    actions.go_to("done")
 ```
+
+Available arguments for injection:
+*   `actions`: The `ActionFactory` (required for control).
+*   `job_id`, `current_state`, `initial_data`, `state_history`: Core job fields.
+*   `data_stores`: Access to shared memory/database stores.
+*   `task_files`: Access to S3/Local files for the job.
+*   `aggregation_results`: Results from parallel tasks.
+*   `client`: Client configuration and plan info.
+*   `tracing_context`: Distributed tracing metadata.
+
 ## Key Concepts: JobContext and Actions
 
 ### High Performance Architecture
@@ -484,14 +507,15 @@ Multiple Orchestrator instances can run behind a load balancer.
 
 *   **Structured JSON Logging**: Easy to parse and index.
 *   **Asynchronous processing**: Non-blocking `QueueHandler` prevents event loop blocking.
-*   **Metrics**: Available at `/_public/metrics`, with `orchestrator_` prefix and `orchestrator_loop_lag_seconds`.
+*   **Deep Observability**: OpenTelemetry-based tracing and metrics (via OTLP).
 
 ### Security & Data Protection
+*   **Zero Trust Security**: Mutual authentication (mTLS) and mandatory **HMAC SHA256** message signing to protect against data and worker spoofing.
+*   **Replay Protection**: Strict validation of `timestamp` with a 60-second window.
+*   **Identity Chain Integrity**: Mathematical verification of identity chains in holarchies (signature covers the entire signal path).
 *   **Envelope Encryption**: When `REDIS_ENCRYPTION_KEY` is provided, worker tokens are stored encrypted in Redis (AES-GCM).
 *   **Auth Modes**: Support for `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
 *   **Strict Client Isolation**: Jobs are strictly tied to the `client_token`. A client can only access, manage, or download files for jobs they created.
-*   **API Detail Policy**: By default, the API returns a minimal set of fields for security. Enable full details via `DETAILED_API_RESPONSES="true"`.
-*   **Configurable API Prefix**: The Client API can be moved or hidden via `CLIENT_API_PREFIX`.
 
 ### Rate Limiting
 
@@ -529,5 +553,7 @@ Available at `/_public/docs`. Features dynamic blueprint documentation and inter
 - [**Architecture Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/architecture.md)
 - [**API Reference**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/api_reference.md)
 - [**Configuration Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/configuration.md)
+- [**Observability Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/observability.md)
+- [**Tracing Protocol**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/observability_protocol.md)
 - [**Deployment Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/deployment.md)
 - [**Cookbook**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/cookbook/README.md)

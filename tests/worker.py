@@ -11,8 +11,7 @@ import uuid
 
 import aiohttp
 from aiohttp import web
-
-from avtomatika.constants import AUTH_HEADER_WORKER
+from rxon.constants import AUTH_HEADER_WORKER
 
 routes = web.RouteTableDef()
 

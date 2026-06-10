@@ -5,8 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import asyncio
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, gather, sleep
 from logging import getLogger
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -60,7 +59,6 @@ class ReputationCalculator:
         """Calculates and updates the reputation for all active workers."""
         logger.info("Starting reputation calculation for all workers...")
 
-        # Get only IDs of active workers to avoid O(N) scan of all data
         worker_ids = await self.storage.get_active_worker_ids()
 
         if not worker_ids:
@@ -77,10 +75,10 @@ class ReputationCalculator:
 
             chunk = worker_ids[i : i + chunk_size]
             tasks = [self._calculate_single_worker_reputation(wid) for wid in chunk]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            await gather(*tasks, return_exceptions=True)
 
             # Small throttle between chunks
-            await asyncio.sleep(0.1)
+            await sleep(0.1)
 
         logger.info("Reputation calculation finished.")
 

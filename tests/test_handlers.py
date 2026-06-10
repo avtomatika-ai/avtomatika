@@ -10,7 +10,6 @@ import pytest
 from aiohttp import web
 
 from avtomatika.api.handlers import (
-    _WORKER_CATALOG_CACHE,
     cancel_job_handler,
     docs_handler,
     get_blueprint_graph_handler,
@@ -55,6 +54,7 @@ def engine(storage, config):
 @pytest.fixture
 def request_mock(engine):
     req = MagicMock(spec=web.Request)
+    req.json = AsyncMock(return_value={})
 
     # app needs to be accessible via []
     app_mock = MagicMock()
@@ -166,6 +166,7 @@ async def test_get_blueprint_graph_file_not_found(engine, request_mock):
 @pytest.mark.asyncio
 async def test_human_approval_job_not_found(engine, request_mock):
     request_mock.match_info = {"job_id": "non-existent-job"}
+    request_mock.json.return_value = {"decision": "approve"}
     response = await human_approval_webhook_handler(request_mock)
     assert response.status == 404
 
@@ -216,9 +217,8 @@ async def test_human_approval_invalid_decision(engine, request_mock):
 @pytest.mark.asyncio
 async def test_get_worker_catalog_cached(engine, request_mock):
     """Checks that the worker catalog is cached."""
-    global _WORKER_CATALOG_CACHE
-    _WORKER_CATALOG_CACHE["data"] = [{"skill": "cached"}]
-    _WORKER_CATALOG_CACHE["expires_at"] = 9999999999.0
+    engine.worker_catalog_cache["data"] = [{"skill": "cached"}]
+    engine.worker_catalog_cache["expires_at"] = 9999999999.0
 
     response = await get_worker_catalog_handler(request_mock)
     assert response.status == 200

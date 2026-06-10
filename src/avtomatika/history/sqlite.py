@@ -68,18 +68,15 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         """Initializes the database connection and creates tables if they don't exist."""
         try:
             self._conn = await connect(self._db_path)
-            # Enable WAL mode for better concurrency performance
             await self._conn.execute("PRAGMA journal_mode=WAL;")
             await self._conn.execute(CREATE_JOB_HISTORY_TABLE)
             await self._conn.execute(CREATE_WORKER_HISTORY_TABLE)
 
-            # Migration: Add client_token column if it doesn't exist
             try:
                 await self._conn.execute("ALTER TABLE job_history ADD COLUMN client_token TEXT;")
                 await self._conn.commit()
                 logger.info("Migrated SQLite: added client_token column to job_history.")
             except Error:
-                # Column likely already exists
                 pass
 
             await self._conn.execute(CREATE_JOB_ID_INDEX)
@@ -131,7 +128,6 @@ class SQLiteHistoryStorage(HistoryStorageBase):
         context_snapshot = event_data.get("context_snapshot")
         context_snapshot_json = dumps(context_snapshot).decode("utf-8") if context_snapshot else None
 
-        # Extract client_token from event_data
         client_token = event_data.get("client_token") or event_data.get("metadata", {}).get("client")
 
         params = (

@@ -6,57 +6,53 @@
 
 ## Шаг 1: Установка SDK
 
-Убедитесь, что SDK установлен в вашем окружении.
+Вы можете установить базовую версию или версию с дополнительными возможностями:
+
 ```bash
+# Минимальная версия (без S3 и Pydantic)
 pip install avtomatika-worker
+
+# Полная версия (рекомендуется для авто-валидации и работы с файлами)
+pip install "avtomatika-worker[s3,pydantic]"
 ```
 
 ## Шаг 2: Создание файла Воркера
 
 Создайте Python-файл (например, `my_worker.py`) и импортируйте класс `Worker`.
-
 ```python
 import asyncio
 from avtomatika_worker import Worker
-from avtomatika_worker.typing import TRANSIENT_ERROR
+from pydantic import BaseModel
 
 # 1. Инициализируйте класс Worker
-# Укажите уникальный тип вашего воркера.
 worker = Worker(worker_type="inventory-checker")
 
-# 2. Определите обработчики задач с помощью декоратора @worker.skill
+# 2. Определите обработчик задач
+
+Вы можете использовать **обычные словари** (без зависимостей) или **Pydantic модели** (для автоматической валидации).
+
+### Вариант А: Простой словарь (без Pydantic)
+```python
 @worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
-    """
-    Эта функция будет вызвана, когда Оркестратор отправит
-    задачу типа "check_inventory".
-
-    - `params` (dict): Параметры для выполнения задачи.
-    - `**kwargs`: Метаданные задачи:
-        - `task_id` (str): Уникальный ID задачи.
-        - `job_id` (str): ID родительского Job.
-        - `priority` (float): Приоритет задачи.
-    """
-    print(f"Получены параметры: {params}")
     items = params.get("items", [])
+    print(f"Проверка товаров: {items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
-    # Имитация работы: проверка наличия товаров
-    await asyncio.sleep(1)
+### Вариант Б: Pydantic модель (с авто-валидацией)
+```python
+from pydantic import BaseModel
 
-    if "unavailable_item" in items:
-        # Возвращаем кастомный статус, который обработает блупринт
-        return {
-            "status": "out_of_stock",
-            "data": {"missing_item": "unavailable_item"}
-        }
+class CheckParams(BaseModel):
+    items: list[str]
 
-    # 3. Верните успешный результат
-    #    - 'status': "success" или кастомный статус.
-    #    - 'data': Словарь с данными, которые будут добавлены в контекст Job.
-    return {
-        "status": "success",
-        "data": {"warehouse_info": "All items are available"}
-    }
+@worker.skill("check_inventory")
+async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
+    """SDK автоматически проверит входные данные по модели CheckParams."""
+    print(f"Проверка товаров: {params.items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
 # Пример обработчика для долгой задачи с кооперативной отменой
 @worker.skill("long_running_task")

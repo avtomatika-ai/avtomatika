@@ -7,10 +7,12 @@
 
 from asyncio import Semaphore, gather, to_thread
 from datetime import timedelta
+from inspect import iscoroutine
 from logging import getLogger
 from os import sep, walk
 from pathlib import Path
 from shutil import rmtree
+from time import time
 from typing import Any, cast
 
 from orjson import dumps, loads
@@ -19,18 +21,18 @@ from rxon.exceptions import IntegrityError
 
 from .config import Config
 from .history.base import HistoryStorageBase
+from .metrics import Metrics
 
 logger = getLogger(__name__)
 
 try:
-    from aiofiles import open as aiopen
+    from aiofiles import open as aiopen  # type: ignore[import-untyped]
     from obstore import delete_async, get_async, put_async, sign
     from obstore import list as obstore_list
     from obstore.store import S3Store
 
     HAS_S3_LIBS = True
 except ImportError:
-    # Define stubs for type hinting and avoid NameErrors
     HAS_S3_LIBS = False
     S3Store = cast(Any, object)
     delete_async = get_async = put_async = sign = obstore_list = aiopen = cast(Any, None)
@@ -114,7 +116,6 @@ class TaskFiles:
 
             if tasks:
                 results = await gather(*tasks)
-                # For simplicity in this refactor, we don't log exact sizes for dirs here
                 await self._log_event(
                     "download_dir",
                     f"s3://{bucket}/{key}",
@@ -281,9 +282,10 @@ class S3Service(BlobProvider):
     Initializes the Store and provides TaskFiles instances.
     """
 
-    def __init__(self, config: Config, history: HistoryStorageBase | None = None):
+    def __init__(self, config: Config, history: HistoryStorageBase | None = None, metrics: Metrics | None = None):
         self.config = config
         self._history = history
+        self.metrics = metrics
         self._store: S3Store | None = None
         self._semaphore: Semaphore | None = None
 
@@ -329,33 +331,78 @@ class S3Service(BlobProvider):
         if not self._enabled or not self._store or not self._semaphore:
             raise RuntimeError("S3 support is not enabled or initialized.")
 
-        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
-        path = Path(local_path)
+        from .telemetry import trace  # noqa: PLC0415
 
-        async with self._semaphore:
-            async with aiopen(path, "rb") as f:
-                content = await f.read()
-            await put_async(self._store, key, content)
-            return f"s3://{bucket}/{key}"
+        tracer = trace.get_tracer(__name__)
+        start_time = time()
+
+        with tracer.start_as_current_span("S3:Upload") as span:
+            bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+            span.set_attribute("s3.bucket", bucket)
+            span.set_attribute("s3.key", key)
+
+            try:
+                path = Path(local_path)
+
+                async with self._semaphore:
+                    async with aiopen(path, "rb") as f:
+                        content = await f.read()
+                    await put_async(self._store, key, content)
+
+                if self.metrics:
+                    duration = time() - start_time
+                    self.metrics.s3_operations_total.add(1, {"operation": "upload", "status": "success"})
+                    self.metrics.s3_operation_duration_seconds.record(duration, {"operation": "upload"})
+
+                return f"s3://{bucket}/{key}"
+            except Exception as e:
+                if self.metrics:
+                    self.metrics.s3_operations_total.add(1, {"operation": "upload", "status": "error"})
+                span.record_exception(e)
+                raise e
 
     async def download(self, uri: str, local_path: str) -> bool:
         """Standard BlobProvider download."""
         if not self._enabled or not self._store or not self._semaphore:
             return False
 
-        bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
-        path = Path(local_path)
+        from .telemetry import trace  # noqa: PLC0415
 
-        if not path.parent.exists():
-            await to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        tracer = trace.get_tracer(__name__)
+        start_time = time()
 
-        async with self._semaphore:
-            response = await get_async(self._store, key)
-            stream = response.stream()
-            async with aiopen(path, "wb") as f:
-                async for chunk in stream:
-                    await f.write(chunk)
-            return True
+        with tracer.start_as_current_span("S3:Download") as span:
+            bucket, key, _ = parse_uri(uri, self.config.S3_DEFAULT_BUCKET)
+            span.set_attribute("s3.bucket", bucket)
+            span.set_attribute("s3.key", key)
+
+            try:
+                path = Path(local_path)
+
+                if not path.parent.exists():
+                    await to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+
+                async with self._semaphore:
+                    response = await get_async(self._store, key)
+                    stream = response.stream()
+                    if iscoroutine(stream):
+                        stream = await stream
+
+                    async with aiopen(path, "wb") as f:
+                        async for chunk in stream:
+                            await f.write(chunk)
+
+                if self.metrics:
+                    duration = time() - start_time
+                    self.metrics.s3_operations_total.add(1, {"operation": "download", "status": "success"})
+                    self.metrics.s3_operation_duration_seconds.record(duration, {"operation": "download"})
+
+                return True
+            except Exception as e:
+                if self.metrics:
+                    self.metrics.s3_operations_total.add(1, {"operation": "download", "status": "error"})
+                span.record_exception(e)
+                return False
 
     async def get_metadata(self, uri: str) -> dict[str, Any] | None:
         """Standard BlobProvider metadata."""
@@ -407,7 +454,8 @@ class S3Service(BlobProvider):
         """Helper for recursive operations."""
         if not self._enabled or not self._store:
             return []
-        return await to_thread(lambda: list(obstore_list(self._store, prefix=prefix)))
+        entries = await to_thread(lambda: list(obstore_list(self._store, prefix=prefix)))
+        return [{"path": entry.path, "size": entry.size} for entry in entries]
 
     async def delete_objects(self, keys: list[str]) -> None:
         """Helper for cleanup."""

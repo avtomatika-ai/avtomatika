@@ -5,8 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import asyncio
-from asyncio import CancelledError, sleep
+from asyncio import CancelledError, Semaphore, gather, sleep
 from logging import getLogger
 from socket import gethostname
 from typing import Any
@@ -35,8 +34,7 @@ class Watcher:
         self._running = True
         backoff_delay = self.watch_interval_seconds
 
-        # Parallelize timeout processing
-        semaphore = asyncio.Semaphore(50)
+        semaphore = Semaphore(50)
 
         while self._running:
             try:
@@ -62,7 +60,6 @@ class Watcher:
                                                     job_state, tid, "Worker task timed out (parallel branch)."
                                                 )
                                         else:
-                                            # Standard job timeout
                                             job_state = await self.storage.get_job_state(job_key)
                                             if job_state:
                                                 logger.warning(f"Watcher: Job {job_key} timed out.")
@@ -71,7 +68,7 @@ class Watcher:
                                         logger.exception(f"Failed to process timeout for {job_key}")
 
                             tasks = [_process_single(jid) for jid in timed_out_job_ids]
-                            await asyncio.gather(*tasks, return_exceptions=True)
+                            await gather(*tasks, return_exceptions=True)
 
                     finally:
                         await self.storage.release_lock("global_watcher_lock", self._instance_id)
@@ -89,6 +86,6 @@ class Watcher:
 
             await sleep(self.watch_interval_seconds)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stops the watcher."""
         self._running = False

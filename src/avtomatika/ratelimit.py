@@ -11,7 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
-from . import metrics
+from .metrics import Metrics
 from .storage.base import StorageBackend
 
 Handler = Callable[[web.Request], Awaitable[web.Response]]
@@ -19,6 +19,7 @@ Handler = Callable[[web.Request], Awaitable[web.Response]]
 
 def rate_limit_middleware_factory(
     storage: StorageBackend,
+    metrics: Metrics,
     default_limit: int,
     period: int,
 ) -> Any:
@@ -29,7 +30,7 @@ def rate_limit_middleware_factory(
         request: web.Request,
         handler: Handler,
     ) -> web.Response:
-        """Global rate-limiting for general API requests (IP-based)."""
+        """Global rate-limiting for general API requests."""
         # Do not apply global rate limiting to internal worker API here,
         # it is handled more precisely in engine.handle_rxon_message.
         if request.path.startswith("/_worker"):
@@ -41,7 +42,7 @@ def rate_limit_middleware_factory(
         with suppress(Exception):
             count = await storage.increment_key_with_ttl(rate_limit_key, period)
             if count > default_limit:
-                metrics.ratelimit_blocked_total.inc({"identifier": key_identifier, "path": request.path})
+                metrics.ratelimit_blocked_total.add(1, {"identifier": key_identifier, "path": request.path})
                 return web.json_response({"error": "Too Many Requests"}, status=429)
 
         return await handler(request)

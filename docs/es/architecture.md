@@ -40,6 +40,18 @@ Avtomatika está optimizado para un rendimiento máximo y una latencia mínima:
     *   **Privacidad de la API**: Control estricto del detalle de las respuestas mediante `DETAILED_API_RESPONSES`. Los secretos y los snapshots de contexto técnico se filtran automáticamente en todos los puntos finales y webhooks.
     *   **Soporte para Firmas**: El motor está preparado para verificar firmas digitales en el `SecurityContext` para asegurar la integridad de las tareas de extremo a extremo.
 
+## Seguridad de Contratos (Contract Enforcement)
+
+Un elemento crítico de protección es la validación estricta de los datos de entrada и salida mediante `output_schema`.
+
+1.  **Validación de Dos Niveles**:
+    *   **Worker-side**: El SDK del Worker valida el resultado antes de enviarlo, evitando la transmisión de datos obviamente incorrectos.
+    *   **Orchestrator-side**: El núcleo del Orchestrator vuelve a validar los datos antes de guardarlos en `state_history`. Cualquier desviación mueve la tarea al estado `failed` con un código `CONTRACT_VIOLATION`.
+
+2.  **Jerarquía de Esquemas (Schema Priority)**:
+    *   **Blueprint Priority**: Si un esquema se define explícitamente en el blueprint (`actions.dispatch_task(..., output_schema=...)`), tiene prioridad absoluta. El Orchestrator ignorará las declaraciones del worker и aplicará la "ley del blueprint".
+    *   **Worker Declaration**: Si no se especifica ningún esquema en el blueprint, se utiliza el esquema proporcionado por el worker durante el registro.
+    *   **Safe Defaults**: Por defecto, los esquemas se configuran con `additionalProperties: false`, lo que evita la **Inyección de Estado (State Injection)** — un intento de un worker de inyectar campos en la memoria del orquestador que no estaban previstos por la lógica.
 
 ## Componentes Clave
 

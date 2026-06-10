@@ -1,8 +1,8 @@
+from unittest.mock import MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-
-
 import pytest
 
 from avtomatika.config import Config
@@ -15,7 +15,7 @@ def setup_env():
     storage = MemoryStorage()
     config = Config()
     config.DISPATCHER_SOFT_LIMIT = 2
-    dispatcher = Dispatcher(storage, config)
+    dispatcher = Dispatcher(storage, config, metrics=MagicMock())
     return storage, config, dispatcher
 
 

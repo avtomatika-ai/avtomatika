@@ -11,14 +11,15 @@ from avtomatika.utils.crypto import decrypt_token, encrypt_token, get_fernet
 
 def test_fernet_derivation():
     key = "any-secret-string"
-    f1 = get_fernet(key)
-    f2 = get_fernet(key)
+    cache = {}
+    f1 = get_fernet(key, cache)
+    f2 = get_fernet(key, cache)
 
     assert isinstance(f1, Fernet)
     assert f1 is f2  # Check caching
 
     # Different key should result in different Fernet instance
-    f3 = get_fernet("other-key")
+    f3 = get_fernet("other-key", cache)
     assert f1 is not f3
 
 

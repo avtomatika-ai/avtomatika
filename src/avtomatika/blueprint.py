@@ -27,7 +27,6 @@ def _PLACEHOLDER():
 
 
 # Simple parser for expressions like "context.area.field operator value"
-# The order of operators is important: >= and <= must come before > and <
 CONDITION_REGEX = re_compile(
     r"context\.(?P<area>\w+)\.(?P<field>\w+)\s*(?P<op>>=|<=|==|!=|>|<)\s*(?P<value>.*)",
 )
@@ -121,7 +120,6 @@ class HandlerDecorator:
         if self._is_end:
             self._blueprint.end_states.add(state_name)
 
-        # Update condition handlers state name mapping if needed
         self._state = state_name
         return func
 
@@ -255,6 +253,22 @@ class Blueprint:
 
         return decorator
 
+    def get_contract(self) -> dict[str, Any]:
+        """Returns the public contract of the blueprint."""
+        return {
+            "name": self.name,
+            "api_endpoint": self.api_endpoint,
+            "api_version": self.api_version,
+            "start_state": self.start_state,
+            "end_states": list(self.end_states),
+            "handlers": list(self.handlers.keys()),
+            "aggregators": list(self.aggregator_handlers.keys()),
+            "conditional_handlers": [
+                {"state": ch.state, "condition": str(ch.condition)} for ch in self.conditional_handlers
+            ],
+            "events_schema": self.events_schema,
+        }
+
     def validate(self) -> None:
         """Validates that the blueprint is configured correctly."""
         if self.start_state is None:
@@ -295,8 +309,6 @@ class Blueprint:
                     f"Blueprint '{self.name}' has unreachable states: {', '.join(unreachable)}. "
                     "All states must be reachable from the start state."
                 )
-                # If we had parse errors, we can't be sure the graph is complete.
-                # In this case, we only warn. Otherwise, we raise a fatal error.
                 if parse_errors > 0:
                     logger.warning(
                         f"{msg} (Validation was based on incomplete data due to {parse_errors} parse errors)"
@@ -330,11 +342,9 @@ class Blueprint:
                     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                         continue
 
-                    # Handle actions.go_to("state")
                     if node.func.attr == "go_to" and node.args and isinstance(node.args[0], ast.Constant):
                         transitions[state].add(str(node.args[0].value))
 
-                    # Handle actions.dispatch_task(..., transitions={"status": "state"})
                     # Also handles await_human_approval, run_blueprint which use the same 'transitions' kwarg
                     elif node.func.attr in ("dispatch_task", "await_human_approval", "run_blueprint"):
                         for keyword in node.keywords:
@@ -343,7 +353,6 @@ class Blueprint:
                                     if isinstance(value_node, ast.Constant):
                                         transitions[state].add(str(value_node.value))
 
-                    # Handle actions.dispatch_parallel(..., aggregate_into="state")
                     elif node.func.attr == "dispatch_parallel":
                         for keyword in node.keywords:
                             if keyword.arg == "aggregate_into" and isinstance(keyword.value, ast.Constant):
@@ -378,6 +387,11 @@ class Blueprint:
         default_handler = self.handlers.get(state)
         if default_handler and default_handler is not _PLACEHOLDER:
             return default_handler
+
+        aggregator = self.aggregator_handlers.get(state)
+        if aggregator:
+            return aggregator
+
         raise ValueError(
             f"No suitable handler found for state '{state}' in blueprint '{self.name}' for the given context. "
             "(All conditions failed and no default handler registered)"

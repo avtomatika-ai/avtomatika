@@ -12,9 +12,10 @@ import pytest
 from rxon.models import Heartbeat, TaskResult, WorkerEventPayload, WorkerRegistration
 from rxon.security import sign_payload
 from rxon.utils import to_dict
+from src.avtomatika.config import Config
+from src.avtomatika.services.worker_service import WorkerService
 
-from avtomatika.config import Config
-from avtomatika.services.worker_service import WorkerService
+from avtomatika.security import verify_worker_auth
 from avtomatika.storage.memory import MemoryStorage
 
 
@@ -45,7 +46,7 @@ def worker_service(storage, config, engine):
     history_mock = MagicMock()
     history_mock.log_worker_event = AsyncMock()
     history_mock.log_job_event = AsyncMock()
-    return WorkerService(storage, history_mock, config, engine)
+    return WorkerService(storage, history_mock, config, engine, MagicMock())
 
 
 def sign_pure(data, secret, ignore=None):
@@ -286,3 +287,35 @@ async def test_event_type_spoofing_rejected(worker_service, config):
 
     with pytest.raises(PermissionError, match="Invalid cryptographic signature"):
         await worker_service.process_worker_event(worker_id, event_dict)
+
+
+@pytest.mark.asyncio
+async def test_security_metrics_recorded_on_failure():
+    """Verifies that authentication failures are recorded in metrics."""
+    storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    config = MagicMock()
+    config.WORKER_AUTH_MODE = "mtls-only"
+    metrics = MagicMock()
+
+    with pytest.raises(PermissionError):
+        await verify_worker_auth(storage, config, "some-token", None, "worker-1", metrics=metrics, token_hash_cache={})
+
+    metrics.security_auth_failures_total.add.assert_called()
+    args, _ = metrics.security_auth_failures_total.add.call_args
+    assert args[1].get("reason") == "mtls_required"
+    assert args[1].get("method") == "token"
+
+
+@pytest.mark.asyncio
+async def test_security_identity_mismatch_metrics():
+    """Verifies that identity mismatch is recorded in metrics."""
+    storage = AsyncMock()
+    config = MagicMock()
+    config.WORKER_AUTH_MODE = "mixed"
+    metrics = MagicMock()
+
+    with pytest.raises(PermissionError):
+        await verify_worker_auth(storage, config, None, "worker-A", "worker-B", metrics=metrics, token_hash_cache={})
+
+    metrics.security_identity_mismatch_total.add.assert_called_with(1, {"cert_cn": "worker-A", "worker_id": "worker-B"})

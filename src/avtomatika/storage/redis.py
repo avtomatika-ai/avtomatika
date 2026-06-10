@@ -15,8 +15,8 @@ from socket import gethostname
 from time import time
 from typing import Any, cast
 
-import msgpack
-from msgpack import packb, unpackb
+from msgpack import Unpacker, packb, unpackb
+from orjson import dumps, loads
 from redis import Redis, WatchError
 from redis.exceptions import NoScriptError, ResponseError
 
@@ -25,43 +25,54 @@ from .base import StorageBackend
 logger = getLogger(__name__)
 
 LUA_INCR_LOAD = """
+local serializer = (cmsgpack and cmsgpack.unpack) and cmsgpack or cjson
+local unpack = serializer.unpack or serializer.decode
+local pack = serializer.pack or serializer.encode
+
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
-local data = cmsgpack.unpack(raw)
+local data = unpack(raw)
 data['_internal_load'] = (data['_internal_load'] or 0) + 1
--- Also set status to busy if needed, though load balancing usually handles numeric load
-redis.call('SET', KEYS[1], cmsgpack.pack(data), 'KEEPTTL')
+redis.call('SET', KEYS[1], pack(data), 'KEEPTTL')
 return 1
 """
 
 LUA_DECR_LOAD = """
+local serializer = (cmsgpack and cmsgpack.unpack) and cmsgpack or cjson
+local unpack = serializer.unpack or serializer.decode
+local pack = serializer.pack or serializer.encode
+
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
-local data = cmsgpack.unpack(raw)
+local data = unpack(raw)
 local current = data['_internal_load'] or 0
 if current > 0 then
     data['_internal_load'] = current - 1
 end
-redis.call('SET', KEYS[1], cmsgpack.pack(data), 'KEEPTTL')
+redis.call('SET', KEYS[1], pack(data), 'KEEPTTL')
 return 1
 """
 
 LUA_ATOMIC_UPDATE = """
+local serializer = (cmsgpack and cmsgpack.unpack) and cmsgpack or cjson
+local unpack = serializer.unpack or serializer.decode
+local pack = serializer.pack or serializer.encode
+
 local raw = redis.call('GET', KEYS[1])
 if not raw then return nil end
-local data = cmsgpack.unpack(raw)
-local update = cmsgpack.unpack(ARGV[1])
+local data = unpack(raw)
+local update = unpack(ARGV[1])
 for k, v in pairs(update) do data[k] = v end
 local ttl = tonumber(ARGV[2])
 local exp = tonumber(ARGV[4]) + ttl
-redis.call('SET', KEYS[1], cmsgpack.pack(data), 'EX', ttl)
+redis.call('SET', KEYS[1], pack(data), 'EX', ttl)
 redis.call('ZADD', 'orchestrator:index:workers:all', exp, ARGV[3])
 if data['status'] == 'idle' then
     redis.call('ZADD', 'orchestrator:index:workers:idle', exp, ARGV[3])
 else
     redis.call('ZREM', 'orchestrator:index:workers:idle', ARGV[3])
 end
-return cmsgpack.pack(data)
+return pack(data)
 """
 
 LUA_STEAL = """
@@ -95,24 +106,19 @@ return nil
 LUA_CLEANUP = """
 local wid = ARGV[1]
 local skills_key = "orchestrator:worker:skills:" .. wid
-local hot_list_key = "orchestrator:worker:hot_artifacts:" .. wid
 local hot_skills_key = "orchestrator:worker:hot_skills:" .. wid
 local queue_key = "orchestrator:task_queue:" .. wid
 
 local skills = redis.call('SMEMBERS', skills_key)
-local hot_artifacts = redis.call('SMEMBERS', hot_list_key)
 local hot_skills = redis.call('SMEMBERS', hot_skills_key)
 local orphaned_count = redis.call('ZCARD', queue_key)
 
-redis.call('DEL', skills_key, hot_list_key, hot_skills_key, queue_key)
+redis.call('DEL', skills_key, hot_skills_key, queue_key)
 redis.call('ZREM', 'orchestrator:index:workers:all', wid)
 redis.call('ZREM', 'orchestrator:index:workers:idle', wid)
 
 for _, s in ipairs(skills) do
     redis.call('ZREM', 'orchestrator:index:workers:skill:' .. s, wid)
-end
-for _, m in ipairs(hot_artifacts) do
-    redis.call('ZREM', 'orchestrator:index:workers:hot_cache:' .. m, wid)
 end
 for _, hs in ipairs(hot_skills) do
     redis.call('ZREM', 'orchestrator:index:workers:hot_skill:' .. hs, wid)
@@ -141,9 +147,24 @@ class RedisStorage(StorageBackend):
         self._group_created = False
         self._min_idle_time_ms = min_idle_time_ms
         self._lua_shas: dict[str, str] = {}
+        self._use_json_in_lua = False
+
+    async def _check_lua_capabilities(self) -> None:
+        """Checks if cmsgpack is available in the Redis Lua environment."""
+        try:
+            # Try to use cmsgpack in a simple script
+            await self._redis.eval("return cmsgpack.pack(1)", 0)
+            self._use_json_in_lua = False
+        except Exception:
+            self._use_json_in_lua = True
+            logger.warning("Redis/Fakeredis does not support cmsgpack in Lua. Falling back to JSON for worker info.")
 
     async def _eval_lua(self, script: str, num_keys: int, *args: Any) -> Any:
         """Helper to execute Lua scripts using EVALSHA if possible."""
+        if not hasattr(self, "_caps_checked"):
+            await self._check_lua_capabilities()
+            self._caps_checked = True
+
         script_hash = self._lua_shas.get(script)
         if script_hash:
             try:
@@ -154,6 +175,22 @@ class RedisStorage(StorageBackend):
         sha = await self._redis.script_load(script)
         self._lua_shas[script] = sha
         return await self._redis.evalsha(sha, num_keys, *args)
+
+    def _pack_worker(self, data: Any) -> bytes:
+        if self._use_json_in_lua:
+            return cast(bytes, dumps(data))
+        return cast(bytes, self._pack(data))
+
+    def _unpack_worker(self, data: bytes) -> Any:
+        if not data:
+            return None
+        if self._use_json_in_lua:
+            try:
+                return loads(data)
+            except Exception:
+                # Fallback to msgpack if it's old data
+                return self._unpack(data)
+        return self._unpack(data)
 
     async def initialize(self) -> None:
         """Performs initialization, e.g., creating the consumer group."""
@@ -173,7 +210,6 @@ class RedisStorage(StorageBackend):
             await self._eval_lua(LUA_INCR_LOAD, 1, key)
         except ResponseError as e:
             if "unknown command" in str(e).lower():
-                # Fallback for simple increment if Lua fails or cmsgpack not available (though redis-py handles this)
                 logger.warning(f"Failed to optimistically increment load for {worker_id}: {e}")
             else:
                 raise e
@@ -192,7 +228,7 @@ class RedisStorage(StorageBackend):
         """Gets the full info for a worker by its ID."""
         key = f"orchestrator:worker:info:{worker_id}"
         data = await self._redis.get(key)
-        return cast(dict[str, Any], self._unpack(data)) if data else None
+        return cast(dict[str, Any], self._unpack_worker(data)) if data else None
 
     @staticmethod
     def _pack(data: Any) -> bytes:
@@ -204,7 +240,6 @@ class RedisStorage(StorageBackend):
             return None
         try:
             res = unpackb(data, raw=False)
-            # Deep normalization to handle Redis Lua cmsgpack artifacts
             return RedisStorage._normalize_unpacked(res)
         except Exception as e:
             logger.error(f"Failed to unpack msgpack data: {e}")
@@ -217,7 +252,6 @@ class RedisStorage(StorageBackend):
         are properly restored to their original structures and bytes are decoded.
         """
         if isinstance(data, dict):
-            # Decode keys and recurse into values
             return {
                 (k.decode("utf-8") if isinstance(k, bytes) else str(k)): RedisStorage._normalize_unpacked(v)
                 for k, v in data.items()
@@ -225,33 +259,40 @@ class RedisStorage(StorageBackend):
         elif isinstance(data, list):
             return [RedisStorage._normalize_unpacked(i) for i in data]
         elif isinstance(data, bytes):
-            # 1. Try to unpack as msgpack if it looks like a collection
             try:
                 if len(data) > 0 and (data[0] & 0xF0 in (0x80, 0x90, 0xD0, 0xDE, 0xDF)):
-                    unpacker = msgpack.Unpacker(strict_map_key=False, raw=False)
+                    unpacker = Unpacker(strict_map_key=False, raw=False)
                     unpacker.feed(data)
                     unpacked = unpacker.unpack()
-                    # Ensure full consumption
                     try:
                         next(unpacker)
-                        # If we get here, there was trailing data, so it might not be a single msgpack object
                     except StopIteration:
-                        # Success: it's a valid single msgpack object
                         return RedisStorage._normalize_unpacked(unpacked)
             except Exception:
                 pass
 
-            # 2. Try to decode as UTF-8 string
             try:
                 return data.decode("utf-8")
             except UnicodeDecodeError:
-                # If it's not a valid UTF-8, keep as bytes (e.g. binary blob)
                 return data
         return data
 
+    async def _pack_worker_async(self, data: Any) -> bytes:
+        """Packs worker data, using executor only for large payloads."""
+        if isinstance(data, (dict, list)) and len(data) > 1000:
+            loop = get_running_loop()
+            return await loop.run_in_executor(None, self._pack_worker, data)
+        return self._pack_worker(data)
+
+    async def _unpack_worker_async(self, data: bytes) -> Any:
+        """Unpacks worker data, using executor only for large payloads."""
+        if len(data) > 65536:
+            loop = get_running_loop()
+            return await loop.run_in_executor(None, self._unpack_worker, data)
+        return self._unpack_worker(data)
+
     async def _pack_async(self, data: Any) -> bytes:
         """Packs data, using executor only for large payloads."""
-        # Threshold: ~64KB. For small data, sync is faster.
         if isinstance(data, (dict, list)) and len(data) > 1000:
             loop = get_running_loop()
             return await loop.run_in_executor(None, self._pack, data)
@@ -362,6 +403,11 @@ class RedisStorage(StorageBackend):
         ttl: int,
     ) -> None:
         """Registers a worker in Redis and updates indexes using ZSETs for TTL."""
+        # Ensure serializer capabilities are checked
+        if not hasattr(self, "_caps_checked"):
+            await self._check_lua_capabilities()
+            self._caps_checked = True
+
         worker_info.setdefault("reputation", 1.0)
         key = f"orchestrator:worker:info:{worker_id}"
         skills_key = f"orchestrator:worker:skills:{worker_id}"
@@ -369,7 +415,7 @@ class RedisStorage(StorageBackend):
         expires_at = now + ttl
 
         async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.set(key, self._pack(worker_info), ex=ttl)
+            pipe.set(key, self._pack_worker(worker_info), ex=ttl)
             pipe.zadd("orchestrator:index:workers:all", {worker_id: expires_at})
 
             if worker_info.get("status", "idle") == "idle":
@@ -396,57 +442,20 @@ class RedisStorage(StorageBackend):
                     pipe.sadd(skills_key, *skill_names_to_index)
                     pipe.expire(skills_key, ttl)
 
-            # Hot cache refers to loaded artifacts
-            hot_cache = worker_info.get("hot_cache", [])
-            if hot_cache:
-                hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
-                pipe.delete(hot_list_key)
-                pipe.sadd(hot_list_key, *hot_cache)
-                pipe.expire(hot_list_key, ttl)
-                for item in hot_cache:
-                    pipe.zadd(f"orchestrator:index:workers:hot_cache:{item}", {worker_id: expires_at})
-
-            hot_skills = worker_info.get("hot_skills", [])
-            if hot_skills:
-                hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
-                pipe.delete(hot_skills_key)
-
-                hot_skill_names = []
-                for skill in hot_skills:
-                    if isinstance(skill, dict):
-                        name = skill.get("name")
-                        skill_type = skill.get("type")
-                        if name:
-                            hot_skill_names.append(name)
-                            pipe.zadd(f"orchestrator:index:workers:hot_skill:{name}", {worker_id: expires_at})
-                        if skill_type and skill_type != name:
-                            hot_skill_names.append(skill_type)
-                            pipe.zadd(f"orchestrator:index:workers:hot_skill:{skill_type}", {worker_id: expires_at})
-                    else:
-                        hot_skill_names.append(str(skill))
-                        pipe.zadd(f"orchestrator:index:workers:hot_skill:{skill}", {worker_id: expires_at})
-
-                if hot_skill_names:
-                    pipe.sadd(hot_skills_key, *hot_skill_names)
-                    pipe.expire(hot_skills_key, ttl)
-
             await pipe.execute()
 
     async def deregister_worker(self, worker_id: str) -> None:
         """Deletes the worker key and removes it from all indexes."""
         key = f"orchestrator:worker:info:{worker_id}"
         skills_key = f"orchestrator:worker:skills:{worker_id}"
-        hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
         hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
 
         skills = await self._redis.smembers(skills_key)
-        hot_cache = await self._redis.smembers(hot_list_key)
         hot_skills = await self._redis.smembers(hot_skills_key)
 
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.delete(key)
             pipe.delete(skills_key)
-            pipe.delete(hot_list_key)
             pipe.delete(hot_skills_key)
             pipe.zrem("orchestrator:index:workers:all", worker_id)
             pipe.zrem("orchestrator:index:workers:idle", worker_id)
@@ -454,10 +463,6 @@ class RedisStorage(StorageBackend):
             for skill in skills:
                 skill_str = skill.decode("utf-8") if isinstance(skill, bytes) else str(skill)
                 pipe.zrem(f"orchestrator:index:workers:skill:{skill_str}", worker_id)
-
-            for item in hot_cache:
-                item_str = item.decode("utf-8") if isinstance(item, bytes) else str(item)
-                pipe.zrem(f"orchestrator:index:workers:hot_cache:{item_str}", worker_id)
 
             for skill in hot_skills:
                 skill_str = skill.decode("utf-8") if isinstance(skill, bytes) else str(skill)
@@ -477,7 +482,7 @@ class RedisStorage(StorageBackend):
         if not current_state_raw:
             return None
 
-        current_state = cast(dict[str, Any], self._unpack(current_state_raw))
+        current_state = cast(dict[str, Any], self._unpack_worker(current_state_raw))
 
         has_new_skills = False
         if "supported_skills" in status_update and status_update["supported_skills"] != current_state.get(
@@ -485,49 +490,26 @@ class RedisStorage(StorageBackend):
         ):
             has_new_skills = True
 
-        old_hot_cache = set(current_state.get("hot_cache", []))
-        new_hot_cache = set(status_update.get("hot_cache", current_state.get("hot_cache", [])))
-        has_new_hot_cache = old_hot_cache != new_hot_cache
-
-        old_hot_skills = current_state.get("hot_skills") or []
-        new_hot_skills = status_update.get("hot_skills") or old_hot_skills
-        has_new_hot_skills = False
-
-        old_hs_names = set()
-        if old_hot_skills:
-            for s in old_hot_skills:
-                if isinstance(s, dict):
-                    old_hs_names.add(s.get("name") or s.get("type"))
-                else:
-                    old_hs_names.add(str(s))
-
-        new_hs_names = set()
-        if new_hot_skills:
-            for s in new_hot_skills:
-                if isinstance(s, dict):
-                    new_hs_names.add(s.get("name") or s.get("type"))
-                else:
-                    new_hs_names.add(str(s))
-        if old_hs_names != new_hs_names:
-            has_new_hot_skills = True
+        old_hot_skills = set(current_state.get("hot_skills") or [])
+        new_hot_skills = set(status_update.get("hot_skills") or old_hot_skills)
+        has_new_hot_skills = old_hot_skills != new_hot_skills
 
         old_status = current_state.get("status", "idle")
         new_status = status_update.get("status", old_status)
         has_new_status = old_status != new_status
 
-        needs_indexing = has_new_skills or has_new_hot_cache or has_new_hot_skills or has_new_status
+        needs_indexing = has_new_skills or has_new_hot_skills or has_new_status
 
         if not needs_indexing:
             try:
                 res = await self._eval_lua(
-                    LUA_ATOMIC_UPDATE, 1, key, self._pack(status_update), str(ttl), worker_id, str(int(time()))
+                    LUA_ATOMIC_UPDATE, 1, key, self._pack_worker(status_update), str(ttl), worker_id, str(int(time()))
                 )
-                return self._unpack(res) if res else None
+                return self._unpack_worker(res) if res else None
             except ResponseError as e:
                 err_msg = str(e).lower()
                 if "unknown command" not in err_msg and "cmsgpack" not in err_msg:
                     raise e
-                # Fallback to WATCH if cmsgpack or Lua scripting is restricted
 
         max_retries = 10
         for i in range(max_retries):
@@ -538,19 +520,17 @@ class RedisStorage(StorageBackend):
                     if not current_state_raw:
                         return None
 
-                    current_state = cast(dict[str, Any], await self._unpack_async(current_state_raw))
+                    current_state = cast(dict[str, Any], await self._unpack_worker_async(current_state_raw))
                     new_state = current_state.copy()
                     new_state.update(status_update)
 
-                    # Calculate shared values for this registration/update
                     now = int(time())
                     expires_at = now + ttl
 
                     pipe.multi()
 
                     if new_state != current_state or has_new_skills:
-                        pipe.set(key, self._pack(new_state), ex=ttl)
-                        # Always update main index expiry to keep it in sync with the key
+                        pipe.set(key, self._pack_worker(new_state), ex=ttl)
                         pipe.zadd("orchestrator:index:workers:all", {worker_id: expires_at})
 
                         if has_new_skills:
@@ -580,39 +560,19 @@ class RedisStorage(StorageBackend):
                             else:
                                 pipe.zrem("orchestrator:index:workers:idle", worker_id)
 
-                        if has_new_hot_cache:
-                            hot_list_key = f"orchestrator:worker:hot_artifacts:{worker_id}"
-                            for item in old_hot_cache:
-                                pipe.zrem(f"orchestrator:index:workers:hot_cache:{item}", worker_id)
-                            pipe.delete(hot_list_key)
-                            if new_hot_cache:
-                                pipe.sadd(hot_list_key, *new_hot_cache)
-                                pipe.expire(hot_list_key, ttl)
-                                for item in new_hot_cache:
-                                    pipe.zadd(f"orchestrator:index:workers:hot_cache:{item}", {worker_id: expires_at})
-
                         if has_new_hot_skills:
                             hot_skills_key = f"orchestrator:worker:hot_skills:{worker_id}"
-                            for skill_name in old_hs_names:
+                            for skill_name in old_hot_skills:
                                 pipe.zrem(f"orchestrator:index:workers:hot_skill:{skill_name}", worker_id)
                             pipe.delete(hot_skills_key)
 
-                            new_hot_skill_data_to_index = []
-                            for skill in new_hot_skills:
-                                name = skill["name"]
-                                skill_type = skill.get("type")
-                                new_hot_skill_data_to_index.append((name, skill_type))
-
-                            if new_hs_names:
-                                pipe.sadd(hot_skills_key, *new_hs_names)
+                            if new_hot_skills:
+                                pipe.sadd(hot_skills_key, *new_hot_skills)
                                 pipe.expire(hot_skills_key, ttl)
-                                for name, skill_type in new_hot_skill_data_to_index:
-                                    pipe.zadd(f"orchestrator:index:workers:hot_skill:{name}", {worker_id: expires_at})
-                                    if skill_type and skill_type != name:
-                                        pipe.zadd(
-                                            f"orchestrator:index:workers:hot_skill:{skill_type}",
-                                            {worker_id: expires_at},
-                                        )
+                                for skill_name in new_hot_skills:
+                                    pipe.zadd(
+                                        f"orchestrator:index:workers:hot_skill:{skill_name}", {worker_id: expires_at}
+                                    )
 
                     await pipe.execute()
                     return new_state
@@ -634,23 +594,6 @@ class RedisStorage(StorageBackend):
 
         async with self._redis.pipeline(transaction=True) as pipe:
             pipe.zinterstore(temp_key, [skill_index, idle_index], aggregate="max")
-            pipe.zrangebyscore(temp_key, now, "+inf")
-            pipe.delete(temp_key)
-            results = await pipe.execute()
-
-        worker_ids = results[1]
-        return [wid.decode("utf-8") if isinstance(wid, bytes) else str(wid) for wid in worker_ids]
-
-    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
-        """Finds alive idle workers with specific resource in hot cache."""
-        now = int(time())
-        skill_index = f"orchestrator:index:workers:skill:{skill_name}"
-        idle_index = "orchestrator:index:workers:idle"
-        hot_index = f"orchestrator:index:workers:hot_cache:{resource_id}"
-        temp_key = f"orchestrator:tmp:search_hot:{skill_name}:{resource_id}:{now}"
-
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.zinterstore(temp_key, [skill_index, idle_index, hot_index], aggregate="max")
             pipe.zrangebyscore(temp_key, now, "+inf")
             pipe.delete(temp_key)
             results = await pipe.execute()
@@ -684,12 +627,10 @@ class RedisStorage(StorageBackend):
         try:
             result_quick = await self._redis.zpopmax(key)
             if result_quick:
-                # zpopmax returns [(value, score)]
                 return cast(dict[str, Any], self._unpack(result_quick[0][0]))
         except Exception as e:
             logger.debug(f"Quick dequeue check failed for {worker_id}: {e}")
 
-        # This keeps workers productive if there is work elsewhere in the cluster
         worker_info = await self.get_worker_info(worker_id)
         if worker_info:
             skills = worker_info.get("supported_skills") or []
@@ -710,7 +651,6 @@ class RedisStorage(StorageBackend):
         try:
             result = await self._redis.bzpopmax([key], timeout=timeout)
             if result:
-                # bzpopmax returns (key, value, score)
                 return cast(dict[str, Any], self._unpack(result[1]))
         except CancelledError:
             return None
@@ -735,10 +675,10 @@ class RedisStorage(StorageBackend):
                 raw = await pipe.get(key)
                 if not raw:
                     return None
-                data = cast(dict[str, Any], self._unpack(raw))
+                data = cast(dict[str, Any], self._unpack_worker(raw))
                 data.update(update_data)
                 pipe.multi()
-                pipe.set(key, self._pack(data))
+                pipe.set(key, self._pack_worker(data))
                 await pipe.execute()
                 return data
             except WatchError:
@@ -749,14 +689,14 @@ class RedisStorage(StorageBackend):
         if not worker_keys:
             return []
         data_list = await self._redis.mget(worker_keys)
-        return [cast(dict[str, Any], self._unpack(data)) for data in data_list if data]
+        return [cast(dict[str, Any], self._unpack_worker(data)) for data in data_list if data]
 
     async def get_workers(self, worker_ids: list[str]) -> list[dict[str, Any]]:
         if not worker_ids:
             return []
         keys = [f"orchestrator:worker:info:{wid}" for wid in worker_ids]
         data_list = await self._redis.mget(keys)
-        return [cast(dict[str, Any], self._unpack(data)) for data in data_list if data]
+        return [cast(dict[str, Any], self._unpack_worker(data)) for data in data_list if data]
 
     async def get_active_worker_ids(self) -> list[str]:
         worker_ids = await self._redis.zrange("orchestrator:index:workers:all", 0, -1)
@@ -791,13 +731,11 @@ class RedisStorage(StorageBackend):
 
         logger.info(f"Found {len(dead_ids)} expired workers. Cleaning up.")
 
-        # Pre-load script to speed up processing
         try:
             sha = await self._redis.script_load(LUA_CLEANUP)
         except Exception:
             sha = None
 
-        # Clean up dead workers
         for wid in dead_ids:
             try:
                 if sha:
@@ -812,28 +750,22 @@ class RedisStorage(StorageBackend):
                     )
             except Exception as e:
                 if "unknown command" in str(e).lower() or "eval" in str(e).lower():
-                    # Fallback to pipeline for environments/tests without Lua support
                     skills_key = f"orchestrator:worker:skills:{wid}"
                     queue_key = f"orchestrator:task_queue:{wid}"
-                    hot_list_key = f"orchestrator:worker:hot_artifacts:{wid}"
                     hot_skills_key = f"orchestrator:worker:hot_skills:{wid}"
 
                     skills = await self._redis.smembers(skills_key)
-                    hot_artifacts = await self._redis.smembers(hot_list_key)
                     hot_skills = await self._redis.smembers(hot_skills_key)
                     orphaned_tasks_raw = await self._redis.zrange(queue_key, 0, -1)
 
                     async with self._redis.pipeline(transaction=True) as p:
-                        p.delete(skills_key, queue_key, hot_list_key, hot_skills_key)
+                        p.delete(skills_key, queue_key, hot_skills_key)
                         p.zrem("orchestrator:index:workers:all", wid)
                         p.zrem("orchestrator:index:workers:idle", wid)
 
                         for s in skills:
                             s_str = s.decode() if isinstance(s, bytes) else str(s)
                             p.zrem(f"orchestrator:index:workers:skill:{s_str}", wid)
-                        for m in hot_artifacts:
-                            m_str = m.decode() if isinstance(m, bytes) else str(m)
-                            p.zrem(f"orchestrator:index:workers:hot_cache:{m_str}", wid)
                         for hs in hot_skills:
                             hs_str = hs.decode() if isinstance(hs, bytes) else str(hs)
                             p.zrem(f"orchestrator:index:workers:hot_skill:{hs_str}", wid)
@@ -855,7 +787,6 @@ class RedisStorage(StorageBackend):
 
     async def get_timed_out_jobs(self, limit: int = 100) -> list[str]:
         now = time()
-        # Lua script to atomically fetch and remove timed out jobs
         LUA_POP_TIMEOUTS = """
         local now = ARGV[1]
         local limit = ARGV[2]
@@ -871,7 +802,6 @@ class RedisStorage(StorageBackend):
         except NoScriptError:
             ids = await self._redis.eval(LUA_POP_TIMEOUTS, 1, "orchestrator:watched_jobs", now, limit)
         except ResponseError as e:
-            # Fallback for Redis versions that don't support script_load/evalsha or other errors
             if "unknown command" in str(e).lower():
                 logger.warning("Redis does not support LUA scripts. Falling back to non-atomic get_timed_out_jobs.")
                 ids = await self._redis.zrangebyscore("orchestrator:watched_jobs", 0, now, start=0, num=limit)
@@ -887,7 +817,6 @@ class RedisStorage(StorageBackend):
     async def enqueue_job(self, job_id: str) -> None:
         if not self._group_created:
             await self.initialize()
-        # Cap stream length to prevent memory leaks in Redis.
         await self._redis.xadd(self._stream_key, {"job_id": job_id}, maxlen=100000, approximate=True)
 
     async def dequeue_job(self, block: int | None = None) -> tuple[str, str] | None:
@@ -919,10 +848,8 @@ class RedisStorage(StorageBackend):
             if "NOGROUP" in str(e):
                 logger.warning("Redis stream group lost. Re-initializing...")
                 self._group_created = False
-                # Try to re-initialize once immediately, fail-safe on further errors
                 try:
                     await self.initialize()
-                    # Recursive retry after re-init
                     return await self.dequeue_job(block=block)
                 except Exception as e2:
                     logger.error(f"Failed to re-initialize Redis group: {e2}")
@@ -942,8 +869,6 @@ class RedisStorage(StorageBackend):
         if not client_token:
             return job_ids
 
-        # Filter by owner by checking job states
-        # We use a pipeline for performance
         async with self._redis.pipeline(transaction=False) as pipe:
             for job_id in job_ids:
                 pipe.get(f"orchestrator:job:state:{job_id}")
@@ -1040,12 +965,10 @@ class RedisStorage(StorageBackend):
         return token.decode("utf-8") if token else None
 
     async def find_worker_token(self, worker_id: str) -> str | None:
-        # 1. Try direct match
         token = await self.get_worker_token(worker_id)
         if token:
             return token
 
-        # 2. Try patterns
         prefix = "orchestrator:worker:token:pattern:"
         async for key in self._redis.scan_iter(f"{prefix}*"):
             val = await self._redis.get(key)
@@ -1070,6 +993,13 @@ class RedisStorage(StorageBackend):
 
     async def verify_worker_access_token(self, token: str) -> str | None:
         worker_id = await self._redis.get(f"orchestrator:sts:token:{token}")
+        return worker_id.decode("utf-8") if worker_id else None
+
+    async def save_worker_refresh_token(self, worker_id: str, token: str, ttl: int) -> None:
+        await self._redis.set(f"orchestrator:sts:refresh:{token}", worker_id, ex=ttl)
+
+    async def verify_worker_refresh_token(self, token: str) -> str | None:
+        worker_id = await self._redis.get(f"orchestrator:sts:refresh:{token}")
         return worker_id.decode("utf-8") if worker_id else None
 
     async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
@@ -1109,5 +1039,5 @@ class RedisStorage(StorageBackend):
             worker_id = key.decode("utf-8").split(":")[-1]
             raw = await self._redis.get(key)
             if raw:
-                info = self._unpack(raw)
+                info = self._unpack_worker(raw)
                 await self.register_worker(worker_id, info, int(await self._redis.ttl(key)))

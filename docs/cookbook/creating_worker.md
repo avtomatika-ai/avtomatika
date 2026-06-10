@@ -2,60 +2,50 @@
 
 # Cookbook: Creating a Worker
 
-Workers are independent executors performing actual work. This guide shows how to create a worker using `avtomatika-worker` package.
+Workers are independent executors performing actual work. This guide shows how to create a worker using the `avtomatika-worker` SDK.
 
 ## Step 1: Install SDK
 
-Ensure SDK is installed in your environment.
+You can install the base version or a version with additional capabilities:
+
 ```bash
+# Minimum version (no S3 or Pydantic)
 pip install avtomatika-worker
+
+# Full version (recommended for auto-validation and file handling)
+pip install "avtomatika-worker[s3,pydantic]"
 ```
 
 ## Step 2: Create Worker File
 
-Create Python file (e.g., `my_worker.py`) and import `Worker` class.
+Create a Python file (e.g., `my_worker.py`) and import the `Worker` class.
 
+# 2. Define Task Handlers
+
+You can use **standard dictionaries** (no dependencies) or **Pydantic models** (for automatic validation).
+
+### Option A: Simple Dictionary (No Pydantic)
 ```python
-import asyncio
-from avtomatika_worker import Worker
-from avtomatika_worker.typing import TRANSIENT_ERROR
-
-# 1. Initialize Worker class
-# Specify unique type for your worker.
-worker = Worker(worker_type="inventory-checker")
-
-# 2. Define task handlers using @worker.skill decorator
 @worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
-    """
-    This function called when Orchestrator sends "check_inventory" task.
-
-    - `params` (dict): Task execution parameters.
-    - `**kwargs`: Task metadata:
-        - `task_id` (str): Unique task ID.
-        - `job_id` (str): Parent Job ID.
-        - `priority` (float): Task priority.
-    """
-    print(f"Received params: {params}")
     items = params.get("items", [])
+    print(f"Checking items: {items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
-    # Simulate work: checking inventory
-    await asyncio.sleep(1)
+### Option B: Pydantic Model (Auto-validation)
+```python
+from pydantic import BaseModel
 
-    if "unavailable_item" in items:
-        # Return custom status handled by blueprint
-        return {
-            "status": "out_of_stock",
-            "data": {"missing_item": "unavailable_item"}
-        }
+class CheckParams(BaseModel):
+    items: list[str]
 
-    # 3. Return success result
-    #    - 'status': "success" or custom status.
-    #    - 'data': Dictionary with data added to Job context.
-    return {
-        "status": "success",
-        "data": {"warehouse_info": "All items are available"}
-    }
+@worker.skill("check_inventory")
+async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
+    """The SDK will automatically validate incoming data against the CheckParams model."""
+    print(f"Checking items: {params.items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
 # Example handler for long task with cooperative cancellation
 @worker.skill("long_running_task")

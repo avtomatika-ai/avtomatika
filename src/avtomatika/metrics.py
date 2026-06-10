@@ -5,89 +5,152 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from aioprometheus import Counter, Gauge, Summary
-from aioprometheus.collectors import REGISTRY
+from collections.abc import Callable, Iterable
+from typing import Any
+
+from .telemetry import metrics
 
 LABEL_BLUEPRINT = "blueprint"
 
-jobs_total: Counter
-jobs_failed_total: Counter
-job_duration_seconds: Summary
-task_queue_length: Gauge
-active_workers: Gauge
-ratelimit_blocked_total: Counter
-jobs_timeouts_total: Counter
-tasks_ignored_total: Counter
-tasks_hot_dispatched_total: Counter
-loop_lag_seconds: Gauge
 
-
-def init_metrics() -> None:
+class Metrics:
+    """Encapsulates OpenTelemetry metrics for the orchestrator.
+    Avoiding global variables for better testability and clean architecture.
     """
-    Initializes Prometheus metrics.
-    Uses a registry check for idempotency, which is important for tests.
+
+    def __init__(self, meter: Any, instrument_cache: dict[str, Any] | None = None):
+        # without using global module-level variables.
+        self._cache = instrument_cache if instrument_cache is not None else {}
+
+        def get_or_create(name: str, creator: Any, **kwargs: Any) -> Any:
+            if name not in self._cache:
+                self._cache[name] = creator(name, **kwargs)
+            return self._cache[name]
+
+        self.jobs_total = get_or_create(
+            "orchestrator_jobs_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of jobs created.",
+        )
+        self.jobs_failed_total = get_or_create(
+            "orchestrator_jobs_failed_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of jobs that have failed.",
+        )
+        self.job_duration_seconds = get_or_create(
+            "orchestrator_job_duration_seconds",
+            meter.create_histogram,
+            unit="s",
+            description="Time taken for a job to complete.",
+        )
+
+        self.security_auth_failures_total = get_or_create(
+            "orchestrator_security_auth_failures_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of failed worker authentication attempts.",
+        )
+        self.security_replay_detected_total = get_or_create(
+            "orchestrator_security_replay_detected_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of detected replay attacks.",
+        )
+        self.security_identity_mismatch_total = get_or_create(
+            "orchestrator_security_identity_mismatch_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of certificate identity mismatches.",
+        )
+
+        # Observable Gauges for state tracking
+        self._gauge_values: dict[str, float] = {
+            "task_queue_length": 0.0,
+            "active_workers": 0.0,
+            "loop_lag_seconds": 0.0,
+        }
+
+        self.task_queue_length = get_or_create(
+            "orchestrator_task_queue_length",
+            meter.create_observable_gauge,
+            callbacks=[self._get_gauge_callback("task_queue_length")],
+            description="Number of tasks waiting in the job queue.",
+        )
+        self.active_workers = get_or_create(
+            "orchestrator_active_workers",
+            meter.create_observable_gauge,
+            callbacks=[self._get_gauge_callback("active_workers")],
+            description="Number of active workers reporting to the orchestrator.",
+        )
+        self.loop_lag_seconds = get_or_create(
+            "orchestrator_loop_lag_seconds",
+            meter.create_observable_gauge,
+            callbacks=[self._get_gauge_callback("loop_lag_seconds")],
+            description="Delay in the asyncio event loop.",
+        )
+
+        self.ratelimit_blocked_total = get_or_create(
+            "orchestrator_ratelimit_blocked_total",
+            meter.create_counter,
+            unit="1",
+            description="Total requests blocked by rate limiter",
+        )
+        self.jobs_timeouts_total = get_or_create(
+            "orchestrator_jobs_timeouts_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of job timeouts",
+        )
+        self.tasks_ignored_total = get_or_create(
+            "orchestrator_tasks_ignored_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of task results ignored",
+        )
+        self.tasks_hot_dispatched_total = get_or_create(
+            "orchestrator_tasks_hot_dispatched_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of tasks dispatched to HOT workers",
+        )
+
+        self.s3_operations_total = get_or_create(
+            "orchestrator_s3_operations_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of S3 operations.",
+        )
+        self.s3_operation_duration_seconds = get_or_create(
+            "orchestrator_s3_operation_duration_seconds",
+            meter.create_histogram,
+            unit="s",
+            description="Duration of S3 operations.",
+        )
+
+        self.scheduler_jobs_triggered_total = get_or_create(
+            "orchestrator_scheduler_jobs_triggered_total",
+            meter.create_counter,
+            unit="1",
+            description="Total number of jobs triggered by the scheduler.",
+        )
+
+    def _get_gauge_callback(self, name: str) -> Callable[[Any], Iterable[metrics.Observation]]:
+        def callback(options: Any) -> Iterable[metrics.Observation]:
+            yield metrics.Observation(self._gauge_values.get(name, 0.0))
+
+        return callback
+
+    def set_gauge(self, name: str, value: float) -> None:
+        """Helper to update gauge values stored for OTel callbacks."""
+        if name in self._gauge_values:
+            self._gauge_values[name] = value
+
+
+def create_metrics(instrument_cache: dict[str, Any] | None = None) -> Metrics:
+    """Factory to create a Metrics instance using the global OTel meter.
+    Takes an optional cache to ensure idempotency across multiple instances.
     """
-    global jobs_total, jobs_failed_total, job_duration_seconds, task_queue_length
-    global active_workers, ratelimit_blocked_total, jobs_timeouts_total
-    global tasks_ignored_total, tasks_hot_dispatched_total, loop_lag_seconds
-
-    if "orchestrator_jobs_total" in REGISTRY.collectors:
-        jobs_total = REGISTRY.collectors.get("orchestrator_jobs_total")
-        jobs_failed_total = REGISTRY.collectors.get("orchestrator_jobs_failed_total")
-        job_duration_seconds = REGISTRY.collectors.get("orchestrator_job_duration_seconds")
-        task_queue_length = REGISTRY.collectors.get("orchestrator_task_queue_length")
-        active_workers = REGISTRY.collectors.get("orchestrator_active_workers")
-        ratelimit_blocked_total = REGISTRY.collectors.get("orchestrator_ratelimit_blocked_total")
-        jobs_timeouts_total = REGISTRY.collectors.get("orchestrator_jobs_timeouts_total")
-        tasks_ignored_total = REGISTRY.collectors.get("orchestrator_tasks_ignored_total")
-        tasks_hot_dispatched_total = REGISTRY.collectors.get("orchestrator_tasks_hot_dispatched_total")
-        loop_lag_seconds = REGISTRY.collectors.get("orchestrator_loop_lag_seconds")
-        return
-
-    jobs_total = Counter(
-        "orchestrator_jobs_total",
-        "Total number of jobs created.",
-        const_labels={LABEL_BLUEPRINT: ""},
-    )
-    jobs_failed_total = Counter(
-        "orchestrator_jobs_failed_total",
-        "Total number of jobs that have failed.",
-        const_labels={LABEL_BLUEPRINT: ""},
-    )
-    job_duration_seconds = Summary(
-        "orchestrator_job_duration_seconds",
-        "Time taken for a job to complete.",
-        const_labels={LABEL_BLUEPRINT: ""},
-    )
-    task_queue_length = Gauge(
-        "orchestrator_task_queue_length",
-        "Number of tasks waiting in the job queue.",
-    )
-    active_workers = Gauge(
-        "orchestrator_active_workers",
-        "Number of active workers reporting to the orchestrator.",
-    )
-    ratelimit_blocked_total = Counter(
-        "orchestrator_ratelimit_blocked_total",
-        "Total requests blocked by rate limiter",
-        const_labels={"identifier": "", "path": ""},
-    )
-    jobs_timeouts_total = Counter(
-        "orchestrator_jobs_timeouts_total",
-        "Total number of job timeouts",
-        const_labels={LABEL_BLUEPRINT: "", "type": ""},
-    )
-    tasks_ignored_total = Counter(
-        "orchestrator_tasks_ignored_total",
-        "Total number of task results ignored",
-        const_labels={LABEL_BLUEPRINT: "", "reason": ""},
-    )
-    tasks_hot_dispatched_total = Counter(
-        "orchestrator_tasks_hot_dispatched_total",
-        "Total number of tasks dispatched to HOT workers",
-        const_labels={LABEL_BLUEPRINT: "", "kind": ""},  # kind: "hot_skill" or "hot_cache"
-    )
-    loop_lag_seconds = Gauge(
-        "orchestrator_loop_lag_seconds",
-        "Delay in the asyncio event loop.",
-    )
+    meter = metrics.get_meter("avtomatika")
+    return Metrics(meter, instrument_cache=instrument_cache)

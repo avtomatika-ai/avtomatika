@@ -1,11 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 import src.avtomatika.executor as executor_mod
 from src.avtomatika.executor import JobExecutor
@@ -36,7 +35,7 @@ async def test_executor_noop_tracing_safe_execution():
     engine.storage = storage
     engine.history_storage = history
 
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
 
     job_id = "test-job"
     message_id = "msg-1"

@@ -5,31 +5,46 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
+import importlib.metadata
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
-# Ensure src is in python path for correct import resolution
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+# Patch importlib.metadata.version to avoid DeprecationWarning in Python 3.13
+# triggered by dependencies like fakeredis.
+_original_version = importlib.metadata.version
 
-from unittest.mock import AsyncMock, patch
 
-import pytest
-import pytest_asyncio
-from aiohttp.web import AppKey
-from fakeredis import aioredis as redis
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import (
+def _patched_version(package_name):
+    try:
+        return importlib.metadata.distribution(package_name).metadata.get("Version")
+    except Exception:
+        return None
+
+
+importlib.metadata.version = _patched_version
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from fakeredis import aioredis as redis  # noqa: E402
+from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import (  # noqa: E402
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
 
-from avtomatika.client_config_loader import load_client_configs_to_redis
-from avtomatika.config import Config
-from avtomatika.engine import ENGINE_KEY, OrchestratorEngine
-from avtomatika.storage.base import StorageBackend
-from avtomatika.storage.memory import MemoryStorage
-from avtomatika.storage.redis import RedisStorage
+# Ensure src is in python path for correct import resolution
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+
+from avtomatika.app_keys import (  # noqa: E402
+    STORAGE_KEY,
+)
+from avtomatika.client_config_loader import load_client_configs_to_redis  # noqa: E402
+from avtomatika.config import Config  # noqa: E402
+from avtomatika.engine import ENGINE_KEY, OrchestratorEngine  # noqa: E402
+from avtomatika.storage.memory import MemoryStorage  # noqa: E402
+from avtomatika.storage.redis import RedisStorage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -44,7 +59,7 @@ def _mock_verify_zero_trust(request):
 
 
 # Define AppKeys globally for tests
-STORAGE_KEY = AppKey("storage", StorageBackend)
+# (Removed local STORAGE_KEY definition, imported from app_keys instead)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -89,22 +104,35 @@ def redis_storage(redis_client, config):
     return RedisStorage(redis_client, consumer_name=config.INSTANCE_ID, min_idle_time_ms=100)
 
 
+@pytest.fixture
+def metrics_mock():
+    return MagicMock()
+
+
+@pytest.fixture
+def engine(storage, config, metrics_mock):
+    """Provides an OrchestratorEngine instance."""
+    engine = OrchestratorEngine(storage, config)
+    engine.metrics = metrics_mock
+    engine.setup()  # setup is now synchronous
+    return engine
+
+
 @pytest_asyncio.fixture
-async def app(request, config, redis_storage):
+async def app(request, config, redis_storage, metrics_mock):
     """
     The main fixture for creating the aiohttp application for tests.
-    It's function-scoped, ensuring a clean state for each test.
-    It can be parameterized to accept extra blueprints for registration.
     """
     storage = redis_storage
     engine = OrchestratorEngine(storage, config)
+    engine.metrics = metrics_mock
 
     # Pre-load client configs for tests
     current_dir = os.path.dirname(os.path.abspath(__file__))
     clients_toml_path = os.path.join(current_dir, "clients.toml")
     await load_client_configs_to_redis(storage, config_path=clients_toml_path)
 
-    # Register blueprints passed from the test if any
+    # Register blueprints engine.setup()ed from the test if any
     if hasattr(request, "param"):
         if request.param.get("extra_blueprints"):
             for bp in request.param["extra_blueprints"]:

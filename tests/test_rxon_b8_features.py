@@ -8,9 +8,9 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from rxon.constants import JOB_STATUS_WAITING_FOR_WORKER
 
 from avtomatika.config import Config
-from avtomatika.constants import JOB_STATUS_WAITING_FOR_WORKER
 from avtomatika.executor import JobExecutor
 from avtomatika.services.worker_service import WorkerService
 from avtomatika.storage.memory import MemoryStorage
@@ -44,7 +44,7 @@ def worker_service(storage, config, engine):
     history_mock = MagicMock()
     history_mock.log_worker_event = AsyncMock()
     history_mock.log_job_event = AsyncMock()
-    return WorkerService(storage, history_mock, config, engine)
+    return WorkerService(storage, history_mock, config, engine, metrics=MagicMock())
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_b8_executor_event_timestamps(engine, storage):
     history = MagicMock()
     history.log_job_event = AsyncMock()
 
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
     job_id = "test-ts"
 
     await storage.save_job_state(

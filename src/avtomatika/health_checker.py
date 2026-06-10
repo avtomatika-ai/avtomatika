@@ -41,14 +41,12 @@ class HealthChecker:
         self._running = True
         while self._running:
             try:
-                # Use distributed lock to ensure only one instance cleans up
                 if await self.storage.acquire_lock(
                     "global_health_check_lock", self._instance_id, self.interval_seconds - 5
                 ):
                     try:
                         await self.storage.cleanup_expired_workers()
                     finally:
-                        # We don't release the lock immediately to prevent other instances from
                         # running the same task if the interval is small.
                         pass
 
@@ -60,5 +58,5 @@ class HealthChecker:
                 await sleep(60)
         logger.info("HealthChecker stopped.")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False

@@ -21,12 +21,6 @@ These endpoints do not require authentication and always use the fixed `/_public
 -   **Description:** Returns a simple response confirming that the service is running.
 -   **Response (`200 OK`):** `{"status": "ok"}`
 
-### Prometheus Metrics
-
--   **Endpoint:** `GET /_public/metrics`
--   **Description:** Returns application metrics in a format compatible with Prometheus. Includes loop lag monitoring.
--   **Response (`200 OK`):** Text response with metrics.
-
 ### Webhook for "Human Approval"
 
 -   **Endpoint:** `POST /_public/webhooks/approval/{job_id}`

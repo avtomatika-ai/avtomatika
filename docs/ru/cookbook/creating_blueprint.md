@@ -39,35 +39,36 @@ order_pipeline = Blueprint(
 
 > **Совет:** Имя состояния теперь необязательно; если оно не указано, будет использовано имя функции.
 
-Обработчик получает один аргумент — `context`, который содержит всю информацию о задаче и методы для управления процессом (`context.actions`).
+Обработчик получает аргументы через **внедрение зависимостей (Dependency Injection)**. Вы можете запрашивать:
+- `initial_data`: Исходные данные задачи.
+- `actions`: Объект `ActionFactory` для управления процессом.
+- `state_history`: Полная история состояний задачи.
+- `job_id`: Уникальный ID задачи.
 
 ```python
+from avtomatika import ActionFactory
+
 @order_pipeline.handler(is_start=True)
-async def start(context):
+async def start(initial_data: dict, actions: ActionFactory, job_id: str):
     """
     Начальный обработчик. Вызывается при создании Job.
     """
-    print(f"Job {context.job_id}: обработка заказа начата.")
-    print(f"Входные данные: {context.initial_data}")
-
-    # Сохраняем что-то в историю для следующих шагов
-    context.state_history["processed_by"] = "start"
+    print(f"Job {job_id}: обработка заказа начата.")
+    print(f"Входные данные: {initial_data}")
 
     # Переходим к следующему шагу
-    context.actions.go_to("dispatch_to_worker")
+    actions.go_to("dispatch_to_worker")
 
 
 @order_pipeline.handler
-async def dispatch_to_worker(context):
+async def dispatch_to_worker(initial_data: dict, actions: ActionFactory):
     """
     Этот обработчик отправляет задачу на выполнение воркеру.
     """
-    print(f"Job {context.job_id}: отправка задачи 'check_inventory' воркеру.")
-
     # Приостанавливаем пайплайн и ждем результат от воркера
-    context.actions.dispatch_task(
+    actions.dispatch_task(
         task_type="check_inventory",  # Тип задачи, который поймет воркер
-        params={"items": context.initial_data.get("items")},
+        params={"items": initial_data.get("items")},
         
         # Определяем, куда пойдет процесс в зависимости от ответа воркера
         transitions={
@@ -78,16 +79,13 @@ async def dispatch_to_worker(context):
     )
 
 @order_pipeline.handler
-async def inventory_ok(context):
+async def inventory_ok(actions: ActionFactory, state_history: dict):
     """
     Вызывается, если воркер подтвердил наличие товара.
     """
-    # Данные, возвращенные воркером, доступны в поле result 
-    # (это ярлык для последнего шага в state_history)
-    worker_data = context.result
-    print(f"Job {context.job_id}: товар в наличии. Информация от воркера: {worker_data}")
-    
-    context.actions.go_to("finished_successfully")
+    # Данные, возвращенные воркером, доступны в истории
+    print("Товар в наличии. Завершаем успешно.")
+    actions.go_to("finished_successfully")
 
 
 @order_pipeline.handler(is_end=True)

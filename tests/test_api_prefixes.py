@@ -14,6 +14,8 @@ from avtomatika.storage.memory import MemoryStorage
 
 @pytest.fixture
 def storage():
+    # MemoryStorage now requires implementing STS methods,
+    # but for prefix tests we just need it to not crash.
     return MemoryStorage()
 
 

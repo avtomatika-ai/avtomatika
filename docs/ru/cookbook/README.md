@@ -19,14 +19,15 @@ simple_pipeline = Blueprint(
 )
 
 @simple_pipeline.handler(is_start=True)
-async def start(context, actions):
+async def start(initial_data: dict, actions: ActionFactory):
+    """Используем внедрение зависимостей для чистого кода."""
     actions.go_to("step_A")
 
 @simple_pipeline.handler("step_A")
-async def handler_A(context, actions):
+async def handler_A(initial_data: dict, actions: ActionFactory):
     actions.dispatch_task(
         task_type="simple_task",
-        params=context.initial_data,
+        params=initial_data,
         transitions={"success": "step_B", "failure": "failed"}
     )
 
@@ -566,13 +567,13 @@ async def fast_process(context, task_files, actions):
 SDK для Воркеров имеет встроенную поддержку S3. Если в параметрах задачи (`params`) встречается значение, начинающееся с `s3://`, SDK автоматически скачает файл во временную директорию и подменит URI на локальный путь. Аналогично, если ваш обработчик возвращает локальный путь к файлу, SDK загрузит его в S3 и вернет Оркестратору `s3://` URI.
 
 **Предварительные требования:**
-- Установите зависимость `aioboto3`: `pip install orchestrator-worker[s3]`
+- Установите зависимость `obstore`: `pip install avtomatika-worker[s3]`
 - Настройте переменные окружения для доступа к S3:
   ```bash
   export S3_ENDPOINT_URL="http://your-s3-host:9000"
-  export S3_ACCESS_KEY_ID="your-access-key"
-  export S3_SECRET_ACCESS_KEY="your-secret-key"
-  export S3_BUCKET_NAME="my-processing-bucket"
+  export S3_ACCESS_KEY="your-access-key"
+  export S3_SECRET_KEY="your-secret-key"
+  export S3_DEFAULT_BUCKET="my-processing-bucket"
   ```
 
 #### **Шаг 1: Код в Воркере**
@@ -1216,38 +1217,26 @@ if __name__ == "__main__":
 
 ---
 
-### **Рецепт 22: Аутентификация с индивидуальным токеном**
+### **Рецепт 23: Создание фрактальных систем (Матрешка/Shell-Stacking)**
 
-**Задача:** Повысить безопасность, настроив для каждого воркера уникальный токен аутентификации вместо использования одного общего секрета.
+**Задача:** Превратить целый кластер оркестратора в один виртуальный "Воркер" для родительской сети.
 
-**Концепция:**
-Система поддерживает гибридную модель аутентификации. Приоритет отдается индивидуальному токену, привязанному к `worker_id`. Если он не найден, система для обратной совместимости проверяет общий `WORKER_TOKEN`.
+```python
+from avtomatika import OrchestratorEngine, Blueprint, Config
+from matryoshka.bridge import MatryoshkaBridge
 
-#### **Шаг 1: Настройка Оркестратора**
-Определите индивидуальные токены в файле `workers.toml` в корневой директории Оркестратора.
+# 1. Настраиваем внутренний "Призрак" (Ghost)
+engine = OrchestratorEngine(...)
+# Регистрируем блюпринты, которые станут "навыками" для внешней сети
+engine.register_blueprint(my_internal_bp)
 
-```toml
-# workers.toml
-[worker-001]
-token = "super-secret-token-for-worker-1"
-# ... другие метаданные для этого воркера ...
+# 2. Оборачиваем его в "Оболочку" (Shell)
+# Bridge автоматически пробросит навыки, обеспечит отмену и передачу трейсов
+holon_bridge = MatryoshkaBridge(engine)
 
-[worker-002]
-token = "another-unique-token-for-worker-2"
+# 3. Запускаем холон
+# Теперь он будет подключаться к родительскому оркестратору как обычный воркер
+if __name__ == "__main__":
+    holon_bridge.run()
 ```
-При запуске Оркестратор загрузит эти токены в Redis.
-
-#### **Шаг 2: Настройка Воркера**
-Воркер должен передавать свой ID и уникальный токен. Настройте для него следующие переменные окружения:
-
-```bash
-# Уникальный идентификатор, который должен совпадать с ключом в workers.toml
-export WORKER_ID="worker-001"
-# Индивидуальный токен для этого воркера
-export WORKER_INDIVIDUAL_TOKEN="super-secret-token-for-worker-1"
-
-# Общий WORKER_TOKEN больше не нужен, если используется индивидуальный
-```
-
-#### **Шаг 3: Запуск**
-Запустите Оркестратор и Воркер. Воркер аутентифицируется, используя свой `WORKER_ID` и `WORKER_INDIVIDUAL_TOKEN`. Запросы от воркеров с неверным токеном или от воркеров, не перечисленных в `workers.toml` (если не настроен общий `WORKER_TOKEN`), будут отклонены с ошибкой `401 Unauthorized`.
+*Примечание: Все события и прогресс из внутреннего оркестратора будут автоматически «всплывать» (bubble) в родительскую сеть с сохранением цепочки идентичности.*

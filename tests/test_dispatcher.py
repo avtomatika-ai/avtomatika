@@ -45,7 +45,6 @@ CPU_WORKER = {
 def mock_storage():
     storage = MagicMock(spec=StorageBackend)
     storage.find_workers_for_skill = AsyncMock(return_value=[])
-    storage.find_hot_workers = AsyncMock(return_value=[])
     storage.find_workers_by_hot_skill = AsyncMock(return_value=[])
     storage.get_workers = AsyncMock(return_value=[])
     storage.get_worker_info = AsyncMock(return_value=None)
@@ -78,7 +77,7 @@ def mock_config():
 
 @pytest.fixture
 def dispatcher(mock_storage, mock_config):
-    return Dispatcher(storage=mock_storage, config=mock_config)
+    return Dispatcher(mock_storage, mock_config, metrics=MagicMock())
 
 
 @pytest.mark.asyncio
@@ -392,7 +391,7 @@ async def test_dispatcher_worker_cache(dispatcher, mock_storage):
 async def test_dispatcher_candidates_limit(mock_storage, mock_config):
     """Checks that Dispatcher limits compliance checks via DISPATCHER_MAX_CANDIDATES."""
     mock_config.DISPATCHER_MAX_CANDIDATES = 2
-    dispatcher = Dispatcher(mock_storage, mock_config)
+    dispatcher = Dispatcher(mock_storage, mock_config, metrics=MagicMock())
 
     # Mock compliance check to always return True
     dispatcher._check_worker_compliance = MagicMock(return_value=(True, None))

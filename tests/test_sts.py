@@ -3,8 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import ssl
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,12 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 from aiohttp import web
+from rxon.constants import AUTH_HEADER_WORKER
 from rxon.security import create_server_ssl_context
 
 from avtomatika.config import Config
-from avtomatika.constants import AUTH_HEADER_WORKER
 from avtomatika.engine import OrchestratorEngine
-from avtomatika.security import _TOKEN_HASH_CACHE, verify_worker_auth
+from avtomatika.security import verify_worker_auth
 from avtomatika.storage.memory import MemoryStorage
 
 
@@ -115,7 +113,6 @@ async def test_sts_flow(pki, mtls_config):
     """
     storage = MemoryStorage()
     engine = OrchestratorEngine(storage, mtls_config)
-
     engine.setup()
     runner = web.AppRunner(engine.app)
     await runner.setup()
@@ -205,17 +202,17 @@ async def test_token_hash_cache():
     mock_storage.verify_worker_access_token = AsyncMock(return_value="w1")
     mock_config = MagicMock()
 
-    _TOKEN_HASH_CACHE.clear()
+    cache = {}
     token = "token-to-cache"
 
     # First call
     with patch("avtomatika.security.sha256") as mock_sha:
         mock_sha.return_value.hexdigest.return_value = "hash1"
-        await verify_worker_auth(mock_storage, mock_config, token, None, "w1")
+        await verify_worker_auth(mock_storage, mock_config, token, None, "w1", MagicMock(), cache)
         assert mock_sha.called
 
     # Second call with same token
     with patch("avtomatika.security.sha256") as mock_sha:
-        await verify_worker_auth(mock_storage, mock_config, token, None, "w1")
+        await verify_worker_auth(mock_storage, mock_config, token, None, "w1", MagicMock(), cache)
         # Should NOT be called, taken from cache
         assert not mock_sha.called

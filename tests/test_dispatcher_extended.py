@@ -1,12 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from src.avtomatika.dispatcher import Dispatcher
 
@@ -22,7 +20,7 @@ def dispatcher(mock_storage):
     config = MagicMock()
     # Ensure reputation filtering doesn't interfere by default
     config.REPUTATION_MIN_THRESHOLD = 0.0
-    return Dispatcher(mock_storage, config)
+    return Dispatcher(mock_storage, config, metrics=MagicMock())
 
 
 @pytest.mark.asyncio

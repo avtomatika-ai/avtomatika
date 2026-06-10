@@ -5,7 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis as redis
 import pytest
@@ -37,7 +37,7 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
     storage = redis_storage
     engine = OrchestratorEngine(storage, config)
     engine.register_blueprint(error_flow_bp)
-    engine.dispatcher = Dispatcher(storage, config)  # Manually set up the dispatcher
+    engine.dispatcher = Dispatcher(storage, config, metrics=MagicMock())  # Manually set up the dispatcher
 
     # Mock the dispatcher to prevent actual dispatching and allow us to assert it was called
     mock_dispatch = AsyncMock()
@@ -60,7 +60,7 @@ async def test_transient_error_retries_then_quarantines(monkeypatch, redis_stora
     }
     await storage.save_job_state(job_id, initial_job_state)
 
-    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    worker_service = WorkerService(storage, engine.history_storage, config, engine, metrics=MagicMock())
     engine.worker_service = worker_service
 
     for i in range(config.JOB_MAX_RETRIES + 1):
@@ -104,7 +104,7 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
     storage = redis_storage
     engine = OrchestratorEngine(storage, config)
     engine.register_blueprint(error_flow_bp)
-    engine.dispatcher = Dispatcher(storage, config)
+    engine.dispatcher = Dispatcher(storage, config, metrics=MagicMock())
 
     mock_dispatch = AsyncMock()
     monkeypatch.setattr(engine.dispatcher, "dispatch", mock_dispatch)
@@ -118,7 +118,7 @@ async def test_permanent_error_quarantines_immediately(monkeypatch, redis_storag
     }
     await storage.save_job_state(job_id, initial_job_state)
 
-    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    worker_service = WorkerService(storage, engine.history_storage, config, engine, metrics=MagicMock())
     engine.worker_service = worker_service
 
     payload_data = {
@@ -148,7 +148,7 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
     storage = redis_storage
     engine = OrchestratorEngine(storage, config)
     engine.register_blueprint(error_flow_bp)
-    engine.dispatcher = Dispatcher(storage, config)
+    engine.dispatcher = Dispatcher(storage, config, metrics=MagicMock())
 
     mock_dispatch = AsyncMock()
     monkeypatch.setattr(engine.dispatcher, "dispatch", mock_dispatch)
@@ -162,7 +162,7 @@ async def test_invalid_input_error_fails_immediately(monkeypatch, redis_storage:
     }
     await storage.save_job_state(job_id, initial_job_state)
 
-    worker_service = WorkerService(storage, engine.history_storage, config, engine)
+    worker_service = WorkerService(storage, engine.history_storage, config, engine, metrics=MagicMock())
     engine.worker_service = worker_service
 
     payload_data = {

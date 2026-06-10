@@ -2,60 +2,50 @@
 
 # Recetario: Creación de un Worker
 
-Los Workers son ejecutores independientes que realizan el trabajo real. Esta guía muestra cómo crear un worker utilizando el paquete `avtomatika-worker`.
+Los Workers son ejecutores independientes que realizan el trabajo real. Esta guía muestra cómo crear un worker utilizando el SDK `avtomatika-worker`.
 
 ## Paso 1: Instalar SDK
 
-Asegúrate de que el SDK esté instalado en tu entorno.
+Puede instalar la versión base o una versión con capacidades adicionales:
+
 ```bash
+# Versión mínima (sin S3 ni Pydantic)
 pip install avtomatika-worker
+
+# Versión completa (recomendada para auto-validación y manejo de archivos)
+pip install "avtomatika-worker[s3,pydantic]"
 ```
 
 ## Paso 2: Crear Archivo de Worker
 
 Crea un archivo Python (por ejemplo, `mi_worker.py`) e importa la clase `Worker`.
 
+# 2. Definir Manejadores de Tareas
+
+Puede usar **diccionarios estándar** (sin dependencias) o **modelos Pydantic** (para validación automática).
+
+### Opción A: Diccionario Simple (Sin Pydantic)
 ```python
-import asyncio
-from avtomatika_worker import Worker
-from avtomatika_worker.typing import TRANSIENT_ERROR
-
-# 1. Inicializar la clase Worker
-# Especifica un tipo único para tu worker.
-worker = Worker(worker_type="inventory-checker")
-
-# 2. Definir manejadores de tareas usando el decorador @worker.skill
 @worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
-    """
-    Esta función se llama cuando el Orquestador envía la tarea "check_inventory".
-
-    - `params` (dict): Parámetros de ejecución de la tarea.
-    - `**kwargs`: Metadatos de la tarea:
-        - `task_id` (str): ID único de la tarea.
-        - `job_id` (str): ID del Trabajo padre.
-        - `priority` (float): Prioridad de la tarea.
-    """
-    print(f"Recibidos parámetros: {params}")
     items = params.get("items", [])
+    print(f"Verificando artículos: {items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
-    # Simular trabajo: verificando inventario
-    await asyncio.sleep(1)
+### Opción B: Modelo Pydantic (Validación automática)
+```python
+from pydantic import BaseModel
 
-    if "unavailable_item" in items:
-        # Devolver estado personalizado manejado por el blueprint
-        return {
-            "status": "out_of_stock",
-            "data": {"missing_item": "unavailable_item"}
-        }
+class CheckParams(BaseModel):
+    items: list[str]
 
-    # 3. Devolver resultado exitoso
-    #    - 'status': "success" o estado personalizado.
-    #    - 'data': Diccionario con datos añadidos al contexto del Job.
-    return {
-        "status": "success",
-        "data": {"warehouse_info": "Todos los artículos están disponibles"}
-    }
+@worker.skill("check_inventory")
+async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
+    """El SDK validará automáticamente los datos entrantes contra el modelo CheckParams."""
+    print(f"Verificando artículos: {params.items}")
+    return {"status": "success", "data": {"warehouse_info": "ok"}}
+```
 
 # Ejemplo de manejador para tarea larga con cancelación cooperativa
 @worker.skill("long_running_task")

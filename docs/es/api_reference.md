@@ -20,11 +20,6 @@ Estos puntos finales no requieren autenticación y siempre utilizan el prefijo f
 -   **Descripción:** Confirma que el servicio se está ejecutando.
 -   **Respuesta (`200 OK`):** `{"status": "ok"}`
 
-### Métricas de Prometheus
--   **Punto final:** `GET /_public/metrics`
--   **Descripción:** Métricas de la aplicación, incluyendo la medición del lag del Event Loop.
--   **Respuesta (`200 OK`):** Respuesta de texto con métricas.
-
 ### Webhook para "Aprobación Humana"
 -   **Punto final:** `POST /_public/webhooks/approval/{job_id}`
 -   **Descripción:** Permite la aprobación manual de un paso del pipeline.

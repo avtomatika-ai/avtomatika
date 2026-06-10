@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from rxon.schema import validate_data
 
+from .metrics import LABEL_BLUEPRINT, Metrics
 from .scheduler_config_loader import ScheduledJobConfig, load_schedules_from_file
 
 if TYPE_CHECKING:
@@ -22,10 +23,11 @@ logger = getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, engine: "OrchestratorEngine"):
+    def __init__(self, engine: "OrchestratorEngine", metrics: Metrics):
         self.engine = engine
         self.config = engine.config
         self.storage = engine.storage
+        self.metrics = metrics
         self._running = False
         self.schedules: list[ScheduledJobConfig] = []
         self.timezone = ZoneInfo(self.config.TZ)
@@ -60,7 +62,6 @@ class Scheduler:
                     continue
 
                 lock_key = f"scheduler:lock:interval:{job.name}"
-                # Use hostname/instance ID as lock holder for distributed traceability
                 holder = getattr(self.engine, "_consumer_name", "unknown")
 
                 if await self.storage.set_nx_ttl(lock_key, holder, ttl=5):
@@ -109,7 +110,6 @@ class Scheduler:
         self._running = False
 
     async def _process_job(self, job: ScheduledJobConfig, now_tz: datetime) -> None:
-        # Not used anymore in the main loop, but keeping for compatibility if needed
         if job.interval_seconds:
             await self._process_interval_jobs([job], now_tz)
         else:
@@ -141,26 +141,35 @@ class Scheduler:
             await self._trigger_job(job)
 
     async def _trigger_job(self, job: ScheduledJobConfig) -> None:
-        try:
-            # Check scheduled job input
-            contract = self.engine.blueprint_contracts.get(job.blueprint, {})
-            input_schema = contract.get("input_schema")
-            if input_schema:
-                is_valid, error_msg = validate_data(job.input_data, input_schema)
-                if not is_valid:
-                    logger.error(
-                        f"Scheduled job '{job.name}' skipped: input validation failed "
-                        f"for blueprint '{job.blueprint}'. Error: {error_msg}"
-                    )
-                    return
-            await self.engine.create_background_job(
-                blueprint_name=job.blueprint,
-                initial_data=job.input_data,
-                source=f"scheduler:{job.name}",
-                dispatch_timeout=job.dispatch_timeout,
-                result_timeout=job.result_timeout,
-                security=job.security,
-                metadata=job.metadata,
-            )
-        except Exception as e:
-            logger.error(f"Failed to create background job {job.name}: {e}")
+        from .telemetry import trace  # noqa: PLC0415
+
+        tracer = trace.get_tracer(__name__)
+
+        with tracer.start_as_current_span(f"Scheduler:Trigger:{job.blueprint}") as span:
+            span.set_attribute("scheduler.job_name", job.name)
+            span.set_attribute("job.blueprint", job.blueprint)
+            try:
+                contract = self.engine.blueprint_contracts.get(job.blueprint, {})
+                input_schema = contract.get("input_schema")
+                if input_schema:
+                    is_valid, error_msg = validate_data(job.input_data, input_schema)
+                    if not is_valid:
+                        logger.error(
+                            f"Scheduled job '{job.name}' skipped: input validation failed "
+                            f"for blueprint '{job.blueprint}'. Error: {error_msg}"
+                        )
+                        span.add_event("validation_failed", {"error": error_msg})
+                        return
+                await self.engine.create_background_job(
+                    blueprint_name=job.blueprint,
+                    initial_data=job.input_data,
+                    source=f"scheduler:{job.name}",
+                    dispatch_timeout=job.dispatch_timeout,
+                    result_timeout=job.result_timeout,
+                    security=job.security,
+                    metadata=job.metadata,
+                )
+                self.metrics.scheduler_jobs_triggered_total.add(1, {LABEL_BLUEPRINT: job.blueprint})
+            except Exception as e:
+                span.record_exception(e)
+                logger.error(f"Failed to create background job {job.name}: {e}")

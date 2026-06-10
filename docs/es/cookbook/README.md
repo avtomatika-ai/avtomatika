@@ -21,28 +21,28 @@ simple_pipeline = Blueprint(
 )
 
 @simple_pipeline.handler(is_start=True)
-async def start(context, actions):
+async def start(actions):
     actions.go_to("step_A")
 
 @simple_pipeline.handler
-async def step_A(context, actions):
+async def step_A(initial_data, actions):
     actions.dispatch_task(
         task_type="simple_task",
-        params=context.initial_data,
+        params=initial_data,
         transitions={"success": "step_B", "failure": "failed"}
     )
 
 @simple_pipeline.handler
-async def step_B(context, actions):
+async def step_B(actions):
     actions.go_to("finished")
 
 @simple_pipeline.handler(is_end=True)
-async def finished(context, actions):
-    print(f"Pipeline {context.job_id} completado exitosamente.")
+async def finished(job_id, actions):
+    print(f"Pipeline {job_id} completado exitosamente.")
 
 @simple_pipeline.handler(is_end=True)
-async def failed(context, actions):
-    print(f"Pipeline {context.job_id} falló.")
+async def failed(job_id, actions):
+    print(f"Pipeline {job_id} falló.")
 ```
 
 ### **Receta 2: Implementación de "Humano en el Bucle" (Moderación)**
@@ -58,31 +58,31 @@ moderation_pipeline = Blueprint(
 )
 
 @moderation_pipeline.handler(is_start=True)
-async def generate_data(context, actions):
+async def generate_data(initial_data, actions):
     actions.dispatch_task(
         task_type="data_generation",
-        params=context.initial_data,
+        params=initial_data,
         transitions={"success": "awaiting_approval", "failure": "failed"}
     )
 
 
 @moderation_pipeline.handler(is_end=True)
-async def process_approved_data(context, actions):
+async def process_approved_data(actions):
     actions.go_to("finished")
 
 @moderation_pipeline.handler(is_end=True)
-async def rejected_by_moderator(context, actions):
-    print(f"El trabajo {context.job_id} fue rechazado por el moderador.")
+async def rejected_by_moderator(job_id, actions):
+    print(f"El trabajo {job_id} fue rechazado por el moderador.")
 
 @moderation_pipeline.handler(is_end=True)
-async def failed(context, actions):
-    print(f"El trabajo {context.job_id} falló.")
+async def failed(job_id, actions):
+    print(f"El trabajo {job_id} falló.")
 
 @moderation_pipeline.handler("awaiting_approval")
-async def await_approval_handler(context, actions):
+async def await_approval_handler(job_id, actions):
     actions.await_human_approval(
         integration="telegram",
-        message=f"Se requiere aprobación para el trabajo {context.job_id}",
+        message=f"Se requiere aprobación para el trabajo {job_id}",
         transitions={
             "approved": "process_approved_data",
             "rejected": "rejected_by_moderator"
@@ -90,7 +90,7 @@ async def await_approval_handler(context, actions):
     )
 
 @moderation_pipeline.handler("process_approved_data")
-async def process_approved_handler(context, actions):
+async def process_approved_handler(actions):
     actions.go_to("finished")
 ```
 
@@ -117,12 +117,12 @@ parallel_bp = Blueprint(
 )
 
 @parallel_bp.handler(is_start=True)
-async def start_parallel_tasks(context, actions):
+async def start_parallel_tasks(job_id, actions):
     """
     Este manejador inicia dos tareas que se ejecutarán en paralelo.
     Ambas tareas, al completarse exitosamente, harán la transición del proceso al estado 'aggregate_results'.
     """
-    logger.info(f"Trabajo {context.job_id}: Iniciando tareas paralelas.")
+    logger.info(f"Trabajo {job_id}: Iniciando tareas paralelas.")
 
     # Iniciar tarea A
     actions.dispatch_task(
@@ -139,11 +139,11 @@ async def start_parallel_tasks(context, actions):
     )
 
 @parallel_bp.aggregator
-async def aggregate_results(context, actions):
+async def aggregate_results(job_id, context, state_history, actions):
     """
     Este manejador se llamará solo después de que tanto task_A como task_B se completen exitosamente.
     """
-    logger.info(f"Trabajo {context.job_id}: Agregando resultados.")
+    logger.info(f"Trabajo {job_id}: Agregando resultados.")
 
     processed_results = {}
     # context.aggregation_results contiene resultados de ambas tareas
@@ -151,18 +151,18 @@ async def aggregate_results(context, actions):
         if result.get("status") == "success":
             processed_results[task_id] = result.get("data")
 
-    context.state_history["aggregated_data"] = processed_results
-    logger.info(f"Trabajo {context.job_id}: Datos agregados: {processed_results}")
+    state_history["aggregated_data"] = processed_results
+    logger.info(f"Trabajo {job_id}: Datos agregados: {processed_results}")
     actions.go_to("end")
 
 @parallel_bp.handler(is_end=True)
-async def end_flow(context, actions):
-    final_data = context.state_history.get("aggregated_data")
-    logger.info(f"Trabajo {context.job_id}: Proceso completo. Datos finales: {final_data}")
+async def end_flow(job_id, state_history, actions):
+    final_data = state_history.get("aggregated_data")
+    logger.info(f"Trabajo {job_id}: Proceso completo. Datos finales: {final_data}")
 
 @parallel_bp.handler(is_end=True)
-async def failed(context, actions):
-    logger.error(f"Trabajo {context.job_id} falló.")
+async def failed(job_id, actions):
+    logger.error(f"Trabajo {job_id} falló.")
 
 ```
 *Nota: Si al menos una de las tareas paralelas falla (transita al estado `failed`), el manejador agregador no será llamado y todo el `Job` transitará inmediatamente al estado `failed`.*
@@ -224,21 +224,21 @@ multilingual_pipeline = Blueprint(
 )
 
 @multilingual_pipeline.handler(is_start=True)
-async def start_multilingual(context, actions):
+async def start_multilingual(actions):
     # Este paso solo pasa el control más adelante, donde se activará la lógica condicional
     actions.go_to("process_text")
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'en'")
-async def process_english_text(context, actions):
-    actions.dispatch_task(task_type="process_en", params=context.initial_data, transitions={"success": "finished"})
+@multilingual_pipeline.handler("process_text").when("initial_data.language == 'en'")
+async def process_english_text(initial_data, actions):
+    actions.dispatch_task(task_type="process_en", params=initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'de'")
-async def process_german_text(context, actions):
-    actions.dispatch_task(task_type="process_de", params=context.initial_data, transitions={"success": "finished"})
+@multilingual_pipeline.handler("process_text").when("initial_data.language == 'de'")
+async def process_german_text(initial_data, actions):
+    actions.dispatch_task(task_type="process_de", params=initial_data, transitions={"success": "finished"})
 
 @multilingual_pipeline.handler("finished", is_end=True)
-async def multilingual_finished(context, actions):
-    print(f"Trabajo {context.job_id} terminó el procesamiento.")
+async def multilingual_finished(job_id, actions):
+    print(f"Trabajo {job_id} terminó el procesamiento.")
 ```
 
 ### **Receta 6: Elección de Estrategia de Despacho de Tareas**
@@ -255,18 +255,18 @@ critical_pipeline = Blueprint(
 )
 
 @critical_pipeline.handler(is_start=True)
-async def start_critical_task(context, actions):
+async def start_critical_task(initial_data, actions):
     actions.dispatch_task(
         task_type="critical_computation",
-        params=context.initial_data,
+        params=initial_data,
         # Especificar estrategia de selección de worker
         dispatch_strategy="least_connections",
         transitions={"success": "finished"}
     )
 
 @critical_pipeline.handler("finished", is_end=True)
-async def critical_finished(context, actions):
-    print(f"Tarea crítica {context.job_id} terminada.")
+async def critical_finished(job_id, actions):
+    print(f"Tarea crítica {job_id} terminada.")
 ```
 *Nota: Estrategias disponibles: `default`, `round_robin`, `least_connections`.*
 
@@ -286,21 +286,21 @@ priority_pipeline = Blueprint(
 )
 
 @priority_pipeline.handler(is_start=True)
-async def start_priority_task(context, actions):
+async def start_priority_task(initial_data, actions):
     # Asignar prioridad diferente dependiendo de los datos de entrada
-    is_urgent = context.initial_data.get("is_urgent", False)
+    is_urgent = initial_data.get("is_urgent", False)
 
     actions.dispatch_task(
         task_type="computation",
-        params=context.initial_data,
+        params=initial_data,
         # Las tareas urgentes obtienen prioridad 10, otras - 0
         priority=10.0 if is_urgent else 0.0,
         transitions={"success": "finished"}
     )
 
 @priority_pipeline.handler("finished", is_end=True)
-async def priority_finished(context, actions):
-    print(f"Tarea {context.job_id} terminada.")
+async def priority_finished(job_id, actions):
+    print(f"Tarea {job_id} terminada.")
 
 ```
 *Nota: Si múltiples tareas tienen la misma prioridad, se ejecutarán en orden de llegada (FIFO) dentro de esa prioridad.*
@@ -320,10 +320,10 @@ cost_optimized_pipeline = Blueprint(
 )
 
 @cost_optimized_pipeline.handler(is_start=True)
-async def start_cost_optimized_task(context, actions):
+async def start_cost_optimized_task(initial_data, actions):
     actions.dispatch_task(
         task_type="image_compression",
-        params=context.initial_data,
+        params=initial_data,
         # Seleccionar worker más barato
         dispatch_strategy="cheapest",
         # Pero solo si su costo ($/seg) no es más de 0.05
@@ -332,11 +332,11 @@ async def start_cost_optimized_task(context, actions):
     )
 
 @cost_optimized_pipeline.handler("finished", is_end=True)
-async def cost_optimized_finished(context, actions):
+async def cost_optimized_finished(actions):
     print("Trabajo terminado con optimización de costos.")
 
 @cost_optimized_pipeline.handler("too_expensive", is_end=True)
-async def cost_optimized_failed(context, actions):
+async def cost_optimized_failed(actions):
     print("El trabajo falló porque ningún worker cumplió con los criterios de costo.")
 ```
 *Nota: La estrategia `cheapest` utiliza el campo `cost_per_second` del worker. Si ningún worker cumple con `max_cost`, el pipeline no encontrará un ejecutor y fallará.*
@@ -347,7 +347,7 @@ async def cost_optimized_failed(context, actions):
 
 **Concepto:**
 1.  **Inicialización:** Al crear un blueprint, puedes "adjuntar" uno o más almacenes de datos a él. Cada almacén es esencialmente un envoltorio de Redis que proporciona acceso clave-valor.
-2.  **Acceso en Manejadores:** Dentro de cualquier manejador de este blueprint, puedes acceder a estos almacenes a través de `context.data_stores`.
+2.  **Acceso en Manejadores:** Dentro de cualquier manejador de este blueprint, puedes acceder a estos almacenes a través de `data_stores`.
 3.  **Persistencia:** Los datos en `data_store` persisten entre llamadas a manejadores e incluso entre diferentes `job_id` del mismo blueprint.
 
 ```python
@@ -364,29 +364,29 @@ analytics_bp.add_data_store("request_counter", {"total_requests": 0})
 
 
 @analytics_bp.handler("start", is_start=True)
-async def count_request(context, actions):
+async def count_request(data_stores, state_history, actions):
     # 2. Acceder al almacén a través del contexto e incrementar contador.
     #    Las operaciones son atómicas ya que Redis es de un solo hilo.
-    current_count = await context.data_stores.request_counter.get("total_requests")
+    current_count = await data_stores.request_counter.get("total_requests")
     new_count = current_count + 1
-    await context.data_stores.request_counter.set("total_requests", new_count)
+    await data_stores.request_counter.set("total_requests", new_count)
 
     # Guardar valor actual del contador en el historial de este trabajo específico
-    context.state_history["request_number"] = new_count
+    state_history["request_number"] = new_count
 
     actions.go_to("finished")
 
 @analytics_bp.handler("finished", is_end=True)
-async def show_result(context, actions):
-    request_num = context.state_history.get("request_number")
-    print(f"Trabajo {context.job_id} procesado. Número de solicitud {request_num}.")
+async def show_result(job_id, state_history, actions):
+    request_num = state_history.get("request_number")
+    print(f"Trabajo {job_id} procesado. Número de solicitud {request_num}.")
 
 ```
 
 **Cómo funciona:**
 
 -   `analytics_bp.add_data_store("request_counter", ...)` crea una instancia de `AsyncDictStore` que vive tanto como viva el Orquestador.
--   `context.data_stores.request_counter` proporciona acceso a esta instancia. `data_stores` es un objeto dinámico cuyos atributos corresponden a los nombres de los almacenes creados.
+-   `data_stores.request_counter` proporciona acceso a esta instancia. `data_stores` es un objeto dinámico cuyos atributos corresponden a los nombres de los almacenes creados.
 -   Cada vez que ejecutes este pipeline (`/v1/jobs/analytics`), incrementará **el mismo** contador porque `data_store` está vinculado al blueprint, no al `job_id` específico.
 
 ### **Receta 10: Cancelación de una Tarea en Ejecución**
@@ -435,10 +435,10 @@ cancellable_pipeline = Blueprint(
 )
 
 @cancellable_pipeline.handler(is_start=True)
-async def start_long_task(context, actions):
+async def start_long_task(actions):
     actions.dispatch_task(
         task_type="long_video_processing",
-        params=context.initial_data,
+        params=initial_data,
         transitions={
             "success": "finished_successfully",
             "failure": "task_failed",
@@ -447,16 +447,16 @@ async def start_long_task(context, actions):
     )
 
 @cancellable_pipeline.handler(is_end=True)
-async def finished_successfully(context, actions):
-    print(f"Trabajo {context.job_id} terminado exitosamente.")
+async def finished_successfully(actions):
+    print(f"Trabajo {job_id} terminado exitosamente.")
 
 @cancellable_pipeline.handler(is_end=True)
-async def task_failed(context, actions):
-    print(f"Trabajo {context.job_id} falló.")
+async def task_failed(actions):
+    print(f"Trabajo {job_id} falló.")
 
 @cancellable_pipeline.handler(is_end=True)
-async def task_cancelled(context, actions):
-    print(f"Trabajo {context.job_id} cancelado exitosamente.")
+async def task_cancelled(actions):
+    print(f"Trabajo {job_id} cancelado exitosamente.")
 ```
 
 #### **Paso 3: Ejecutar Trabajo**
@@ -583,13 +583,13 @@ async def fast_process(context, task_files, actions):
 El SDK del Worker tiene soporte S3 integrado. Si los parámetros de la tarea (`params`) contienen un valor que comienza con `s3://`, el SDK descarga automáticamente el archivo al directorio temporal y sustituye el URI con la ruta local. De manera similar, si tu manejador devuelve una ruta de archivo local, el SDK la sube a S3 y devuelve el URI `s3://` al Orquestador.
 
 **Prerrequisitos:**
-- Instalar dependencia `aioboto3`: `pip install orchestrator-worker[s3]`
+- Instalar dependencia `obstore`: `pip install avtomatika-worker[s3]`
 - Configurar variables de entorno para acceso a S3:
   ```bash
   export S3_ENDPOINT_URL="http://your-s3-host:9000"
-  export S3_ACCESS_KEY_ID="your-access-key"
-  export S3_SECRET_ACCESS_KEY="your-secret-key"
-  export S3_BUCKET_NAME="my-processing-bucket"
+  export S3_ACCESS_KEY="your-access-key"
+  export S3_SECRET_KEY="your-secret-key"
+  export S3_DEFAULT_BUCKET="my-processing-bucket"
   ```
 
 #### **Paso 1: Código en Worker**
@@ -622,11 +622,11 @@ async def process_video(params: dict, **kwargs) -> dict:
 El Blueprint simplemente pasa el URI S3 como parámetro.
 ```python
 @s3_pipeline.handler(is_start=True)
-async def start_s3_task(context, actions):
+async def start_s3_task(actions):
     actions.dispatch_task(
         task_type="process_video_from_s3",
         # Pasar URI S3
-        params={"video_path": context.initial_data.get("s3_uri")},
+        params={"video_path": initial_data.get("s3_uri")},
         transitions={"success": "finished"}
     )
 ```
@@ -674,10 +674,10 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 El Blueprint puede tener diferentes ramas para diferentes resultados.
 ```python
 @error_handling_bp.handler(is_start=True)
-async def start_api_call(context, actions):
+async def start_api_call(actions):
     actions.dispatch_task(
         task_type="fetch_external_data",
-        params=context.initial_data,
+        params=initial_data,
         transitions={
             "success": "finished_successfully",
             "failure": "handle_failure" # Manejador común para todos los errores
@@ -685,13 +685,13 @@ async def start_api_call(context, actions):
     )
 
 @error_handling_bp.handler(is_end=True)
-async def handle_failure(context, actions):
+async def handle_failure(actions):
     # Aquí podemos analizar `job_state` para entender si la tarea fue puesta en cuarentena o simplemente falló.
-    job_state = await context.storage.get_job_state(context.job_id)
+    job_state = await context.storage.get_job_state(job_id)
     if job_state.get("status") == "quarantined":
-        print(f"Trabajo {context.job_id} en cuarentena debido a un error permanente.")
+        print(f"Trabajo {job_id} en cuarentena debido a un error permanente.")
     else:
-        print(f"Trabajo {context.job_id} falló.")
+        print(f"Trabajo {job_id} falló.")
 ```
 
 ### **Receta 14: Blueprints Anidados (Sub-blueprints)**
@@ -709,24 +709,24 @@ from avtomatika import Blueprint
 text_processing_bp = Blueprint(name="text_processor")
 
 @text_processing_bp.handler("start", is_start=True)
-async def process(context, actions):
+async def process(actions):
     # ... alguna lógica de procesamiento de texto ...
-    text = context.initial_data.get("text", "")
+    text = initial_data.get("text", "")
     if not text:
         # Si la entrada es inválida, terminar el blueprint con fallo.
         actions.go_to("failed")
     else:
         # El resultado se puede guardar en `state_history` del blueprint hijo.
         # Aunque no se pasa directamente, está disponible para depuración en el historial.
-        context.state_history["processed_text"] = text.upper()
+        state_history["processed_text"] = text.upper()
         actions.go_to("finished")
 
 @text_processing_bp.handler("finished", is_end=True)
-async def text_processing_finished(context, actions):
+async def text_processing_finished(actions):
     pass
 
 @text_processing_bp.handler("failed", is_end=True)
-async def text_processing_failed(context, actions):
+async def text_processing_failed(actions):
     pass
 
 
@@ -738,12 +738,12 @@ main_pipeline = Blueprint(
 )
 
 @main_pipeline.handler("start", is_start=True)
-async def parent_start(context, actions):
+async def parent_start(actions):
     actions.go_to("process_user_text")
 
 @main_pipeline.handler("process_user_text")
-async def main_handler(context, actions):
-    user_text = context.initial_data.get("raw_text", "")
+async def main_handler(actions):
+    user_text = initial_data.get("raw_text", "")
     actions.run_blueprint(
         blueprint_name="text_processor",
         initial_data={"text": user_text},
@@ -751,11 +751,11 @@ async def main_handler(context, actions):
     )
 
 @main_pipeline.handler
-async def final_step_handler(context, actions):
+async def final_step_handler(actions):
     # Resultado del blueprint hijo guardado en `state_history`.
     # Clave generada automáticamente. Podemos encontrarla iterando claves.
     sub_job_result = None
-    for key, value in context.state_history.items():
+    for key, value in state_history.items():
         if key.startswith("sub_job_") and "outcome" in value:
             sub_job_result = value
             break
@@ -768,16 +768,16 @@ async def final_step_handler(context, actions):
     actions.go_to("finished")
 
 @main_pipeline.handler
-async def sub_job_failed_handler(context, actions):
+async def sub_job_failed_handler(actions):
     print("Sub-blueprint falló, manejando fallo en padre.")
     actions.go_to("failed")
 
 @main_pipeline.handler("finished", is_end=True)
-async def main_finished(context, actions):
+async def main_finished(actions):
     pass
 
 @main_pipeline.handler("failed", is_end=True)
-async def main_failed(context, actions):
+async def main_failed(actions):
     pass
 ```
 
@@ -801,23 +801,23 @@ from avtomatika import Blueprint
 conditional_pipeline = Blueprint(name="conditional_flow")
 
 @conditional_pipeline.handler(is_start=True)
-async def start(context, actions):
+async def start(actions):
     actions.go_to("process_data")
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'A'")
-async def process_a(context, actions):
+@conditional_pipeline.handler("process_data").when("initial_data.type == 'A'")
+async def process_a(actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'B'")
-async def process_b(context, actions):
+@conditional_pipeline.handler("process_data").when("initial_data.type == 'B'")
+async def process_b(actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
 @conditional_pipeline.handler(is_end=True)
-async def finished(context, actions):
+async def finished(actions):
     print("Terminado.")
 
 @conditional_pipeline.handler(is_end=True)
-async def failed(context, actions):
+async def failed(actions):
     print("Fallado.")
 
 # Ahora generar su diagrama
@@ -878,7 +878,7 @@ premium_features_bp = Blueprint(
 )
 
 @premium_features_bp.handler(is_start=True)
-async def start_premium_flow(context, actions):
+async def start_premium_flow(actions):
     # Obtener configuración del cliente que hizo la solicitud
     client_config = context.client.config
 
@@ -887,14 +887,14 @@ async def start_premium_flow(context, actions):
         # Usar worker más potente para clientes premium
         actions.dispatch_task(
             task_type="high_quality_generation",
-            params=context.initial_data,
+            params=initial_data,
             transitions={"success": "finished"}
         )
     elif "en" in client_config.get("languages", []):
          # Worker estándar para clientes gratuitos de habla inglesa
         actions.dispatch_task(
             task_type="standard_quality_generation",
-            params=context.initial_data,
+            params=initial_data,
             transitions={"success": "finished"}
         )
     else:
@@ -902,11 +902,11 @@ async def start_premium_flow(context, actions):
         actions.go_to("failed", error_message="Idioma no soportado para su plan")
 
 @premium_features_bp.handler("finished", is_end=True)
-async def premium_finished(context, actions):
+async def premium_finished(actions):
     pass
 
 @premium_features_bp.handler("failed", is_end=True)
-async def premium_failed(context, actions):
+async def premium_failed(actions):
     pass
 ```
 
@@ -931,20 +931,20 @@ validation_bp = Blueprint(
 )
 
 @validation_bp.handler(is_start=True)
-async def validate_input(context, actions):
+async def validate_input(actions):
     """
     Valida datos de entrada y decide a dónde dirigir el proceso.
     """
-    user_id = context.initial_data.get("user_id")
-    document_type = context.initial_data.get("document_type")
+    user_id = initial_data.get("user_id")
+    document_type = initial_data.get("document_type")
 
     if not user_id or not document_type:
         actions.go_to("invalid_input_failed")
         return
 
     # Guardar datos validados en state_history para usar en otros manejadores
-    context.state_history["validated_user"] = user_id
-    context.state_history["doc_type"] = document_type
+    state_history["validated_user"] = user_id
+    state_history["doc_type"] = document_type
 
     # Enrutamiento basado en tipo de documento
     if document_type == "invoice":
@@ -955,8 +955,8 @@ async def validate_input(context, actions):
 # ... (otros manejadores) ...
 
 @validation_bp.handler(is_end=True)
-async def invalid_input_failed(context, actions):
-    print(f"El trabajo {context.job_id} falló debido a entrada inválida.")
+async def invalid_input_failed(actions):
+    print(f"El trabajo {job_id} falló debido a entrada inválida.")
 
 ```
 
@@ -979,27 +979,27 @@ finalization_bp = Blueprint(name="finalization_example")
 # ... (pasos intermedios que conducen a diferentes resultados) ...
 
 @finalization_bp.handler(is_end=True)
-async def cleanup_and_notify_success(context, actions):
+async def cleanup_and_notify_success(actions):
     """
     Ejecutado al completar exitosamente.
     """
-    temp_file = context.state_history.get("temp_file_path")
+    temp_file = state_history.get("temp_file_path")
     if temp_file and os.path.exists(temp_file):
         os.remove(temp_file)
-        print(f"Trabajo {context.job_id}: Archivo temporal {temp_file} eliminado.")
+        print(f"Trabajo {job_id}: Archivo temporal {temp_file} eliminado.")
 
-    # send_success_email(context.initial_data.get("user_email"))
-    print(f"Trabajo {context.job_id} terminado exitosamente. Notificación enviada.")
+    # send_success_email(initial_data.get("user_email"))
+    print(f"Trabajo {job_id} terminado exitosamente. Notificación enviada.")
 
 
 @finalization_bp.handler(is_end=True)
-async def handle_rejection(context, actions):
+async def handle_rejection(actions):
     """
     Ejecutado si el proceso fue rechazado.
     """
-    rejection_reason = context.state_history.get("rejection_reason", "No se proporcionó razón")
-    print(f"Trabajo {context.job_id} fue rechazado. Razón: {rejection_reason}")
-    # send_rejection_notification(context.initial_data.get("user_email"), rejection_reason)
+    rejection_reason = state_history.get("rejection_reason", "No se proporcionó razón")
+    print(f"Trabajo {job_id} fue rechazado. Razón: {rejection_reason}")
+    # send_rejection_notification(initial_data.get("user_email"), rejection_reason)
 
 ```
 Usar `is_start` e `is_end` de esta manera hace que tus pipelines sean más estructurados, fiables y fáciles de entender.
@@ -1020,10 +1020,10 @@ gpu_intensive_pipeline = Blueprint(
 )
 
 @gpu_intensive_pipeline.handler
-async def start_gpu_task(context, actions):
+async def start_gpu_task(actions):
     actions.dispatch_task(
         task_type="video_montage",
-        params=context.initial_data,
+        params=initial_data,
         # El despachador busca un worker cuya lista de dispositivos (devices)
         # contenga un dispositivo compatible y tenga los artefactos requeridos
         resource_requirements={

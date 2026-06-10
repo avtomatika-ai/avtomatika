@@ -3,10 +3,9 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import asyncio
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 from fakeredis import aioredis as fake_redis
@@ -79,7 +78,7 @@ async def test_horizontal_scaling_scheduler_locks():
         scheduler = eng.app.get("avtomatika_scheduler")  # Setup hasn't run, so this might be missing
         # Let's manually init scheduler since we didn't call engine.setup() fully
         if not scheduler:
-            scheduler = Scheduler(eng)
+            scheduler = Scheduler(eng, metrics=MagicMock())
 
         # Manually invoke the locking logic we want to test
         # lock_key = f"scheduler:lock:interval:{job.name}"
@@ -95,7 +94,7 @@ async def test_horizontal_scaling_scheduler_locks():
     for eng in engines:
         # Minimal setup manually
 
-        eng.app[SCHEDULER_KEY] = Scheduler(eng)
+        eng.app[SCHEDULER_KEY] = Scheduler(eng, metrics=MagicMock())
         await eng.storage.ping()  # Ensure connection
 
     # Fire all triggers concurrently

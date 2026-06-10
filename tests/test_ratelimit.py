@@ -1,12 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from aiohttp import web
 from src.avtomatika.ratelimit import rate_limit_middleware_factory
@@ -19,7 +17,7 @@ async def test_rate_limit_middleware_skips_workers():
     as they are handled by the engine for better precision.
     """
     storage = MagicMock()
-    middleware = rate_limit_middleware_factory(storage, 1, 60)
+    middleware = rate_limit_middleware_factory(storage, MagicMock(), 1, 60)
     handler = AsyncMock(return_value=web.Response(text="OK"))
 
     # Request to worker path
@@ -43,12 +41,12 @@ async def test_rate_limit_blocks_clients_by_ip():
 
     storage.increment_key_with_ttl.side_effect = mock_inc
 
-    middleware = rate_limit_middleware_factory(storage, 1, 60)
+    middleware = rate_limit_middleware_factory(storage, MagicMock(), 1, 60)
     handler = AsyncMock(return_value=web.Response(text="OK"))
 
     # Request to client path
     req = MagicMock()
-    req.path = "/api/v1/jobs"
+    req.path = "/api/jobs"
     req.remote = "1.2.3.4"
 
     response = await middleware(req, handler)

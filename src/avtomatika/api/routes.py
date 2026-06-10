@@ -9,7 +9,15 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
-from ..app_keys import ENGINE_KEY
+from ..app_keys import (
+    DISPATCHER_KEY,
+    ENGINE_KEY,
+    EXECUTOR_KEY,
+    HISTORY_KEY,
+    S3_SERVICE_KEY,
+    STORAGE_KEY,
+    WORKER_SERVICE_KEY,
+)
 from ..quota import quota_middleware_factory
 from ..security import client_auth_middleware_factory
 from .handlers import (
@@ -27,7 +35,6 @@ from .handlers import (
     get_quarantined_jobs_handler,
     get_workers_handler,
     human_approval_webhook_handler,
-    metrics_handler,
     reload_worker_configs_handler,
     status_handler,
     stream_job_file_upload_handler,
@@ -43,9 +50,22 @@ def setup_routes(app: web.Application, engine: "OrchestratorEngine") -> None:
     client_prefix_str = f"/{client_prefix}" if client_prefix else ""
 
     public_app = web.Application()
+    # Propagate all essential keys to the sub-app
     public_app[ENGINE_KEY] = engine
+    if hasattr(engine, "storage"):
+        public_app[STORAGE_KEY] = engine.storage
+    if hasattr(engine, "executor"):
+        public_app[EXECUTOR_KEY] = engine.executor
+    if hasattr(engine, "dispatcher"):
+        public_app[DISPATCHER_KEY] = engine.dispatcher
+    if hasattr(engine, "worker_service"):
+        public_app[WORKER_SERVICE_KEY] = engine.worker_service
+    if hasattr(engine, "history_storage"):
+        public_app[HISTORY_KEY] = engine.history_storage
+    if hasattr(engine, "s3_service"):
+        public_app[S3_SERVICE_KEY] = engine.s3_service
+
     public_app.router.add_get("/status", status_handler)
-    public_app.router.add_get("/metrics", metrics_handler)
     public_app.router.add_post("/webhooks/approval/{job_id}", human_approval_webhook_handler)
     public_app.router.add_post("/debug/flush_db", flush_db_handler)
     public_app.router.add_get("/docs", docs_handler)

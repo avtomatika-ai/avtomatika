@@ -23,7 +23,6 @@ async def test_memory_storage_collections_integrity():
     assert await storage.get_active_worker_ids() == []
     assert await storage.get_workers(["non-existent"]) == []
     assert await storage.find_workers_for_skill("none") == []
-    assert await storage.find_hot_workers("none", "none") == []
     assert await storage.find_workers_by_hot_skill("none") == []
     assert await storage.get_timed_out_jobs() == []
     assert await storage.get_quarantined_jobs() == []
@@ -73,7 +72,6 @@ async def test_redis_storage_collections_integrity(redis_storage):
     await storage._redis.flushdb()
 
     assert await storage.find_workers_for_skill("none") == []
-    assert await storage.find_hot_workers("none", "none") == []
     assert await storage.find_workers_by_hot_skill("none") == []
     assert await storage.get_available_workers() == []
     assert await storage.get_workers(["none"]) == []
@@ -92,7 +90,7 @@ async def test_worker_service_collections_integrity():
     mock_storage = MagicMock()
     mock_storage.refresh_worker_ttl = AsyncMock(return_value=False)
 
-    service = WorkerService(mock_storage, MagicMock(), MagicMock(), MagicMock())
+    service = WorkerService(mock_storage, MagicMock(), MagicMock(), MagicMock(), MagicMock())
 
     # Test that it returns None on failed refresh
     res = await service.update_worker_heartbeat("w1", None)

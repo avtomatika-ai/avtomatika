@@ -16,16 +16,9 @@ from rxon.models import InstalledArtifact, Resources, SkillInfo, TaskPayload
 from rxon.schema import validate_data
 from rxon.utils import from_dict, to_dict
 
-try:
-    from opentelemetry.propagate import inject
-except ImportError:
-
-    def inject(carrier, context=None):
-        pass
-
-
-from . import metrics
+from . import telemetry
 from .config import Config
+from .metrics import LABEL_BLUEPRINT, Metrics
 from .storage.base import StorageBackend
 
 logger = getLogger(__name__)
@@ -36,9 +29,10 @@ class Dispatcher:
     In the PULL model, this means enqueuing the task for the worker.
     """
 
-    def __init__(self, storage: StorageBackend, config: Config):
+    def __init__(self, storage: StorageBackend, config: Config, metrics: Metrics):
         self.storage = storage
         self.config = config
+        self.metrics = metrics
         self._round_robin_indices: dict[str, int] = defaultdict(int)
         self._worker_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._worker_cache_ttl = 2.0
@@ -127,7 +121,7 @@ class Dispatcher:
 
             target_skill = from_dict(SkillInfo, target_skill_data)
 
-            skill_version = requirements.get("skill_version") or "1.0.0"
+            skill_version = requirements.get("skill_version")
 
             # Check version/type compatibility using strict RXON b10 SkillInfo.matches
             req_skill = SkillInfo(
@@ -136,13 +130,7 @@ class Dispatcher:
                 type=requirements.get("skill_type"),
             )
 
-            # Relaxed matching for backward compatibility: if worker has no version, ignore version check
             is_match = target_skill.matches(req_skill)
-            if not is_match and not target_skill.version:
-                # If target_skill has no version, we only check the name (which is already done) and type
-                is_match = target_skill.name == req_skill.name and (
-                    not req_skill.type or target_skill.type == req_skill.type
-                )
 
             if not is_match:
                 return (
@@ -196,21 +184,15 @@ class Dispatcher:
         task_type: str,
     ) -> dict[str, Any]:
         """Default strategy: selects "warm" workers (those that have the
-        task in their hot_skills or hot_cache), and then selects the cheapest among them.
+        task in their hot_skills), and then selects the cheapest among them.
         """
         hot_skill_workers = [
             w
             for w in workers
-            if any(
-                (hs.get("name") if isinstance(hs, dict) else hs) == task_type
-                or (hs.get("type") if isinstance(hs, dict) else None) == task_type
-                for hs in (w.get("hot_skills") or [])
-            )
+            if any((hs if isinstance(hs, str) else hs.get("name")) == task_type for hs in (w.get("hot_skills") or []))
         ]
 
-        hot_cache_workers = [w for w in workers if any(hc == task_type for hc in w.get("hot_cache", []))]
-
-        target_pool = hot_skill_workers or hot_cache_workers or workers
+        target_pool = hot_skill_workers or workers
 
         def get_cost(w: dict[str, Any]) -> float:
             cost_map = w.get("capabilities", {}).get("cost_per_skill", {})
@@ -338,11 +320,7 @@ class Dispatcher:
         resource_requirements["skill_version"] = task_info.get("skill_version") or job_state.get("skill_version")
         resource_requirements["skill_type"] = task_info.get("skill_type") or job_state.get("skill_type")
 
-        # Hot Cache and Hot Skill awareness
-        params = task_info.get("params") or {}
-        resource_hint = task_info.get("resource_hint")
-        if not resource_hint and isinstance(params, dict):
-            resource_hint = params.get("resource_hint") or params.get("model_name")
+        # Hot Skill awareness
         capable_workers = []
 
         hot_skill_ids = await self.storage.find_workers_by_hot_skill(task_type)
@@ -350,19 +328,10 @@ class Dispatcher:
             logger.info(f"HLN: Found {len(hot_skill_ids)} HOT workers for skill '{task_type}'.")
             capable_workers = await self._get_workers_cached(hot_skill_ids)
             if capable_workers:
-                metrics.tasks_hot_dispatched_total.inc(
-                    {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"}
+                self.metrics.tasks_hot_dispatched_total.add(
+                    1,
+                    {LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_skill"},
                 )
-
-        if not capable_workers and resource_hint:
-            hot_ids = await self.storage.find_hot_workers(task_type, resource_hint)
-            if hot_ids:
-                capable_workers = await self._get_workers_cached(hot_ids)
-                if capable_workers:
-                    logger.info(f"HLN: Found {len(hot_ids)} HOT workers with resource '{resource_hint}' loaded.")
-                    metrics.tasks_hot_dispatched_total.inc(
-                        {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown"), "kind": "hot_cache"}
-                    )
 
         if not capable_workers:
             candidate_ids = await self.storage.find_workers_for_skill(task_type)
@@ -481,7 +450,7 @@ class Dispatcher:
             selected_worker = self._select_best_value(capable_workers, task_type)
         elif dispatch_strategy == "overflow":
             selected_worker = await self._select_overflow(capable_workers, task_type, max_cost=max_cost)
-        else:  # "default"
+        else:
             selected_worker = self._select_default(capable_workers, task_type)
 
         worker_id = selected_worker.get("worker_id")
@@ -517,7 +486,7 @@ class Dispatcher:
             metadata=job_state.get("metadata"),
             timestamp=time(),
         )
-        inject(payload_obj.tracing_context, context=job_state.get("tracing_context"))
+        telemetry.inject(payload_obj.tracing_context, context=job_state.get("tracing_context"))
         payload = to_dict(payload_obj)
 
         try:
@@ -531,7 +500,6 @@ class Dispatcher:
                 f"Task {task_id} with priority {priority} successfully enqueued for worker {worker_id}",
             )
 
-            # Record dispatch details in state ATOMICALLY
             now_ts = time()
 
             async def _update_dispatch_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -544,9 +512,15 @@ class Dispatcher:
                     branch_dispatched = state.setdefault("branch_dispatched_at", {}) or {}
                     branch_dispatched[task_id] = now_ts
                     state["branch_dispatched_at"] = branch_dispatched
+
+                    # ALSO save task info so it's not lost between parallel dispatches
+                    tasks_info = state.setdefault("parallel_tasks_info", {}) or {}
+                    tasks_info[task_id] = task_info
+                    state["parallel_tasks_info"] = tasks_info
                 else:
                     state["assigned_worker_id"] = worker_id
                     state["task_dispatched_at"] = now_ts
+                    state["current_task_info"] = task_info
 
                 state["current_task_id"] = task_id
                 state["task_worker_id"] = worker_id

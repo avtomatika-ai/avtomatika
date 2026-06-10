@@ -5,8 +5,8 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import asyncio
 from abc import ABC
+from asyncio import sleep
 from contextlib import suppress
 from datetime import datetime
 from logging import getLogger
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS job_history (
     worker_id TEXT,
     origin_task_id TEXT,
     attempt_number INTEGER,
+    tracing_context JSONB,
     context_snapshot JSONB
 );
 
@@ -79,7 +80,6 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
 
         for attempt in range(1, max_retries + 1):
             try:
-                # We use init parameter to configure each new connection in the pool
                 self._pool = await create_pool(dsn=self._dsn, init=self._setup_connection)
                 if not self._pool:
                     raise RuntimeError("Failed to create a connection pool.")
@@ -88,12 +88,13 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
                     await conn.execute(CREATE_JOB_HISTORY_TABLE_PG)
                     await conn.execute(CREATE_WORKER_HISTORY_TABLE_PG)
 
-                    # Migration: Add client_token column if it doesn't exist
-                    try:
+                    with suppress(PostgresError):
                         await conn.execute("ALTER TABLE job_history ADD COLUMN client_token TEXT;")
-                        logger.info("Migrated PostgreSQL: added client_token column to job_history.")
+
+                    try:
+                        await conn.execute("ALTER TABLE job_history ADD COLUMN tracing_context JSONB;")
+                        logger.info("Migrated PostgreSQL: added tracing_context column to job_history.")
                     except PostgresError:
-                        # Column likely already exists
                         pass
 
                     await conn.execute(CREATE_JOB_ID_INDEX_PG)
@@ -107,7 +108,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
                         f"PostgreSQL history storage initialization attempt {attempt}/{max_retries} failed: {e}. "
                         f"Retrying in {retry_delay}s..."
                     )
-                    await asyncio.sleep(retry_delay)
+                    await sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, 10.0)
                 else:
                     logger.error(f"Failed to initialize PostgreSQL history storage after {max_retries} attempts: {e}")
@@ -129,20 +130,30 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             INSERT INTO job_history (
                 event_id, job_id, client_token, timestamp, state, event_type, duration_ms,
                 previous_state, next_state, worker_id, origin_task_id, attempt_number,
-                context_snapshot
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                tracing_context, context_snapshot
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         """
         now = datetime.now(self.tz)
 
         context_snapshot = event_data.get("context_snapshot")
         context_snapshot_json = dumps(context_snapshot).decode("utf-8") if context_snapshot else None
 
-        # Extract client_token from event_data
+        tracing_context = event_data.get("tracing_context")
+        if tracing_context:
+            logger.debug(
+                f"History PG: job {event_data.get('job_id')} event {event_data.get('event_type')} HAS TRACING CONTEXT."
+            )
+        else:
+            logger.warning(
+                f"History PG: job {event_data.get('job_id')} event {event_data.get('event_type')} NO TRACING CONTEXT!"
+            )
+
+        tracing_context_json = dumps(tracing_context).decode("utf-8") if tracing_context else None
+
         client_token = event_data.get("client_token") or event_data.get("metadata", {}).get("client")
 
         duration_ms = event_data.get("duration_ms")
         if duration_ms is not None:
-            # Ensure it is a valid integer and not negative (avoids int32 overflow/underflow issues)
             try:
                 duration_ms = max(0, int(duration_ms))
             except (ValueError, TypeError):
@@ -161,6 +172,7 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
             event_data.get("worker_id"),
             event_data.get("origin_task_id"),
             event_data.get("attempt_number"),
+            tracing_context_json,
             context_snapshot_json,
         )
         try:
@@ -204,6 +216,10 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
         if isinstance(item.get("context_snapshot"), str):
             with suppress(Exception):
                 item["context_snapshot"] = loads(item["context_snapshot"])
+
+        if isinstance(item.get("tracing_context"), str):
+            with suppress(Exception):
+                item["tracing_context"] = loads(item["tracing_context"])
 
         if isinstance(item.get("worker_info_snapshot"), str):
             with suppress(Exception):
@@ -302,16 +318,6 @@ class PostgresHistoryStorage(HistoryStorageBase, ABC):
                 for row in rows:
                     if row["status"]:
                         summary[row["status"]] = row["count"]
-                return summary
-        except PostgresError as e:
-            logger.error(f"Failed to get job summary from PostgreSQL: {e}")
-            return {}
-        summary = {}
-        try:
-            async with self._pool.acquire() as conn:
-                rows = await conn.fetch(query)
-                for row in rows:
-                    summary[row["status"]] = row["count"]
                 return summary
         except PostgresError as e:
             logger.error(f"Failed to get job summary from PostgreSQL: {e}")

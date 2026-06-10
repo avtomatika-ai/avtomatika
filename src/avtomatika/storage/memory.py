@@ -244,30 +244,6 @@ class MemoryStorage(StorageBackend):
                         break
             return candidates
 
-    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
-        """Finds idle workers that have the specific resource (e.g. model, artifact) in hot cache."""
-        async with self._lock:
-            now = monotonic()
-            candidates = []
-            for worker_id, info in self._workers.items():
-                if self._worker_ttls.get(worker_id, 0) <= now:
-                    continue
-                if info.get("status", "idle") != "idle":
-                    continue
-
-                supported = info.get("supported_skills", [])
-                skill_matches = False
-                for skill in supported:
-                    name = getattr(skill, "name", skill.get("name"))
-                    skill_type = getattr(skill, "type", skill.get("type"))
-                    if skill_name in (name, skill_type):
-                        skill_matches = True
-                        break
-
-                if skill_matches and resource_id in info.get("hot_cache", []):
-                    candidates.append(worker_id)
-            return candidates
-
     async def find_workers_by_hot_skill(self, skill_name: str) -> list[str]:
         """Finds idle workers that have the specific skill marked as 'hot'."""
         async with self._lock:
@@ -280,10 +256,10 @@ class MemoryStorage(StorageBackend):
                     continue
 
                 hot_skills = info.get("hot_skills", [])
-                for skill in hot_skills or []:
-                    name = getattr(skill, "name", skill.get("name"))
-                    skill_type = getattr(skill, "type", skill.get("type"))
-                    if skill_name in (name, skill_type):
+                for hs in hot_skills or []:
+                    # Handle both strings and old objects if any
+                    hs_name = hs if isinstance(hs, str) else hs.get("name")
+                    if hs_name == skill_name:
                         candidates.append(worker_id)
                         break
             return candidates
@@ -391,12 +367,10 @@ class MemoryStorage(StorageBackend):
     async def get_ttl(self, key: str) -> int:
         async with self._lock:
             now = monotonic()
-            # Check generic keys first (used for ratelimit)
             if key in self._generic_key_ttls:
                 ttl = self._generic_key_ttls[key] - now
                 return int(ttl) if ttl > 0 else -2
 
-            # Check worker keys
             for prefix in ["orchestrator:worker:info:", "orchestrator:worker:heartbeat:"]:
                 if key.startswith(prefix):
                     worker_id = key[len(prefix) :]
@@ -471,7 +445,6 @@ class MemoryStorage(StorageBackend):
         async with self._lock:
             if worker_id in self._workers:
                 worker = self._workers[worker_id]
-                # Internal counter for dispatcher, not related to RXON Heartbeat usage
                 worker["_internal_load"] = worker.get("_internal_load", 0) + 1
 
     async def decrement_worker_load(self, worker_id: str) -> None:
@@ -496,12 +469,10 @@ class MemoryStorage(StorageBackend):
 
     async def find_worker_token(self, worker_id: str) -> str | None:
         async with self._lock:
-            # 1. Try direct match
             token = self._worker_tokens.get(worker_id)
             if token:
                 return token
 
-            # 2. Try patterns
             for key, val in self._worker_tokens.items():
                 if key.startswith("pattern:"):
                     pattern = key.removeprefix("pattern:")
@@ -542,6 +513,16 @@ class MemoryStorage(StorageBackend):
             "average_bid": 0,
             "error": "Statistics are not supported for MemoryStorage backend.",
         }
+
+    async def save_worker_refresh_token(self, worker_id: str, token: str, ttl: int) -> None:
+        async with self._lock:
+            self._generic_keys[f"sts:refresh:{token}"] = worker_id
+            self._generic_key_ttls[f"sts:refresh:{token}"] = monotonic() + ttl
+
+    async def verify_worker_refresh_token(self, token: str) -> str | None:
+        async with self._lock:
+            await self._clean_expired()
+            return self._generic_keys.get(f"sts:refresh:{token}")
 
     async def acquire_lock(self, key: str, holder_id: str, ttl: int) -> bool:
         async with self._lock:

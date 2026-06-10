@@ -124,3 +124,63 @@ def test_aggregator_inferred_name():
         pass
 
     assert "my_aggregator" in bp.aggregator_handlers
+
+
+def test_find_handler_aggregator_fallback():
+    """Verifies that find_handler finds aggregators if no regular handler exists."""
+    bp = Blueprint("test_bp")
+
+    @bp.aggregator("collect")
+    async def collect(aggregation_results, actions):
+        pass
+
+    handler = bp.find_handler("collect", context=None)
+    assert handler == collect
+
+
+def test_find_handler_priority():
+    """Verifies that regular handlers have priority over aggregators."""
+    bp = Blueprint("test_bp")
+
+    @bp.handler("both")
+    async def regular(actions):
+        pass
+
+    @bp.aggregator("both")
+    async def aggregator(aggregation_results, actions):
+        pass
+
+    handler = bp.find_handler("both", context=None)
+    assert handler == regular
+
+
+def test_blueprint_get_contract():
+    """Verifies that get_contract returns all relevant blueprint metadata."""
+    bp = Blueprint(name="test_bp", api_endpoint="/test", api_version="v2")
+
+    @bp.handler("start", is_start=True)
+    async def start(actions):
+        actions.go_to("end")
+
+    @bp.handler("end", is_end=True)
+    async def end():
+        pass
+
+    @bp.aggregator("agg")
+    async def agg(aggregation_results, actions):
+        pass
+
+    bp.event("my_event", {"type": "object"})
+
+    contract = bp.get_contract()
+
+    assert contract["name"] == "test_bp"
+    assert contract["api_endpoint"] == "/test"
+    assert contract["api_version"] == "v2"
+    assert contract["start_state"] == "start"
+    assert "end" in contract["end_states"]
+    assert "start" in contract["handlers"]
+    assert "end" in contract["handlers"]
+    assert "agg" in contract["aggregators"]
+    assert "my_event" in contract["events_schema"]
+    assert isinstance(contract["conditional_handlers"], list)

@@ -8,8 +8,8 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from rxon.constants import JOB_STATUS_FAILED, TASK_STATUS_SUCCESS
 
-from avtomatika.constants import JOB_STATUS_FAILED, TASK_STATUS_SUCCESS
 from avtomatika.services.worker_service import WorkerService
 from avtomatika.storage.memory import MemoryStorage
 
@@ -25,7 +25,7 @@ async def test_late_result_handling():
     engine = MagicMock()
     engine.worker_service = None  # Not needed for this test
 
-    service = WorkerService(storage, history, config, engine)
+    service = WorkerService(storage, history, config, engine, metrics=MagicMock())
 
     job_id = "late-job"
     # Pre-setup failed job state in real memory storage

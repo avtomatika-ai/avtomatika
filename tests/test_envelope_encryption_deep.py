@@ -70,7 +70,9 @@ async def test_auth_with_encryption(storage, config):
 
     # Attempt authentication with the PLAIN token
     # It should pass because verify_worker_auth will decrypt the stored one for comparison
-    authenticated_id = await verify_worker_auth(storage, config, raw_token, None, worker_id)
+    authenticated_id = await verify_worker_auth(
+        storage, config, raw_token, None, worker_id, metrics=MagicMock(), token_hash_cache={}
+    )
     assert authenticated_id[0] == worker_id
 
 
@@ -85,7 +87,7 @@ async def test_hmac_verification_with_encryption(storage, config):
     await storage.set_worker_token(worker_id, encrypted)
 
     # 2. Prepare worker_service
-    service = WorkerService(storage, MagicMock(), config, MagicMock())
+    service = WorkerService(storage, MagicMock(), config, MagicMock(), MagicMock())
 
     # 3. Create a signed payload using the PLAIN token
     payload = {"event": "test", "timestamp": int(time.time()), "data": {"foo": "bar"}}
@@ -111,7 +113,7 @@ async def test_wrong_encryption_key_fails(storage, config):
     config.REDIS_ENCRYPTION_KEY = "key-B"
 
     with pytest.raises(PermissionError, match="Failed to decrypt worker token"):
-        await verify_worker_auth(storage, config, raw_token, None, worker_id)
+        await verify_worker_auth(storage, config, raw_token, None, worker_id, metrics=MagicMock(), token_hash_cache={})
 
 
 @pytest.mark.asyncio
@@ -130,10 +132,14 @@ async def test_mixed_tokens_support(storage, config):
         await storage.set_worker_token(worker_id_plain, "pass2")
 
     # Auth encrypted - OK
-    auth_res = await verify_worker_auth(storage, config, "pass1", None, worker_id_enc)
+    auth_res = await verify_worker_auth(
+        storage, config, "pass1", None, worker_id_enc, metrics=MagicMock(), token_hash_cache={}
+    )
     assert auth_res[0] == worker_id_enc
 
     # Auth plain - FAILS because encryption is ACTIVE globally and it tries to decrypt "pass2" as Fernet
     # This is intended: once encryption is on, all master tokens in Redis MUST be encrypted.
     with pytest.raises(PermissionError):
-        await verify_worker_auth(storage, config, "pass2", None, worker_id_plain)
+        await verify_worker_auth(
+            storage, config, "pass2", None, worker_id_plain, metrics=MagicMock(), token_hash_cache={}
+        )

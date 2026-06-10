@@ -29,7 +29,7 @@ order_pipeline = Blueprint(
 )
 ```
 
-## Paso 3: Definir Estados y Manejadores
+## Paso 3: Definir Estados и Manejadores
 
 Cada paso en tu proceso es un "estado" con una función "manejadora" adjunta.
 
@@ -37,37 +37,36 @@ Cada paso en tu proceso es un "estado" con una función "manejadora" adjunta.
 -   **Estado Inicial** debe haber exactamente uno, marcado con `is_start=True`.
 -   **Estados Finales** pueden ser múltiples, marcados con `is_end=True`.
 
-> **Consejo:** El nombre del estado en `@bp.handler()` y `@bp.aggregator()` ahora es opcional. Si se omite, se utilizará el nombre de la función.
-
-El manejador recibe un argumento — `context`, que contiene toda la información de la tarea y métodos de control del proceso (`context.actions`).
+El manejador recibe argumentos a través de **Inyección de Dependencias**. Puede solicitar:
+- `initial_data`: Datos originales del trabajo.
+- `actions`: Objeto `ActionFactory` para controlar el proceso.
+- `state_history`: Historial completo del trabajo.
+- `job_id`: ID único del trabajo.
 
 ```python
+from avtomatika import ActionFactory
+
 @order_pipeline.handler(is_start=True)
-async def start(context):
+async def start(initial_data: dict, actions: ActionFactory, job_id: str):
     """
     Manejador inicial. Llamado cuando se crea el Job.
     """
-    print(f"Trabajo {context.job_id}: procesamiento de pedido iniciado.")
-    print(f"Datos de entrada: {context.initial_data}")
-
-    # Guardar algo en el historial para los siguientes pasos
-    context.state_history["processed_by"] = "start"
+    print(f"Trabajo {job_id}: procesamiento de pedido iniciado.")
+    print(f"Datos de entrada: {initial_data}")
 
     # Transición al siguiente paso
-    context.actions.go_to("dispatch_to_worker")
+    actions.go_to("dispatch_to_worker")
 
 
 @order_pipeline.handler
-async def dispatch_to_worker(context):
+async def dispatch_to_worker(initial_data: dict, actions: ActionFactory):
     """
     Este manejador despacha la tarea al worker.
     """
-    print(f"Trabajo {context.job_id}: despachando tarea 'check_inventory' al worker.")
-
     # Pausar pipeline y esperar resultado del worker
-    context.actions.dispatch_task(
+    actions.dispatch_task(
         task_type="check_inventory",  # Tipo de tarea que entiende el worker
-        params={"items": context.initial_data.get("items")},
+        params={"items": initial_data.get("items")},
         
         # Definir a dónde va el proceso dependiendo de la respuesta del worker
         transitions={
@@ -78,40 +77,37 @@ async def dispatch_to_worker(context):
     )
 
 @order_pipeline.handler
-async def inventory_ok(context):
+async def inventory_ok(actions: ActionFactory, state_history: dict):
     """
     Llamado si el worker confirmó la disponibilidad de artículos.
     """
-    # Los datos devueltos por el worker están disponibles en el campo 'result'
-    # (es un atajo para el último paso en state_history)
-    worker_data = context.result
-    print(f"Trabajo {context.job_id}: artículos en stock. Info del worker: {worker_data}")
-    
-    context.actions.go_to("finished_successfully")
+    # Los datos devueltos por el worker están disponibles en el historial
+    print("Artículos disponibles. Finalizando con éxito.")
+    actions.go_to("finished_successfully")
 
 
 @order_pipeline.handler(is_end=True)
-async def inventory_failed(context):
+async def inventory_failed(actions: ActionFactory):
     """
     Estado final si los artículos están agotados.
     """
-    print(f"Trabajo {context.job_id}: no se puede procesar el pedido, artículos agotados.")
+    print("No se puede procesar el pedido, artículos agotados.")
 
 
 @order_pipeline.handler(is_end=True)
-async def generic_failure(context):
+async def generic_failure(actions: ActionFactory):
     """
     Estado final para fallos genéricos.
     """
-    print(f"Trabajo {context.job_id}: ocurrió un error de procesamiento.")
+    print("Ocurrió un error de procesamiento.")
 
 
 @order_pipeline.handler(is_end=True)
-async def finished_successfully(context):
+async def finished_successfully(actions: ActionFactory):
     """
     Estado final en caso de éxito.
     """
-    print(f"Trabajo {context.job_id}: pedido procesado exitosamente!")
+    print("¡Pedido procesado exitosamente!")
 
 ```
 
@@ -135,7 +131,7 @@ from mi_servicio.blueprints import order_pipeline  # Importar nuestro blueprint
 
 engine = OrchestratorEngine(storage, config)
 
-# Registrar blueprint en el motor (¡Activa la validación!)
+# Registrar blueprint в motor (¡Activa la validación!)
 engine.register_blueprint(order_pipeline)
 
 # Ejecutar motor

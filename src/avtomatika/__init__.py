@@ -12,12 +12,17 @@ This module exposes the primary classes for building and running state-driven au
 """
 
 from contextlib import suppress
-from importlib.metadata import version
 
-__version__ = version("avtomatika")
+try:
+    from importlib.metadata import distribution
+
+    __version__ = distribution("avtomatika").metadata.get("Version") or "0.0.0-dev"  # type: ignore[attr-defined]
+except Exception:
+    __version__ = "0.0.0-dev"
 
 from rxon.validators import is_valid_identifier, validate_identifier
 
+from . import telemetry
 from .blueprint import Blueprint
 from .context import ActionFactory
 from .data_types import JobContext
@@ -32,6 +37,7 @@ __all__ = [
     "StorageBackend",
     "is_valid_identifier",
     "validate_identifier",
+    "telemetry",
 ]
 
 with suppress(ImportError):

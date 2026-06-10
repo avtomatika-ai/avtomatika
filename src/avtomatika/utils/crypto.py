@@ -4,49 +4,45 @@
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
-import base64
-import hashlib
+from base64 import urlsafe_b64encode
+from hashlib import sha256
 from logging import getLogger
 
 from cryptography.fernet import Fernet, InvalidToken
 
 logger = getLogger(__name__)
 
-# Cache Fernet instances to avoid repeated key derivation
-# Format: {raw_key: Fernet}
-_FERNET_CACHE: dict[str, Fernet] = {}
 
-
-def get_fernet(key: str) -> Fernet:
+def get_fernet(key: str, cache: dict[str, Fernet] | None = None) -> Fernet:
     """
     Returns a Fernet instance derived from the provided key.
     Uses SHA-256 to ensure any arbitrary string can be used as a key.
     """
-    if key in _FERNET_CACHE:
-        return _FERNET_CACHE[key]
+    if cache is not None and key in cache:
+        return cache[key]
 
     # Derive a valid 32-byte URL-safe base64 key
-    digest = hashlib.sha256(key.encode()).digest()
-    b64_key = base64.urlsafe_b64encode(digest)
+    digest = sha256(key.encode()).digest()
+    b64_key = urlsafe_b64encode(digest)
     fernet = Fernet(b64_key)
 
-    # Simple cache cleanup if it grows too large
-    if len(_FERNET_CACHE) > 100:
-        _FERNET_CACHE.clear()
+    if cache is not None:
+        if len(cache) > 100:
+            cache.clear()
+        cache[key] = fernet
 
-    _FERNET_CACHE[key] = fernet
     return fernet
 
 
-def encrypt_token(token: str, key: str) -> str:
+def encrypt_token(token: str, key: str, cache: dict[str, Fernet] | None = None) -> str:
     """Encrypts a token using the provided key."""
     if not token:
         return ""
-    f = get_fernet(key)
+    f = get_fernet(key, cache)
     return str(f.encrypt(token.encode()).decode())
 
 
-def decrypt_token(cipher_token: str, key: str) -> str | None:
+def decrypt_token(cipher_token: str, key: str, cache: dict[str, Fernet] | None = None) -> str | None:
     """
     Decrypts a token using the provided key.
     Returns None if decryption fails (e.g. invalid key).
@@ -54,7 +50,7 @@ def decrypt_token(cipher_token: str, key: str) -> str | None:
     if not cipher_token:
         return None
     try:
-        f = get_fernet(key)
+        f = get_fernet(key, cache)
         return str(f.decrypt(cipher_token.encode()).decode())
     except InvalidToken:
         logger.error("Failed to decrypt worker token. Encryption key might be incorrect.")

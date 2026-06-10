@@ -3,8 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -87,11 +85,16 @@ async def test_graceful_shutdown_waits_for_tasks():
     app[SCHEDULER_TASK_KEY] = done_task
 
     # Mock services to verify stop() is called
-    engine.app[EXECUTOR_KEY] = MagicMock()
-    engine.app[SCHEDULER_KEY] = MagicMock()
-    engine.app[WATCHER_KEY] = MagicMock()  # Should receive stop too
-    engine.app[REPUTATION_CALCULATOR_KEY] = MagicMock()
-    engine.app[HEALTH_CHECKER_KEY] = MagicMock()
+    engine.executor = MagicMock()
+    engine.app[EXECUTOR_KEY] = engine.executor
+    engine.scheduler = MagicMock()
+    engine.app[SCHEDULER_KEY] = engine.scheduler
+    engine.watcher = MagicMock()
+    engine.app[WATCHER_KEY] = engine.watcher
+    engine.reputation_calculator = MagicMock()
+    engine.app[REPUTATION_CALCULATOR_KEY] = engine.reputation_calculator
+    engine.health_checker = MagicMock()
+    engine.app[HEALTH_CHECKER_KEY] = engine.health_checker
 
     engine.ws_manager = AsyncMock()
     engine.webhook_sender = MagicMock()

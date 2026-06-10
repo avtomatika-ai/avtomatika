@@ -6,9 +6,11 @@
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
+from src.avtomatika.app_keys import S3_SERVICE_KEY
 from src.avtomatika.blueprint import Blueprint
 from src.avtomatika.config import Config
 from src.avtomatika.context import ActionFactory
+from src.avtomatika.data_types import JobContext
 from src.avtomatika.executor import JobExecutor
 
 
@@ -34,7 +36,7 @@ def mock_engine():
 
 @pytest.fixture
 def job_executor(mock_engine):
-    return JobExecutor(mock_engine, mock_engine.history_storage)
+    return JobExecutor(mock_engine, mock_engine.history_storage, metrics=MagicMock())
 
 
 @pytest.mark.asyncio
@@ -533,3 +535,78 @@ async def test_data_stores_attribute_access(job_executor):
 
     await job_executor._process_job(job_id, "msg-1")
     # If no AttributeError, success
+
+
+@pytest.mark.asyncio
+async def test_executor_injection_deep():
+    """Verifies that all possible parameters are correctly injected into handlers."""
+    engine = MagicMock()
+    history = AsyncMock()
+    storage = AsyncMock()
+    engine.storage = storage
+    engine.history_storage = history
+    metrics = MagicMock()
+
+    executor = JobExecutor(engine, history, metrics=metrics)
+
+    bp = Blueprint("test_bp")
+
+    injected_values = {}
+
+    @bp.handler("start", is_start=True)
+    async def start(
+        job_id,
+        current_state,
+        initial_data,
+        state_history,
+        actions,
+        task_files,
+        context,
+        some_field_from_history,
+        some_field_from_initial,
+    ):
+        injected_values["job_id"] = job_id
+        injected_values["current_state"] = current_state
+        injected_values["initial_data"] = initial_data
+        injected_values["state_history"] = state_history
+        injected_values["actions"] = actions
+        injected_values["task_files"] = task_files
+        injected_values["context"] = context
+        injected_values["history_field"] = some_field_from_history
+        injected_values["initial_field"] = some_field_from_initial
+
+    engine.blueprints = {"test_bp": bp}
+    bp.validate()
+
+    config = MagicMock()
+    config.JOB_MAX_RETRIES = 3
+    engine.config = config
+
+    job_id = "job-123"
+    job_state = {
+        "id": job_id,
+        "blueprint_name": "test_bp",
+        "current_state": "start",
+        "status": "running",
+        "initial_data": {"some_field_from_initial": "val-init"},
+        "state_history": {"some_field_from_history": "val-hist"},
+        "client_config": {"token": "t1", "plan": "p1"},
+    }
+    storage.get_job_state.return_value = job_state
+
+    mock_s3 = MagicMock()
+    mock_task_files = MagicMock()
+    mock_s3.get_task_files.return_value = mock_task_files
+    engine.app = {S3_SERVICE_KEY: mock_s3}
+
+    await executor._process_job(job_id, "msg-1")
+
+    assert injected_values["job_id"] == job_id
+    assert injected_values["current_state"] == "start"
+    assert injected_values["initial_data"] == job_state["initial_data"]
+    assert injected_values["state_history"] == job_state["state_history"]
+    assert injected_values["actions"] is not None
+    assert injected_values["task_files"] == mock_task_files
+    assert isinstance(injected_values["context"], JobContext)
+    assert injected_values["history_field"] == "val-hist"
+    assert injected_values["initial_field"] == "val-init"

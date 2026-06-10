@@ -10,20 +10,17 @@ import msgpack
 import pytest
 import pytest_asyncio
 from fakeredis import aioredis as redis
+from rxon.constants import (
+    JOB_STATUS_WAITING_FOR_PARALLEL,
+)
 
 from avtomatika.blueprint import Blueprint
 from avtomatika.config import Config
-from avtomatika.constants import (
-    JOB_STATUS_WAITING_FOR_PARALLEL,
-    JOB_STATUS_WAITING_FOR_WORKER,
-)
 from avtomatika.dispatcher import Dispatcher
 from avtomatika.engine import OrchestratorEngine
 from avtomatika.executor import JobExecutor
 from avtomatika.services.worker_service import WorkerService
 from avtomatika.storage.redis import RedisStorage
-from avtomatika.utils.webhook_sender import WebhookSender
-from avtomatika.ws_manager import WebSocketManager
 
 
 @pytest_asyncio.fixture
@@ -44,41 +41,11 @@ def config():
 @pytest_asyncio.fixture
 async def engine(redis_storage, config):
     engine = OrchestratorEngine(redis_storage, config)
+    engine.metrics = MagicMock()
 
     # Initialize required components that engine expected
-    engine.dispatcher = MagicMock(spec=Dispatcher)
-    engine.worker_service = MagicMock(spec=WorkerService)
-
-    async def mock_dispatch(job_state, task_info):
-        # Dispatcher.dispatch is expected to return the updated state from storage
-        # to prevent 'lost updates'.
-        job_id = job_state["id"]
-        tid = task_info.get("task_id")
-        active_branches = job_state.get("active_branches") or []
-        is_parallel = tid in active_branches
-
-        # Reload latest from storage to simulate real environment
-        latest_state = await redis_storage.get_job_state(job_id) or job_state
-
-        # Use provided worker if possible, or fallback to mock
-        worker_id = task_info.get("worker_id") or "mock-worker"
-
-        if is_parallel:
-            latest_state.setdefault("branch_worker_ids", {})[tid] = worker_id
-            latest_state.setdefault("parallel_tasks_info", {})[tid] = task_info
-            # IMPORTANT: Do NOT change overall status for parallel branches
-            latest_state["status"] = JOB_STATUS_WAITING_FOR_PARALLEL
-        else:
-            latest_state["assigned_worker_id"] = worker_id
-            latest_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
-
-        await redis_storage.save_job_state(job_id, latest_state)
-        return latest_state
-
-    engine.dispatcher.dispatch = AsyncMock(side_effect=mock_dispatch)
-    engine.ws_manager = WebSocketManager(engine)
-    engine.webhook_sender = WebhookSender(AsyncMock())
-    engine.app = MagicMock()  # Mock aiohttp App
+    engine.dispatcher = Dispatcher(redis_storage, config, metrics=engine.metrics)
+    engine.worker_service = WorkerService(redis_storage, engine.history_storage, config, engine, metrics=engine.metrics)
 
     # Simple parallel blueprint
     parallel_bp = Blueprint(name="parallel_bp")
@@ -98,16 +65,23 @@ async def engine(redis_storage, config):
     async def end():
         pass
 
+    # Register blueprints engine.setup()ed from the test if any
     parallel_bp.validate()
     engine.register_blueprint(parallel_bp)
+
+    # Register fake workers for the tasks used in tests
+    for worker_id, skill in [("worker-a", "task_a"), ("worker-b", "task_b"), ("worker-generic", "test")]:
+        w_data = {"worker_id": worker_id, "supported_skills": [{"name": skill, "version": "1.0.0"}]}
+        await redis_storage.register_worker(worker_id, w_data, 60)
 
     # Mock history
     engine.history_storage = MagicMock()
     engine.history_storage.log_job_event = AsyncMock()
     engine.history_storage.log_worker_event = AsyncMock()
 
-    # We do NOT call on_startup to avoid background task complexities
-    # But we need to initialize storage manually if needed
+    # setup() is now synchronous
+    engine.setup()
+
     await redis_storage.initialize()
 
     yield engine
@@ -118,7 +92,7 @@ async def test_parallel_branch_isolation_happy_path(engine, redis_storage):
     """
     Test that parallel branches have isolated state (worker IDs, timestamps).
     """
-    executor = JobExecutor(engine, engine.history_storage)
+    executor = JobExecutor(engine, engine.history_storage, metrics=engine.metrics)
     job_id = "parallel-iso-job"
 
     # 1. Start job
@@ -141,45 +115,37 @@ async def test_parallel_branch_isolation_happy_path(engine, redis_storage):
     assert len(active_branches) == 2
 
     # 2. Simulate worker service processing results for both branches
-    worker_service = WorkerService(redis_storage, engine.history_storage, engine.config, engine)
+    worker_service = WorkerService(redis_storage, engine.history_storage, engine.config, engine, metrics=engine.metrics)
+    with patch.object(worker_service, "_verify_zero_trust", AsyncMock()):
+        # Branch 1 (Task A)
+        tid_a = active_branches[0]
+        await worker_service.process_task_result(
+            {
+                "job_id": job_id,
+                "task_id": tid_a,
+                "worker_id": "worker-a",
+                "status": "success",
+                "data": {"res": "A"},
+                "timestamp": time.time(),
+                "security": {"signature": "sig-a", "signer_id": "worker-a"},
+            },
+            authenticated_worker_id="worker-a",
+        )
 
-    # Manually update branch_worker_ids in storage to match our expected workers
-    # otherwise WorkerService will complain about hijacking (assigned to 'mock-worker')
-    tid_a = active_branches[0]
-    tid_b = active_branches[1]
-
-    state["branch_worker_ids"] = {tid_a: "worker-a", tid_b: "worker-b"}
-    await redis_storage.save_job_state(job_id, state)
-
-    # Branch 1 (Task A)
-    tid_a = active_branches[0]
-    await worker_service.process_task_result(
-        {
-            "job_id": job_id,
-            "task_id": tid_a,
-            "worker_id": "worker-a",
-            "status": "success",
-            "data": {"res": "A"},
-            "timestamp": time.time(),
-            "security": {"signature": "sig-a", "signer_id": "worker-a"},
-        },
-        authenticated_worker_id="worker-a",
-    )
-
-    # Branch 2 (Task B)
-    tid_b = active_branches[1]
-    await worker_service.process_task_result(
-        {
-            "job_id": job_id,
-            "task_id": tid_b,
-            "worker_id": "worker-b",
-            "status": "success",
-            "data": {"res": "B"},
-            "timestamp": time.time(),
-            "security": {"signature": "sig-b", "signer_id": "worker-b"},
-        },
-        authenticated_worker_id="worker-b",
-    )
+        # Branch 2 (Task B)
+        tid_b = active_branches[1]
+        await worker_service.process_task_result(
+            {
+                "job_id": job_id,
+                "task_id": tid_b,
+                "worker_id": "worker-b",
+                "status": "success",
+                "data": {"res": "B"},
+                "timestamp": time.time(),
+                "security": {"signature": "sig-b", "signer_id": "worker-b"},
+            },
+            authenticated_worker_id="worker-b",
+        )
 
     # 3. Verify Isolated state in Redis
     final_state = await redis_storage.get_job_state(job_id)
@@ -222,21 +188,26 @@ async def test_atomic_aggregation_concurrency(engine, redis_storage):
         },
     )
 
-    worker_service = WorkerService(redis_storage, engine.history_storage, engine.config, engine)
+    worker_service = WorkerService(redis_storage, engine.history_storage, engine.config, engine, metrics=engine.metrics)
 
     async def send_result(tid, i):
-        await worker_service.process_task_result(
-            {
-                "job_id": job_id,
-                "task_id": tid,
-                "worker_id": f"worker-{i}",
-                "status": "success",
-                "data": {"val": i},
-                "timestamp": time.time(),
-                "security": {"signature": "s", "signer_id": f"worker-{i}"},
-            },
-            authenticated_worker_id=f"worker-{i}",
-        )
+        # Register the worker first so WorkerService doesn't fail on hijacking check
+        w_data = {"worker_id": f"worker-{i}", "supported_skills": [{"name": "any", "version": "1.0.0"}]}
+        await redis_storage.register_worker(f"worker-{i}", w_data, 60)
+
+        with patch.object(worker_service, "_verify_zero_trust", AsyncMock()):
+            await worker_service.process_task_result(
+                {
+                    "job_id": job_id,
+                    "task_id": tid,
+                    "worker_id": f"worker-{i}",
+                    "status": "success",
+                    "data": {"val": i},
+                    "timestamp": time.time(),
+                    "security": {"signature": "s", "signer_id": f"worker-{i}"},
+                },
+                authenticated_worker_id=f"worker-{i}",
+            )
 
     # Launch all concurrently
     await asyncio.gather(*[send_result(tid, i) for i, tid in enumerate(branch_ids)])
@@ -381,7 +352,7 @@ async def test_lost_update_prevention_parallel_dispatch(engine, redis_storage):
     Verify that dispatching multiple parallel tasks doesn't lose 'parallel_tasks_info'.
     This tests the fix in executor.py where job_state is updated from dispatcher.
     """
-    executor = JobExecutor(engine, engine.history_storage)
+    executor = JobExecutor(engine, engine.history_storage, metrics=engine.metrics)
     job_id = "lost-update-job"
 
     # Prepare start state

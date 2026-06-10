@@ -165,7 +165,7 @@ async def test_worker_service_decrements_load_on_result(real_redis_storage):
     engine.config = config
 
     # Initialize WorkerService with required args
-    worker_service = WorkerService(engine=engine, storage=storage, history_storage=MagicMock(), config=config)
+    worker_service = WorkerService(storage, MagicMock(), config, engine, MagicMock())
 
     worker_id = "test-worker-service"
     await storage.register_worker(worker_id, {"status": "idle"}, ttl=60)

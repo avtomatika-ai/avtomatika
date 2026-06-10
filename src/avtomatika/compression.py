@@ -57,7 +57,7 @@ async def compression_middleware(
         or not encoding
         or "Content-Encoding" in response.headers
         or not hasattr(response, "body")
-        or not isinstance(response.body, bytes)  # Can only compress bytes
+        or response.body is None
     ):
         return response
 
@@ -67,7 +67,6 @@ async def compression_middleware(
     try:
         compressed_body = compress_func(response.body)
 
-        # Create a new response with the compressed body.
         # This is more reliable than modifying the response in-place,
         # as it avoids issues with internal state of the original response object.
         new_response = web.Response(
@@ -86,5 +85,4 @@ async def compression_middleware(
         return new_response
 
     except Exception:
-        # If compression fails, it's safer to return the original uncompressed response.
         return response

@@ -10,6 +10,7 @@ from typing import Any
 
 from aiohttp import web
 
+from .app_keys import CLIENT_CONFIG_KEY
 from .storage.base import StorageBackend
 
 Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
@@ -23,8 +24,7 @@ def quota_middleware_factory(storage: StorageBackend) -> Any:
     @web.middleware
     async def quota_middleware(request: web.Request, handler: Handler) -> web.Response:
         """Checks if the client has enough quota to perform the request."""
-        client_config = request.get("client_config")
-        # If auth middleware did not run or failed to attach config, deny access.
+        client_config = request.get(CLIENT_CONFIG_KEY) or request.get("client_config")
         if not client_config or not client_config.get("token"):
             return web.json_response(
                 {"error": "Client config not found in request"},
@@ -46,7 +46,6 @@ def quota_middleware_factory(storage: StorageBackend) -> Any:
                     status=429,
                 )
         except Exception:
-            # If quota check fails, deny the request to be safe
             return web.json_response({"error": "Failed to check quota"}, status=500)
 
         return await handler(request)

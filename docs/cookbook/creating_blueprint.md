@@ -37,35 +37,36 @@ Each step in your process is a "state" with an attached "handler" function.
 -   **Initial State** must be exactly one, marked with `is_start=True`.
 -   **Final States** can be multiple, marked with `is_end=True`.
 
-Handler receives one argument — `context`, containing all task info and process control methods (`context.actions`).
+The handler receives arguments via **Dependency Injection**. You can request:
+- `initial_data`: Original job input.
+- `actions`: `ActionFactory` object to control the process.
+- `state_history`: Full job history.
+- `job_id`: Unique job ID.
 
 ```python
+from avtomatika import ActionFactory
+
 @order_pipeline.handler(is_start=True)
-async def start_handler(context):
+async def start_handler(initial_data: dict, actions: ActionFactory, job_id: str):
     """
     Initial handler. Called when Job is created.
     """
-    print(f"Job {context.job_id}: order processing started.")
-    print(f"Input data: {context.initial_data}")
-
-    # Save something to history for next steps
-    context.state_history["processed_by"] = "start_handler"
+    print(f"Job {job_id}: order processing started.")
+    print(f"Input data: {initial_data}")
 
     # Transition to next step
-    context.actions.go_to("dispatch_to_worker")
+    actions.go_to("dispatch_to_worker")
 
 
 @order_pipeline.handler
-async def dispatch_to_worker(context):
+async def dispatch_to_worker(initial_data: dict, actions: ActionFactory):
     """
     This handler dispatches task to worker.
     """
-    print(f"Job {context.job_id}: dispatching 'check_inventory' task to worker.")
-
     # Pause pipeline and wait for worker result
-    context.actions.dispatch_task(
+    actions.dispatch_task(
         task_type="check_inventory",  # Task type worker understands
-        params={"items": context.initial_data.get("items")},
+        params={"items": initial_data.get("items")},
         
         # Define where process goes depending on worker response
         transitions={
@@ -76,40 +77,37 @@ async def dispatch_to_worker(context):
     )
 
 @order_pipeline.handler
-async def inventory_ok(context):
+async def inventory_ok(actions: ActionFactory, state_history: dict):
     """
     Called if worker confirmed item availability.
     """
-    # Data returned by worker is available in the 'result' field
-    # (it is a shortcut for the latest step in state_history)
-    worker_data = context.result
-    print(f"Job {context.job_id}: items in stock. Info from worker: {worker_data}")
-    
-    context.actions.go_to("finished_successfully")
+    # Data returned by worker is available in the history
+    print("Items are in stock. Finishing successfully.")
+    actions.go_to("finished_successfully")
 
 
 @order_pipeline.handler(is_end=True)
-async def inventory_failed(context):
+async def inventory_failed(actions: ActionFactory):
     """
     Final state if items out of stock.
     """
-    print(f"Job {context.job_id}: cannot process order, items out of stock.")
+    print("Cannot process order, items out of stock.")
 
 
 @order_pipeline.handler(is_end=True)
-async def generic_failure(context):
+async def generic_failure(actions: ActionFactory):
     """
     Final state for generic failures.
     """
-    print(f"Job {context.job_id}: processing error occurred.")
+    print("Processing error occurred.")
 
 
 @order_pipeline.handler(is_end=True)
-async def finished_successfully(context):
+async def finished_successfully(actions: ActionFactory):
     """
     Final state on success.
     """
-    print(f"Job {context.job_id}: order processed successfully!")
+    print("Order processed successfully!")
 
 ```
 

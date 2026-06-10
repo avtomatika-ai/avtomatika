@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp import web
-from src.avtomatika.engine import OrchestratorEngine
-from src.avtomatika.ratelimit import rate_limit_middleware_factory
 
+from avtomatika.engine import OrchestratorEngine
+from avtomatika.ratelimit import rate_limit_middleware_factory
 from avtomatika.services.worker_service import WorkerService
 
 
@@ -39,15 +39,18 @@ async def test_protection_against_worker_id_spoofing(mock_config):
     by rotating worker_id in each request.
     """
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     # verify_worker_auth returns (spoofed_id, token_hash)
     token = "global_secret"
     token_hash = sha256(token.encode()).hexdigest()
 
-    async def mock_verify(s, c, t, cert, hint):
+    async def mock_verify(s, c, t, cert, hint, m, ch, fc=None):
         return hint, token_hash
 
-    with patch("src.avtomatika.engine.verify_worker_auth", side_effect=mock_verify):
+    with patch("avtomatika.engine.verify_worker_auth", side_effect=mock_verify):
         engine = OrchestratorEngine(storage, mock_config)
+        engine.setup()
         engine.worker_service = AsyncMock()
 
         # Requests with DIFFERENT worker_ids but SAME token
@@ -71,12 +74,15 @@ async def test_worker_limit_isolation_behind_nat(mock_config):
     independent limits even if they would share IP (handled in engine).
     """
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
 
-    async def mock_verify(s, c, t, cert, hint):
+    async def mock_verify(s, c, t, cert, hint, m, ch, fc=None):
         return hint, sha256(t.encode()).hexdigest()
 
-    with patch("src.avtomatika.engine.verify_worker_auth", side_effect=mock_verify):
+    with patch("avtomatika.engine.verify_worker_auth", side_effect=mock_verify):
         engine = OrchestratorEngine(storage, mock_config)
+        engine.setup()
         engine.worker_service = AsyncMock()
 
         # Worker A (token A)
@@ -99,10 +105,13 @@ async def test_rate_limit_fail_open_on_storage_error(mock_config):
     System should log error and allow the message.
     """
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     storage.increment_key_with_ttl.side_effect = Exception("Redis Connection Refused")
 
-    with patch("src.avtomatika.engine.verify_worker_auth", return_value=("w1", "hash")):
+    with patch("avtomatika.engine.verify_worker_auth", return_value=("w1", "hash")):
         engine = OrchestratorEngine(storage, mock_config)
+        engine.setup()
         engine.worker_service = AsyncMock()
 
         # This call should succeed even if rate limiting fails
@@ -118,20 +127,23 @@ async def test_retry_after_only_for_workers(mock_config):
     but NOT in middleware (client) responses.
     """
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     storage.increment_key_with_ttl.return_value = 100  # Definitely blocked
     storage.get_ttl.return_value = 55
 
     # 1. Check Engine (Worker)
-    with patch("src.avtomatika.engine.verify_worker_auth", return_value=("w1", "h1")):
+    with patch("avtomatika.engine.verify_worker_auth", return_value=("w1", "h1")):
         engine = OrchestratorEngine(storage, mock_config)
+        engine.setup()
         with pytest.raises(web.HTTPTooManyRequests) as exc:
             await engine.handle_rxon_message("poll", "w1", {"token": "t"})
         assert exc.value.headers["Retry-After"] == "55"
 
     # 2. Check Middleware (Client)
-    middleware = rate_limit_middleware_factory(storage, 1, 60)
+    middleware = rate_limit_middleware_factory(storage, MagicMock(), 1, 60)
     req = MagicMock()
-    req.path = "/api/v1/jobs"
+    req.path = "/api/jobs"
     req.remote = "1.2.3.4"
     handler = AsyncMock()
 
@@ -144,10 +156,13 @@ async def test_retry_after_only_for_workers(mock_config):
 async def test_engine_rate_limit_retry_after_edge_cases(mock_config):
     """Tests various TTL edge cases for Retry-After header in engine."""
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     storage.increment_key_with_ttl.return_value = 10  # Always blocked (> 5)
 
-    with patch("src.avtomatika.engine.verify_worker_auth", return_value=("w1", "hash")):
+    with patch("avtomatika.engine.verify_worker_auth", return_value=("w1", "hash")):
         engine = OrchestratorEngine(storage, mock_config)
+        engine.setup()
         engine.worker_service = AsyncMock()
 
         # Case 1: TTL is -2
@@ -204,6 +219,8 @@ async def test_worker_service_event_webhook_filtering(mock_config):
 
     mock_config.DETAILED_API_RESPONSES = False
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     history = AsyncMock()
     engine = MagicMock()
     engine.config = mock_config
@@ -214,7 +231,7 @@ async def test_worker_service_event_webhook_filtering(mock_config):
     # CRITICAL: Explicitly set to empty list to catch nesting errors
     engine.on_worker_event = []
 
-    service = WorkerService(storage, history, mock_config, engine)
+    service = WorkerService(storage, history, mock_config, engine, MagicMock())
 
     # Mock job state with a webhook URL
     storage.get_job_state.return_value = {"id": "job-123", "webhook_url": "http://callback", "status": "running"}
@@ -244,11 +261,13 @@ async def test_worker_service_event_webhook_filtering(mock_config):
 async def test_worker_service_no_webhook_if_no_target_job(mock_config):
     """Verifies that no webhook is sent if event is not targeted to a specific job."""
     storage = AsyncMock()
+    storage.verify_worker_access_token.return_value = None
+    storage.find_worker_token.return_value = None
     engine = MagicMock()
     engine.webhook_sender = AsyncMock()
     engine.on_worker_event = []
 
-    service = WorkerService(storage, AsyncMock(), mock_config, engine)
+    service = WorkerService(storage, AsyncMock(), mock_config, engine, MagicMock())
 
     # Event WITHOUT target_job_id
     event_raw = {

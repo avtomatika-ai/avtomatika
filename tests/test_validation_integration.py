@@ -1,12 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from avtomatika.config import Config
@@ -23,7 +21,7 @@ async def test_register_worker_invalid_id():
     engine.app = {}  # Mock app dictionary for S3 service lookup
     # engine._from_dict is no longer used, we use rxon.utils.from_dict directly
 
-    service = WorkerService(storage, history, config, engine)
+    service = WorkerService(storage, history, config, engine, metrics=MagicMock())
 
     invalid_payload = {"worker_id": "bad/worker/id", "worker_type": "cpu", "supported_skills": []}
 
@@ -44,7 +42,7 @@ async def test_register_worker_valid_id():
     engine.app = {}
     # engine._from_dict is no longer used, we use rxon.utils.from_dict directly
 
-    service = WorkerService(storage, history, config, engine)
+    service = WorkerService(storage, history, config, engine, metrics=MagicMock())
 
     valid_payload = {"worker_id": "good-worker-id_123", "worker_type": "cpu", "supported_skills": []}
 

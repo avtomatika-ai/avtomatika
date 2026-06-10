@@ -11,10 +11,11 @@
 ## 🚀 Características Principales
 
 - **State-Machine Driven**: Blueprints declarativos en Python para lógica compleja.
-- **Almacenamiento Redis de Alto Rendimiento**: **Actualizaciones de estado atómicas** vía Lua scripts y serialización **Msgpack**.
-- **Seguridad Zero Trust**: Autenticación obligatoria de workers, **patrones de tokens** para escalado dinámico y **protección contra reenvío**.
-- **Almacenamiento de Blobs Enchufable**: Soporte completo para S3 a través de la interfaz `BlobProvider` (potenciado por `obstore`).
-- **Lógica Jerárquica**: Soporte para blueprints hijos (Ghosts) y **ejecución paralela con aislamiento de estado por rama**.
+- **Alto Rendimiento**: Indexación de colas vía **ZSET**, mecanismo de **Work Stealing** (robo de tareas) en Lua y transiciones de estado atómicas.
+- **Seguridad Zero Trust**: Implementación completa de `SecurityContext`, firma automática HMAC SHA256 y verificación de cadenas de identidad.
+- **Protección de Datos**: **Envelope Encryption** (cifrado de sobres) para tokens en Redis, aislamiento estricto de clientes y protección contra reenvío (Replay Protection).
+- **Gestión de Archivos**: Streaming Async S3 de alto rendimiento mediante la librería `obstore`.
+- **Automatización**: Descubrimiento automático de transiciones mediante **análisis AST** del código de los manejadores.
 - **Observability**: Seguimiento distribuido con **OpenTelemetry** y métricas en tiempo real.
 
 
@@ -50,6 +51,9 @@ El proyecto se basa en un patrón arquitectónico simple pero poderoso que separ
 *   **Blueprints (Blueprint)** — El Guion. Cada blueprint es un plan detallado (una máquina de estados) para un proceso comercial específico. Describe los pasos (estados) y las reglas para la transición entre ellos.
 *   **Workers (Worker)** — El Equipo de Especialistas. Estos son ejecutores independientes y especializados. Cada worker sabe cómo realizar un conjunto específico de tareas (por ejemplo, "procesar video", "enviar correo electrónico") e informa al Orquestador.
 
+### ¿Por qué es esto importante?
+En el marco de la arquitectura **HLN**, el Orquestador actúa como un "Ghost" (Fantasma — lógica interna), mientras que los Workers actúan como "Shells" (Cáscaras — interfaz de ejecución). Gracias al principio de **Shell-Stacking**, cualquier Orquestador puede ser envuelto en una cáscara de worker, permitiendo construir redes fractales infinitas (Holarquías).
+
 ## Ecosistema
 
 Avtomatika es parte de un ecosistema más grande:
@@ -76,7 +80,7 @@ Avtomatika es parte de un ecosistema más grande:
     pip install "avtomatika[history]"
     ```
 
-*   **Instalar con soporte de telemetría (Prometheus, OpenTelemetry):**
+*   **Instalar con soporte de telemetría (OpenTelemetry):**
     ```bash
     pip install "avtomatika[telemetry]"
     ```
@@ -107,6 +111,18 @@ Los trabajos en Avtomatika pasan por varios estados:
 | `cancelled` | **Terminal** | Cancelado manualmente por el usuario o el sistema. |
 | `error` | **Terminal** | Error crítico del sistema o de infraestructura. |
 | `quarantined` | **Terminal** | Marcado para revisión manual (ej. violación de contrato). |
+
+### Observabilidad Moderna
+Avtomatika está construida con una observabilidad profunda en mente utilizando el estándar **OpenTelemetry**. Proporciona:
+- **Rastreo Distribuido**: Siga las solicitudes a través de toda la red HLN (Orquestador ↔ Worker).
+- **Métricas en Tiempo Real**: Monitoree la longitud de las colas, la salud de los workers y las latencias de los trabajos.
+- **OTLP Nativo**: Envíe datos de telemetría directamente a Jaeger, Prometheus o Grafana.
+
+Para habilitar el soporte de telemetría durante la instalación:
+```bash
+pip install "avtomatika[telemetry]"
+```
+Consulte la [**Guía de Observabilidad**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/observability.md) para detalles de configuración.
 
 ## Inicio Rápido: Uso como Librería
 
@@ -364,14 +380,15 @@ Para más detalles, consulta la [**Guía de Configuración**](https://github.com
 ### Observabilidad
 
 *   **Structured JSON Logging**: Vía `QueueHandler` no bloqueante.
-*   **Métricas**: En `/_public/metrics`, con prefijo `orchestrator_` y `orchestrator_loop_lag_seconds`.
+*   **Observabilidad Profunda**: Rastreo y métricas basadas en OpenTelemetry (vía OTLP).
 
 ### Seguridad y Protección de Datos
+*   **Seguridad Zero Trust**: Autenticación mutua (mTLS) y firma obligatoria de mensajes **HMAC SHA256** para proteger contra la suplantación de datos y trabajadores.
+*   **Protección contra Replay**: Validación estricta de la marca de tiempo (`timestamp`) con una ventana de 60 segundos.
+*   **Integridad de la Cadena de Identidad**: Verificación matemática de las cadenas de identidad en holarquías (la firma cubre toda la ruta de la señal).
 *   **Envelope Encryption**: Si se establece `REDIS_ENCRYPTION_KEY`, los tokens de worker se cifran en Redis (AES-GCM).
 *   **Modos de Autenticación**: Soporte para `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
 *   **Aislamiento Estricto de Clientes**: Los trabajos están estrictamente vinculados al `client_token`. Un cliente solo puede acceder, gestionar o descargar archivos de los trabajos que creó.
-*   **Política de Detalle de API**: Por defecto, la API devuelve campos mínimos. Activa detalles completos mediante `DETAILED_API_RESPONSES="true"`.
-*   **Prefijo de API Configurable**: La API de cliente se puede mover o ocultar vía `CLIENT_API_PREFIX`.
 
 ### Límite de Tasa
 
@@ -402,5 +419,7 @@ Disponible en `/_public/docs`.
 - [**Guía de Arquitectura**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/architecture.md)
 - [**Referencia de API**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/api_reference.md)
 - [**Guía de Configuración**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/configuration.md)
+- [**Guía de Observabilidad**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/observability.md)
+- [**Protocolo de Rastreo**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/observability_protocol.md)
 - [**Guía de Despliegue**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/deployment.md)
 - [**Cookbook**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/es/cookbook/README.md)

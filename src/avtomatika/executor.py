@@ -5,8 +5,7 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import asyncio
-from asyncio import CancelledError, Task, create_task, gather, sleep
+from asyncio import CancelledError, Semaphore, Task, create_task, gather, sleep
 from contextlib import suppress
 from logging import getLogger
 from time import monotonic, time
@@ -14,56 +13,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from rxon.schema import validate_data
-
-from . import metrics
-
-# Conditional import for OpenTelemetry
-try:
-    from opentelemetry import trace
-    from opentelemetry.propagate import inject
-    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-
-    tracer = trace.get_tracer(__name__)
-    propagator = TraceContextTextMapPropagator()
-except ImportError:
-    logger = getLogger(__name__)
-    logger.info("OpenTelemetry not found. Tracing will be disabled.")
-
-    class NoOpTracer:
-        def start_as_current_span(self, *args, **kwargs):
-            class NoOpSpan:
-                def __enter__(self):
-                    return self
-
-                def __exit__(self, exc_type, exc_val, exc_tb):
-                    pass
-
-                def set_attribute(self, *args, **kwargs):
-                    pass
-
-            return NoOpSpan()
-
-    class NoOpPropagate:
-        def inject(self, *args, **kwargs):
-            pass
-
-        @staticmethod
-        def extract(*args, **kwargs):
-            return None
-
-    class NoOpTraceContextTextMapPropagator:
-        @staticmethod
-        def extract(*args, **kwargs):
-            return None
-
-    trace = NoOpTracer()
-    tracer = trace
-    inject = NoOpPropagate().inject
-    propagator = NoOpTraceContextTextMapPropagator()
-
-from .app_keys import S3_SERVICE_KEY
-from .constants import (
+from rxon.constants import (
     JOB_STATUS_ERROR,
     JOB_STATUS_FAILED,
     JOB_STATUS_FINISHED,
@@ -72,16 +22,35 @@ from .constants import (
     JOB_STATUS_WAITING_FOR_PARALLEL,
     JOB_STATUS_WAITING_FOR_WORKER,
 )
+from rxon.schema import validate_data
+
+from avtomatika import telemetry
+
+from .app_keys import S3_SERVICE_KEY
 from .context import ActionFactory
 from .data_types import ClientConfig, JobContext
 from .history.base import HistoryStorageBase
+from .metrics import LABEL_BLUEPRINT, Metrics
 
 if TYPE_CHECKING:
     from .engine import OrchestratorEngine
 
-logger = getLogger(
-    __name__
-)  # Re-declare logger after potential redefinition in except block if opentelemetry was missing
+logger = getLogger(__name__)
+
+tracer = telemetry.trace.get_tracer(__name__)
+
+try:
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    propagator = TraceContextTextMapPropagator()
+except ImportError:
+
+    class NoOpTraceContextTextMapPropagator:
+        @staticmethod
+        def extract(*args, **kwargs):
+            return None
+
+    propagator = NoOpTraceContextTextMapPropagator()
 
 TERMINAL_STATES = {JOB_STATUS_FINISHED, JOB_STATUS_FAILED, JOB_STATUS_ERROR, JOB_STATUS_QUARANTINED}
 
@@ -91,10 +60,12 @@ class JobExecutor:
         self,
         engine: "OrchestratorEngine",
         history_storage: "HistoryStorageBase",
+        metrics: Metrics,
     ):
         self.engine = engine
         self.storage = engine.storage
         self.history_storage = history_storage
+        self.metrics = metrics
         self.dispatcher = engine.dispatcher
         self._running = False
         self._processing_messages: set[str] = set()
@@ -177,10 +148,13 @@ class JobExecutor:
                 context=parent_context,
             ) as span:
                 span.set_attribute("job.id", job_id)
+                span.set_attribute("job.blueprint", job_state["blueprint_name"])
                 span.set_attribute("job.current_state", job_state["current_state"])
+                span.set_attribute("job.retry_count", job_state.get("retry_count", 0))
+                span.set_attribute("job.client_token", job_state.get("client_config", {}).get("token", "unknown"))
 
                 tracing_context: dict[str, str] = {}
-                inject(tracing_context)
+                telemetry.inject(tracing_context)
                 job_state["tracing_context"] = tracing_context
 
                 blueprint = self.engine.blueprints.get(job_state["blueprint_name"])
@@ -239,29 +213,28 @@ class JobExecutor:
                     param_names = blueprint.get_handler_params(handler)
                     params_to_inject: dict[str, Any] = {}
 
-                    if "context" in param_names:
-                        params_to_inject["context"] = context
-                        if "actions" in param_names:
+                    context_as_dict = context._asdict()
+                    for param_name in param_names:
+                        if param_name == "actions":
                             params_to_inject["actions"] = action_factory
-                        if "task_files" in param_names:
-                            params_to_inject["task_files"] = task_files
-                    else:
-                        context_as_dict = context._asdict()
-                        for param_name in param_names:
-                            if param_name == "task_files":
-                                params_to_inject[param_name] = task_files
-                            elif param_name in context_as_dict:
-                                params_to_inject[param_name] = context_as_dict[param_name]
-                            elif param_name in context.state_history:
-                                params_to_inject[param_name] = context.state_history[param_name]
-                            elif param_name in context.initial_data:
-                                params_to_inject[param_name] = context.initial_data[param_name]
+                        elif param_name == "context":
+                            params_to_inject["context"] = context
+                        elif param_name == "task_files":
+                            params_to_inject[param_name] = task_files
+                        elif param_name in context_as_dict:
+                            params_to_inject[param_name] = context_as_dict[param_name]
+                        elif param_name in context.state_history:
+                            params_to_inject[param_name] = context.state_history[param_name]
+                        elif param_name in context.initial_data:
+                            params_to_inject[param_name] = context.initial_data[param_name]
 
                     await handler(**params_to_inject)
 
                     # Sync context state back to job_state for persistence
-                    # update_context results should go into initial_data for tests consistency
                     if action_factory.context_updates:
+                        context.state_history.update(action_factory.context_updates)
+
+                        # Legacy compatibility: tests expect updates in initial_data
                         if "initial_data" not in job_state or job_state["initial_data"] is None:
                             job_state["initial_data"] = {}
                         job_state["initial_data"].update(action_factory.context_updates)
@@ -327,6 +300,8 @@ class JobExecutor:
                         await self._handle_terminal_reached(job_state, status, duration_ms)
 
                 except Exception as e:
+                    span.record_exception(e)
+                    span.set_status(telemetry.trace.Status(telemetry.trace.StatusCode.ERROR, str(e)))
                     duration_ms = int((monotonic() - start_time) * 1000)
                     # For errors, we also want to ensure the result (even if partial) is captured
                     if hasattr(self, "_handle_failure"):
@@ -369,6 +344,12 @@ class JobExecutor:
                 "timestamp": time(),
                 "context_snapshot": job_state,
             },
+        )
+
+        # Record duration metric
+        self.metrics.job_duration_seconds.record(
+            duration_ms / 1000.0,
+            {LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown")},
         )
 
         job_state["status"] = status
@@ -482,14 +463,10 @@ class JobExecutor:
             dispatch_deadline = now + dispatch_timeout if dispatch_timeout else None
             result_deadline = now + result_timeout if result_timeout else None
 
-            # Initial watch: wait for the EARLIEST event (either too late to start or too late for result)
             deadlines = [d for d in (dispatch_deadline, result_deadline) if d is not None]
             if deadlines:
-                timeout_at = now + min(deadlines) - now  # Relative to now
-                timeout_at = now + (min(deadlines) - now)  # Still absolute for add_job_to_watch
                 timeout_at = min(deadlines)
             else:
-                # Global fallback if no specific timeouts are set
                 timeout_at = now + (execution_timeout or self.engine.config.WORKER_TIMEOUT_SECONDS)
 
             job_state["status"] = JOB_STATUS_WAITING_FOR_WORKER
@@ -690,8 +667,9 @@ class JobExecutor:
             await self._check_and_resume_parent(job_state)
             await self.engine.send_job_webhook(job_state, "job_quarantined")
 
-            metrics.jobs_failed_total.inc(
-                {metrics.LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown")},
+            self.metrics.jobs_failed_total.add(
+                1,
+                {LABEL_BLUEPRINT: job_state.get("blueprint_name", "unknown")},
             )
 
     async def _check_and_resume_parent(self, child_job_state: dict[str, Any]) -> None:
@@ -751,7 +729,7 @@ class JobExecutor:
 
         logger.info("JobExecutor started.")
         self._running = True
-        semaphore = asyncio.Semaphore(self.engine.config.EXECUTOR_MAX_CONCURRENT_JOBS)
+        semaphore = Semaphore(self.engine.config.EXECUTOR_MAX_CONCURRENT_JOBS)
         backoff_delay = 1.0
 
         while self._running:

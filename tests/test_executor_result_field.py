@@ -1,11 +1,10 @@
+from unittest.mock import AsyncMock, MagicMock
+
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
-
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from src.avtomatika.executor import JobExecutor
 
@@ -32,7 +31,7 @@ async def test_executor_updates_result_field_multi_step():
     s3_service.get_task_files.return_value = task_files
     task_files.cleanup = AsyncMock()
 
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
 
     job_id = "test-job-multi"
     message_id = "msg-multi"
@@ -120,7 +119,7 @@ async def test_executor_result_field_empty_history_safe():
     s3_service.get_task_files.return_value = task_files
     task_files.cleanup = AsyncMock()
 
-    executor = JobExecutor(engine, history)
+    executor = JobExecutor(engine, history, metrics=MagicMock())
 
     job_id = "test-job-empty"
     message_id = "msg-empty"

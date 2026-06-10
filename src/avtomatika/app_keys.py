@@ -36,3 +36,6 @@ HEALTH_CHECKER_TASK_KEY = AppKey("health_checker_task", Task)
 SCHEDULER_TASK_KEY = AppKey("scheduler_task", Task)
 S3_SERVICE_KEY = AppKey("s3_service", "S3Service")
 WORKER_SERVICE_KEY = AppKey("worker_service", "WorkerService")
+STORAGE_KEY = AppKey("storage", "StorageBackend")
+HISTORY_KEY = AppKey("history", "HistoryStorageBase")
+CLIENT_CONFIG_KEY = "client_config"

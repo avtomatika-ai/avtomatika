@@ -16,7 +16,6 @@ class StorageBackend(ABC):
 
     async def initialize(self) -> None:
         """Performs any necessary initialization for the storage backend."""
-        # Optional initialization for backends
         return None
 
     @abstractmethod
@@ -201,11 +200,6 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
-    async def find_hot_workers(self, skill_name: str, resource_id: str) -> list[str]:
-        """Finds idle workers that have the specific resource (e.g., model, artifact) in hot cache."""
-        pass
-
-    @abstractmethod
     async def find_workers_by_hot_skill(self, skill_name: str) -> list[str]:
         """Finds idle workers that have the specific skill marked as 'hot'."""
         pass
@@ -352,6 +346,16 @@ class StorageBackend(ABC):
     @abstractmethod
     async def verify_worker_access_token(self, token: str) -> str | None:
         """Verifies a temporary access token and returns the associated worker_id if valid."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def save_worker_refresh_token(self, worker_id: str, token: str, ttl: int) -> None:
+        """Saves a temporary refresh token for a worker (STS)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def verify_worker_refresh_token(self, token: str) -> str | None:
+        """Verifies a temporary refresh token and returns the associated worker_id if valid."""
         raise NotImplementedError
 
     @abstractmethod

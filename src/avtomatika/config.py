@@ -27,7 +27,7 @@ class Config:
         )
 
         self.API_HOST: str = getenv("API_HOST", "0.0.0.0")
-        self.API_PORT: int = int(getenv("API_PORT", 8080))
+        self.API_PORT: int = int(getenv("API_PORT", 8082))
         self.CLIENT_API_PREFIX: str = getenv("CLIENT_API_PREFIX", "api").strip("/")
         self.ENABLE_CLIENT_API: bool = getenv("ENABLE_CLIENT_API", "true").lower() == "true"
 
@@ -37,7 +37,6 @@ class Config:
         )
         self.GLOBAL_WORKER_TOKEN: str = getenv("GLOBAL_WORKER_TOKEN", "secure-worker-token")
 
-        # Worker authentication mode: 'mixed' (tokens + mTLS), 'mtls-only' (strict mTLS), 'token-only' (strict tokens)
         self.WORKER_AUTH_MODE: str = getenv("WORKER_AUTH_MODE", "mixed").lower()
         if self.WORKER_AUTH_MODE not in ("mixed", "mtls-only", "token-only"):
             raise ValueError(
@@ -81,7 +80,6 @@ class Config:
         self.REDIS_STREAM_BLOCK_MS: int = int(getenv("REDIS_STREAM_BLOCK_MS", 5000))
 
         # Security: Envelope Encryption for Master Tokens in Redis
-        # If set, static worker tokens are encrypted in Redis.
         self.REDIS_ENCRYPTION_KEY: str | None = getenv("REDIS_ENCRYPTION_KEY")
 
         self.HISTORY_DATABASE_URI: str = getenv("HISTORY_DATABASE_URI", "")
@@ -107,7 +105,6 @@ class Config:
 
         self.TZ: str = getenv("TZ", "UTC")
 
-        # Advanced Dispatching & Load Balancing
         self.DISPATCHER_SOFT_LIMIT: int = int(getenv("DISPATCHER_SOFT_LIMIT", 3))
         self.DISPATCHER_MAX_CANDIDATES: int = int(getenv("DISPATCHER_MAX_CANDIDATES", 50))
 

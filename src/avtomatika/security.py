@@ -5,27 +5,24 @@
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
 
 
-import logging
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
+from logging import getLogger
 from time import time
 from typing import Any
 
 from aiohttp import web
+from rxon.constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
 
+from .app_keys import CLIENT_CONFIG_KEY
 from .config import Config
-from .constants import AUTH_HEADER_CLIENT, AUTH_HEADER_WORKER
+from .metrics import Metrics
 from .storage.base import StorageBackend
 from .utils.crypto import decrypt_token
 
-logger = logging.getLogger(__name__)
+logger = getLogger(__name__)
 
 Handler = Callable[[web.Request], Awaitable[web.Response]]
-
-
-# Cache token hashes to avoid repeated SHA256 computation
-# Format: {token: (expiry, hashed_token)}
-_TOKEN_HASH_CACHE: dict[str, tuple[float, str]] = {}
 
 
 async def verify_worker_auth(
@@ -34,87 +31,114 @@ async def verify_worker_auth(
     token: str | None,
     cert_identity: str | None,
     worker_id_hint: str | None,
+    metrics: Metrics,
+    token_hash_cache: dict[str, tuple[float, str]],
+    fernet_cache: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """
     Verifies worker authentication using token or mTLS.
     Returns (authenticated_worker_id, credential_hash).
     Raises ValueError (400), PermissionError (401/403) on failure.
     """
+    from .telemetry import trace  # noqa: PLC0415
+
+    span = trace.get_current_span()
     mode = config.WORKER_AUTH_MODE
+    span.set_attribute("auth.mode", mode)
 
-    if mode != "token-only" and cert_identity:
-        if worker_id_hint and cert_identity != worker_id_hint:
-            raise PermissionError(
-                f"Unauthorized: Certificate CN '{cert_identity}' does not match worker_id '{worker_id_hint}'"
-            )
-        return cert_identity, cert_identity
+    try:
+        if mode != "token-only" and cert_identity:
+            span.set_attribute("auth.method", "mtls")
+            if worker_id_hint and cert_identity != worker_id_hint:
+                metrics.security_identity_mismatch_total.add(1, {"cert_cn": cert_identity, "worker_id": worker_id_hint})
+                raise PermissionError(
+                    f"Unauthorized: Certificate CN '{cert_identity}' does not match worker_id '{worker_id_hint}'"
+                )
+            return cert_identity, cert_identity
 
-    if not token:
-        if mode == "mtls-only":
-            raise PermissionError("Unauthorized: Client certificate required.")
-        if mode == "token-only":
-            raise PermissionError(f"Unauthorized: Missing {AUTH_HEADER_WORKER} header.")
+        if not token:
+            span.set_attribute("auth.method", "none")
+            reason = "missing_credentials"
+            metrics.security_auth_failures_total.add(1, {"reason": reason, "mode": mode})
+            if mode == "mtls-only":
+                raise PermissionError("Unauthorized: Client certificate required.")
+            if mode == "token-only":
+                raise PermissionError(f"Unauthorized: Missing {AUTH_HEADER_WORKER} header.")
 
-        # Mixed mode
-        raise PermissionError(f"Unauthorized: Missing {AUTH_HEADER_WORKER} header or client certificate.")
+            # Mixed mode
+            raise PermissionError(f"Unauthorized: Missing {AUTH_HEADER_WORKER} header or client certificate.")
 
-    # Use cache for hash computation with 60s TTL
-    now = time()
-    if token in _TOKEN_HASH_CACHE:
-        expiry, hashed_provided_token = _TOKEN_HASH_CACHE[token]
-        if now > expiry:
-            del _TOKEN_HASH_CACHE[token]
+        now = time()
+        if token in token_hash_cache:
+            expiry, hashed_provided_token = token_hash_cache[token]
+            if now > expiry:
+                del token_hash_cache[token]
+                hashed_provided_token = sha256(token.encode()).hexdigest()
+                token_hash_cache[token] = (now + 60.0, hashed_provided_token)
+        else:
             hashed_provided_token = sha256(token.encode()).hexdigest()
-            _TOKEN_HASH_CACHE[token] = (now + 60.0, hashed_provided_token)
-    else:
-        hashed_provided_token = sha256(token.encode()).hexdigest()
-        if len(_TOKEN_HASH_CACHE) >= 10000:
-            # Simple cleanup of expired items if cache is full
-            expired_keys = [k for k, v in _TOKEN_HASH_CACHE.items() if now > v[0]]
-            for k in expired_keys:
-                del _TOKEN_HASH_CACHE[k]
-            # If still full, clear entirely to prevent unbound growth
-            if len(_TOKEN_HASH_CACHE) >= 10000:
-                _TOKEN_HASH_CACHE.clear()
+            if len(token_hash_cache) >= 10000:
+                # Simple cleanup of expired items if cache is full
+                expired_keys = [k for k, v in token_hash_cache.items() if now > v[0]]
+                for k in expired_keys:
+                    del token_hash_cache[k]
+                if len(token_hash_cache) >= 10000:
+                    token_hash_cache.clear()
 
-        _TOKEN_HASH_CACHE[token] = (now + 60.0, hashed_provided_token)
+            token_hash_cache[token] = (now + 60.0, hashed_provided_token)
 
-    # STS Access Token Check (Always allowed as it is secure/temporary)
-    token_worker_id: str | None = await storage.verify_worker_access_token(hashed_provided_token)
-    if token_worker_id:
-        if worker_id_hint and token_worker_id != worker_id_hint:
-            raise PermissionError(
-                f"Unauthorized: Access Token belongs to '{token_worker_id}', but request is for '{worker_id_hint}'"
-            )
-        return token_worker_id, hashed_provided_token
+        token_worker_id: str | None = await storage.verify_worker_access_token(hashed_provided_token)
+        if token_worker_id:
+            span.set_attribute("auth.method", "sts")
+            if worker_id_hint and token_worker_id != worker_id_hint:
+                metrics.security_auth_failures_total.add(1, {"reason": "worker_id_mismatch", "method": "sts"})
+                raise PermissionError(
+                    f"Unauthorized: Access Token belongs to '{token_worker_id}', but request is for '{worker_id_hint}'"
+                )
+            return token_worker_id, hashed_provided_token
 
-    if mode == "mtls-only":
-        raise PermissionError("Unauthorized: Invalid authentication method.")
+        if mode == "mtls-only":
+            metrics.security_auth_failures_total.add(1, {"reason": "mtls_required", "method": "token"})
+            raise PermissionError("Unauthorized: Invalid authentication method.")
 
-    if not worker_id_hint:
+        if not worker_id_hint:
+            if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
+                span.set_attribute("auth.method", "global_token")
+                return "unknown_authenticated_by_global_token", hashed_provided_token
+
+            metrics.security_auth_failures_total.add(1, {"reason": "missing_worker_id", "method": "token"})
+            raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
+
+        expected_token = await storage.find_worker_token(worker_id_hint)
+
+        if expected_token:
+            span.set_attribute("auth.method", "individual_token")
+            # Decrypt if encryption is enabled
+            if config.REDIS_ENCRYPTION_KEY and config.encrypt_worker_tokens:
+                decrypted = decrypt_token(expected_token, config.REDIS_ENCRYPTION_KEY, cache=fernet_cache)
+                if decrypted is None:
+                    metrics.security_auth_failures_total.add(
+                        1, {"reason": "decryption_failed", "worker_id": worker_id_hint}
+                    )
+                    raise PermissionError("Unauthorized: Failed to decrypt worker token. Key might be invalid.")
+                expected_token = decrypted
+
+            if token == expected_token:
+                return worker_id_hint, hashed_provided_token
+
+            metrics.security_auth_failures_total.add(1, {"reason": "invalid_token", "worker_id": worker_id_hint})
+            raise PermissionError("Unauthorized: Invalid individual worker token")
+
         if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
-            return "unknown_authenticated_by_global_token", hashed_provided_token
-
-        raise PermissionError("Unauthorized: Invalid token or missing worker_id hint")
-
-    expected_token = await storage.find_worker_token(worker_id_hint)
-
-    if expected_token:
-        # Decrypt if encryption is enabled
-        if config.REDIS_ENCRYPTION_KEY and config.encrypt_worker_tokens:
-            decrypted = decrypt_token(expected_token, config.REDIS_ENCRYPTION_KEY)
-            if decrypted is None:
-                raise PermissionError("Unauthorized: Failed to decrypt worker token. Key might be invalid.")
-            expected_token = decrypted
-
-        if token == expected_token:
+            span.set_attribute("auth.method", "global_token")
             return worker_id_hint, hashed_provided_token
-        raise PermissionError("Unauthorized: Invalid individual worker token")
 
-    if config.GLOBAL_WORKER_TOKEN and token == config.GLOBAL_WORKER_TOKEN:
-        return worker_id_hint, hashed_provided_token
-
-    raise PermissionError("Unauthorized: No valid token found")
+        metrics.security_auth_failures_total.add(1, {"reason": "no_token_found", "worker_id": worker_id_hint})
+        raise PermissionError("Unauthorized: No valid token found")
+    except Exception as e:
+        if not isinstance(e, PermissionError):
+            span.record_exception(e)
+        raise e
 
 
 def client_auth_middleware_factory(
@@ -141,7 +165,7 @@ def client_auth_middleware_factory(
             )
 
         # Attach client config to the request for handlers to use
-        request["client_config"] = client_config
+        request[CLIENT_CONFIG_KEY] = client_config
         return await handler(request)
 
     return middleware
