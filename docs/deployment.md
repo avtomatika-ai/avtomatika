@@ -37,18 +37,20 @@ The easiest way to run all components (Orchestrator, UI, Redis, Worker) is to us
 docker-compose up --build
 ```
 
--   **Orchestrator API** will be available at `http://localhost:8080`.
+- **Orchestrator API** will be available at `http://localhost:8080`.
 
 ### Running Tests
 
 It is **crucial** to run tests after making changes.
 
 **1. Setup Test Environment:**
+
 ```bash
 pip install -e ".[all,test]"
 ```
 
 **2. Run Core Tests:**
+
 ```bash
 pytest tests/
 ```

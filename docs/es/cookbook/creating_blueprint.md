@@ -33,11 +33,12 @@ order_pipeline = Blueprint(
 
 Cada paso en tu proceso es un "estado" con una función "manejadora" adjunta.
 
--   El decorador `@blueprint.handler` vincula la función al estado.
--   **Estado Inicial** debe haber exactamente uno, marcado con `is_start=True`.
--   **Estados Finales** pueden ser múltiples, marcados con `is_end=True`.
+- El decorador `@blueprint.handler` vincula la función al estado.
+- **Estado Inicial** debe haber exactamente uno, marcado con `is_start=True`.
+- **Estados Finales** pueden ser múltiples, marcados con `is_end=True`.
 
 El manejador recibe argumentos a través de **Inyección de Dependencias**. Puede solicitar:
+
 - `initial_data`: Datos originales del trabajo.
 - `actions`: Objeto `ActionFactory` para controlar el proceso.
 - `state_history`: Historial completo del trabajo.
@@ -67,7 +68,7 @@ async def dispatch_to_worker(initial_data: dict, actions: ActionFactory):
     actions.dispatch_task(
         task_type="check_inventory",  # Tipo de tarea que entiende el worker
         params={"items": initial_data.get("items")},
-        
+
         # Definir a dónde va el proceso dependiendo de la respuesta del worker
         transitions={
             "success": "inventory_ok",      # Si el worker devuelve status="success"
@@ -116,6 +117,7 @@ async def finished_successfully(actions: ActionFactory):
 En el archivo principal de tu aplicación donde ejecutas `OrchestratorEngine`, registra el blueprint creado.
 
 Cuando llamas a `register_blueprint()`, el motor realiza automáticamente una **verificación de integridad**. Asegura que:
+
 1.  El blueprint tiene exactamente un estado inicial.
 2.  Todas las transiciones conducen a estados existentes (sin transiciones "colgantes").
 3.  Todos los estados son alcanzables desde el estado inicial (sin "código muerto").
@@ -139,3 +141,29 @@ engine.run()
 ```
 
 Después de esto, puedes crear tareas enviando solicitudes POST a `/api/v1/jobs/process_order`.
+
+## Paso 5: Transiciones Condicionales con `F`
+
+Para enrutar el flujo basado en el contexto de tiempo de ejecución, pasa una expresión `FastF` de `fast-filter` directamente en `@bp.handler()`. Las condiciones se compilan JIT para cero sobrecosto en rutas críticas.
+
+```python
+from avtomatika import F  # Se reexporta automáticamente desde fast-filter
+
+# Enrutar basado en initial_data en tiempo de ejecución
+@order_pipeline.handler("decide_priority", F.initial_data["priority"] == "express")
+async def handle_express(actions: ActionFactory):
+    actions.go_to("express_lane")
+
+# Fallback por defecto cuando ninguna condición coincide
+@order_pipeline.handler("decide_priority")
+async def handle_standard(actions: ActionFactory):
+    actions.go_to("standard_lane")
+```
+
+**Reglas clave:**
+
+- Importa `F` desde `avtomatika` (se reexporta automáticamente).
+- Pasa cualquier expresión `FastF` directamente al decorador del manejador — no una cadena.
+- Si ninguna condición coincide **y** no hay un manejador por defecto registrado, se genera un `ValueError`.
+- Los atributos faltantes devuelven de forma segura `False`, nunca lanzan excepciones.
+- Varias condiciones para el mismo estado se evalúan en **orden de registro**: la primera coincidencia gana.

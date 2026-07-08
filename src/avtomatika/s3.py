@@ -26,7 +26,7 @@ from .metrics import Metrics
 logger = getLogger(__name__)
 
 try:
-    from aiofiles import open as aiopen  # type: ignore[import-untyped]
+    from aiofiles import open as aiopen
     from obstore import delete_async, get_async, put_async, sign
     from obstore import list as obstore_list
     from obstore.store import S3Store

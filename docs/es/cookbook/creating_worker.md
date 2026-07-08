@@ -25,6 +25,7 @@ Crea un archivo Python (por ejemplo, `mi_worker.py`) e importa la clase `Worker`
 Puede usar **diccionarios estándar** (sin dependencias) o **modelos Pydantic** (para validación automática).
 
 ### Opción A: Diccionario Simple (Sin Pydantic)
+
 ```python
 @worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
@@ -34,6 +35,7 @@ async def check_inventory_handler(params: dict, **kwargs) -> dict:
 ```
 
 ### Opción B: Modelo Pydantic (Validación automática)
+
 ```python
 from pydantic import BaseModel
 
@@ -48,27 +50,29 @@ async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
 ```
 
 # Ejemplo de manejador para tarea larga con cancelación cooperativa
+
 @worker.skill("long_running_task")
-async def long_task_handler(params: dict, **kwargs) -> dict:
-    task_id = kwargs["task_id"]
-    print(f"Iniciando tarea larga {task_id}...")
-    
+async def long_task_handler(params: dict, \*\*kwargs) -> dict:
+task_id = kwargs["task_id"]
+print(f"Iniciando tarea larga {task_id}...")
+
     for i in range(10):
         # Verificar si el Orquestador solicitó la cancelación
         if await worker.check_for_cancellation(task_id):
             print(f"Cancelación detectada para la tarea {task_id}. Deteniendo...")
             return {"status": "cancelled", "message": "La tarea fue cancelada por el usuario."}
-        
+
         print(f"Paso {i+1}/10 hecho...")
         await asyncio.sleep(2)
 
     return {"status": "success"}
 
-
 # 4. Ejecutar worker
-if __name__ == "__main__":
-    worker.run()
-```
+
+if **name** == "**main**":
+worker.run()
+
+````
 
 ## Paso 3: Configuración de Conexión y Autenticación
 
@@ -87,14 +91,16 @@ WORKER_TOKEN=tu-token-secreto-de-worker
 
 # (Opcional) Habilitar WebSocket para cancelación instantánea de tareas
 WORKER_ENABLE_WEBSOCKETS=true
-```
+````
 
 ## Paso 4: Lanzamiento
 
 Simplemente ejecuta tu archivo Python:
+
 ```bash
 python mi_worker.py
 ```
+
 El Worker se conectará automáticamente al Orquestador, se registrará y comenzará a sondear nuevas tareas.
 
 ## Mecanismos de Cancelación

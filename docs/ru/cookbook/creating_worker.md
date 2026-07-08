@@ -19,7 +19,8 @@ pip install "avtomatika-worker[s3,pydantic]"
 ## Шаг 2: Создание файла Воркера
 
 Создайте Python-файл (например, `my_worker.py`) и импортируйте класс `Worker`.
-```python
+
+````python
 import asyncio
 from avtomatika_worker import Worker
 from pydantic import BaseModel
@@ -38,9 +39,10 @@ async def check_inventory_handler(params: dict, **kwargs) -> dict:
     items = params.get("items", [])
     print(f"Проверка товаров: {items}")
     return {"status": "success", "data": {"warehouse_info": "ok"}}
-```
+````
 
 ### Вариант Б: Pydantic модель (с авто-валидацией)
+
 ```python
 from pydantic import BaseModel
 
@@ -55,27 +57,29 @@ async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
 ```
 
 # Пример обработчика для долгой задачи с кооперативной отменой
+
 @worker.skill("long_running_task")
-async def long_task_handler(params: dict, **kwargs) -> dict:
-    task_id = kwargs["task_id"]
-    print(f"Запуск долгой задачи {task_id}...")
-    
+async def long_task_handler(params: dict, \*\*kwargs) -> dict:
+task_id = kwargs["task_id"]
+print(f"Запуск долгой задачи {task_id}...")
+
     for i in range(10):
         # Проверяем, не запросил ли Оркестратор отмену
         if await worker.check_for_cancellation(task_id):
             print(f"Отмена задачи {task_id} обнаружена. Завершаем...")
             return {"status": "cancelled", "message": "Task was cancelled by user."}
-        
+
         print(f"Шаг {i+1}/10 выполнен...")
         await asyncio.sleep(2)
 
     return {"status": "success"}
 
-
 # 4. Запустите воркер
-if __name__ == "__main__":
-    worker.run()
-```
+
+if **name** == "**main**":
+worker.run()
+
+````
 
 ## Шаг 3: Настройка подключения и аутентификации
 
@@ -94,14 +98,16 @@ WORKER_TOKEN=your-secret-worker-token
 
 # (Опционально) Включить WebSocket для мгновенной отмены задач
 WORKER_ENABLE_WEBSOCKETS=true
-```
+````
 
 ## Шаг 4: Запуск
 
 Просто запустите ваш Python-файл:
+
 ```bash
 python my_worker.py
 ```
+
 Воркер автоматически подключится к Оркестратору, зарегистрируется и начнет опрашивать его на наличие новых задач.
 
 ## Механизмы отмены задач

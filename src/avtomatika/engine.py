@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import cachebox
 from aiohttp import ClientSession, WSMsgType, web
 from orjson import loads
 
@@ -100,10 +101,10 @@ class OrchestratorEngine:
         self.blueprint_contracts: dict[str, dict[str, Any]] = {}
         self.history_storage: HistoryStorageBase = NoOpHistoryStorage()
         self.ws_manager = WebSocketManager(self.storage)
-        self.token_hash_cache: dict[str, tuple[float, str]] = {}
-        self.instrument_cache: dict[str, Any] = {}
-        self.fernet_cache: dict[str, Any] = {}
-        self.worker_catalog_cache: dict[str, Any] = {"data": None, "expires_at": 0.0}
+        self.token_hash_cache = cachebox.TTLCache(maxsize=10000, global_ttl=60.0)
+        self.instrument_cache = cachebox.LRUCache(maxsize=1000)
+        self.fernet_cache = cachebox.LRUCache(maxsize=1000)
+        self.worker_catalog_cache = cachebox.TTLCache(maxsize=10, global_ttl=10.0)
         self.metrics = create_metrics(self.instrument_cache)
         self._running = False
         self.on_worker_event: list[Callable[[str, Any], Awaitable[None]]] = []
@@ -375,7 +376,7 @@ class OrchestratorEngine:
                 # auth_worker_id is already verified at line 290
                 assert auth_worker_id is not None
                 res = await self.worker_service.issue_access_token(auth_worker_id)
-                return res._asdict()
+                return to_dict(res)
 
             elif message_type == "sts_refresh":
                 refresh_token = payload.get("refresh_token")
@@ -385,7 +386,7 @@ class OrchestratorEngine:
                 if not target_worker_id:
                     raise web.HTTPBadRequest(text="Missing worker_id identification")
                 res = await self.worker_service.refresh_access_token(target_worker_id, refresh_token)
-                return res._asdict()
+                return to_dict(res)
 
             elif message_type == "websocket_auth":
                 return True

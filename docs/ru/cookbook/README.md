@@ -9,6 +9,7 @@
 ### **Рецепт 1: Создание простого линейного пайплайна**
 
 **Задача:** Создать пайплайн, который последовательно выполняет три шага: A -> B -> C.
+
 ```python
 from avtomatika import Blueprint
 
@@ -47,7 +48,8 @@ async def failed(context, actions):
 ### **Рецепт 2: Реализация "Человек в середине" (модерация)**
 
 **Задача:** После шага `generate_data` поставить пайплайн на паузу и дождаться одобрения от модератора.
-```python
+
+````python
 from avtomatika import Blueprint
 
 moderation_pipeline = Blueprint(
@@ -163,8 +165,9 @@ async def end_flow(context, actions):
 async def failed(context, actions):
     logger.error(f"Job {context.job_id} завершился с ошибкой.")
 
-```
-*Примечание: Если хотя бы одна из параллельных задач завершится с ошибкой (перейдет в состояние `failed`), то хендлер-агрегатор не будет вызван, и весь `Job` сразу перейдет в состояние `failed`.*
+````
+
+_Примечание: Если хотя бы одна из параллельных задач завершится с ошибкой (перейдет в состояние `failed`), то хендлер-агрегатор не будет вызван, и весь `Job` сразу перейдет в состояние `failed`._
 
 ### **Рецепт 4: Настройка Воркера для работы с несколькими Оркестраторами**
 
@@ -173,10 +176,11 @@ async def failed(context, actions):
 **Концепция:**
 `worker_sdk` поддерживает два режима работы с несколькими Оркестраторами, которые настраиваются через переменные окружения. Воркер будет автоматически регистрироваться и отправлять heartbeats всем Оркестраторам из списка.
 
--   `FAILOVER` (по умолчанию): Воркер опрашивает Оркестраторы в порядке их появления в конфигурации. Если основной Оркестратор становится недоступен, Воркер автоматически переключается на следующий в списке.
--   `ROUND_ROBIN`: Воркер поочередно опрашивает каждый Оркестратор из списка, что позволяет распределять нагрузку между ними.
+- `FAILOVER` (по умолчанию): Воркер опрашивает Оркестраторы в порядке их появления в конфигурации. Если основной Оркестратор становится недоступен, Воркер автоматически переключается на следующий в списке.
+- `ROUND_ROBIN`: Воркер поочередно опрашивает каждый Оркестратор из списка, что позволяет распределять нагрузку между ними.
 
 **Как настроить:**
+
 1.  **`ORCHESTRATORS_CONFIG`**: Вместо `ORCHESTRATOR_URL` используйте эту переменную для передачи JSON-строки, описывающей все доступные Оркестраторы.
 2.  **`MULTI_ORCHESTRATOR_MODE`**: Установите значение `FAILOVER` или `ROUND_ROBIN`.
 
@@ -197,6 +201,7 @@ python -m your_worker_module
 ```
 
 #### **Пример 2: Настройка для балансировки нагрузки (Round Robin)**
+
 ```bash
 # Воркер будет поочередно опрашивать 'orchestrator-1' и 'orchestrator-2'.
 export ORCHESTRATORS_CONFIG='[
@@ -209,12 +214,13 @@ export MULTI_ORCHESTRATOR_MODE="ROUND_ROBIN"
 # Запускаем воркер
 python -m your_worker_module
 ```
-*Примечание: Эта конфигурация выполняется исключительно на стороне Воркера и полностью прозрачна для Оркестратора. Каждый Оркестратор видит этого Воркера как обычного, зарегистрированного исполнителя.*
 
-### **Рецепт 5: Условная маршрутизация с .when()**
+_Примечание: Эта конфигурация выполняется исключительно на стороне Воркера и полностью прозрачна для Оркестратора. Каждый Оркестратор видит этого Воркера как обычного, зарегистрированного исполнителя._
+
+### **Рецепт 5: Условная маршрутизация**
 
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F
 
 multilingual_pipeline = Blueprint(
     name="multilingual_flow",
@@ -227,11 +233,11 @@ async def start_multilingual(context, actions):
     # Этот шаг просто передает управление дальше, где сработает условная логика
     actions.go_to("process_text")
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'en'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "en")
 async def process_english_text(context, actions):
     actions.dispatch_task(task_type="process_en", params=context.initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler("process_text").when("context.initial_data.language == 'de'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "de")
 async def process_german_text(context, actions):
     actions.dispatch_task(task_type="process_de", params=context.initial_data, transitions={"success": "finished"})
 
@@ -267,7 +273,8 @@ async def start_critical_task(context, actions):
 async def critical_finished(context, actions):
     print(f"Critical task {context.job_id} finished.")
 ```
-*Примечание: Доступные стратегии: `default`, `round_robin`, `least_connections`.*
+
+_Примечание: Доступные стратегии: `default`, `round_robin`, `least_connections`._
 
 ### **Рецепт 22: Управление приоритетом задач**
 
@@ -302,8 +309,8 @@ async def priority_finished(context, actions):
     print(f"Task {context.job_id} finished.")
 
 ```
-*Примечание: Если несколько задач имеют одинаковый приоритет, они будут выполняться в порядке поступления (FIFO) в рамках этого приоритета.*
 
+_Примечание: Если несколько задач имеют одинаковый приоритет, они будут выполняться в порядке поступления (FIFO) в рамках этого приоритета._
 
 ### **Рецепт 22: Оптимизация затрат с помощью `cheapest` и `max_cost`**
 
@@ -338,13 +345,15 @@ async def cost_optimized_finished(context, actions):
 async def cost_optimized_failed(context, actions):
     print("Job failed because no workers met the cost criteria.")
 ```
-*Примечание: Стратегия `cheapest` использует поле `cost_per_second` воркера. Если ни один воркер не соответствует `max_cost`, пайплайн не сможет найти исполнителя и завершится с ошибкой.*
+
+_Примечание: Стратегия `cheapest` использует поле `cost_per_second` воркера. Если ни один воркер не соответствует `max_cost`, пайплайн не сможет найти исполнителя и завершится с ошибкой._
 
 ### **Рецепт 22: Использование Хранилищ Данных (`data_stores`)**
 
 **Задача:** Использовать разделяемое, персистентное хранилище (`data_store`) для обмена данными между разными состояниями или даже разными запусками одного и того же пайплайна. Например, для реализации счетчика или кэша.
 
 **Концепция:**
+
 1.  **Инициализация:** При создании блупринта вы можете "прикрепить" к нему одно или несколько хранилищ данных. Каждое хранилище — это, по сути, обертка над Redis, предоставляющая key-value доступ.
 2.  **Доступ в хендлерах:** Внутри любого хендлера этого блупринта вы можете получить доступ к этим хранилищам через `context.data_stores`.
 3.  **Персистентность:** Данные в `data_store` сохраняются между вызовами хендлеров и даже между разными `job_id` одного и того же блупринта.
@@ -384,9 +393,9 @@ async def show_result(context, actions):
 
 **Как это работает:**
 
--   `analytics_bp.add_data_store("request_counter", ...)` создает экземпляр `AsyncDictStore`, который будет жить, пока жив Оркестратор.
--   `context.data_stores.request_counter` предоставляет доступ к этому экземпляру. `data_stores` - это динамический объект, атрибуты которого соответствуют именам созданных хранилищ.
--   Каждый раз, когда вы запускаете этот пайплайн (`/v1/jobs/analytics`), он будет увеличивать **один и тот же** счетчик, потому что `data_store` привязан к блупринту, а не к конкретному `job_id`.
+- `analytics_bp.add_data_store("request_counter", ...)` создает экземпляр `AsyncDictStore`, который будет жить, пока жив Оркестратор.
+- `context.data_stores.request_counter` предоставляет доступ к этому экземпляру. `data_stores` - это динамический объект, атрибуты которого соответствуют именам созданных хранилищ.
+- Каждый раз, когда вы запускаете этот пайплайн (`/v1/jobs/analytics`), он будет увеличивать **один и тот же** счетчик, потому что `data_store` привязан к блупринту, а не к конкретному `job_id`.
 
 ### **Рецепт 22: Отмена выполняемой задачи**
 
@@ -394,6 +403,7 @@ async def show_result(context, actions):
 
 **Концепция:**
 Система поддерживает гибридный механизм отмены, который работает как с WebSocket, так и без него.
+
 1.  **Запрос на отмену:** Вы отправляете `POST` запрос на API-эндпоинт `/api/v1/jobs/{job_id}/cancel`.
 2.  **Установка флага:** Оркестратор немедленно устанавливает в Redis флаг, сигнализирующий о запросе на отмену.
 3.  **Push-уведомление (WebSocket):** Если Воркер подключен по WebSocket, Оркестратор дополнительно отправляет ему команду `cancel_task` для немедленной реакции.
@@ -402,6 +412,7 @@ async def show_result(context, actions):
 6.  **Завершение:** Пайплайн переходит в состояние, указанное в `transitions` для статуса `"cancelled"`.
 
 #### **Шаг 1: Код Воркера**
+
 Воркер должен периодически вызывать `worker.check_for_cancellation`.
 
 ```python
@@ -423,7 +434,9 @@ async def process_video(params: dict, task_id: str, job_id: str) -> dict:
 ```
 
 #### **Шаг 2: Создание Блупринта**
+
 Блупринт должен иметь переход для нового статуса `cancelled`.
+
 ```python
 from avtomatika import Blueprint
 
@@ -459,6 +472,7 @@ async def task_cancelled(context, actions):
 ```
 
 #### **Шаг 2: Запуск задачи**
+
 ```bash
 # Запускаем Job и получаем его ID
 curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
@@ -469,11 +483,13 @@ curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
 ```
 
 #### **Шаг 3: Отмена задачи**
+
 ```bash
 # Отправляем запрос на отмену, используя полученный job_id
 curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel \
 -H "X-Client-Token: your-secret-orchestrator-token"
 ```
+
 Вы увидите в логах Воркера сообщение об отмене, а `Job` в Оркестраторе перейдет в состояние `task_failed_or_cancelled`.
 
 ### **Рецепт 22: Отправка прогресса выполнения задачи**
@@ -484,8 +500,10 @@ curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel \
 Как и отмена, эта функция работает через WebSocket. Воркер может отправлять события с прогрессом, которые Оркестратор сохраняет в `state_history` соответствующего `Job`.
 
 #### **Шаг 1: Код в Воркере**
+
 Воркер должен периодически вызывать `worker.send_progress()`.
-```python
+
+````python
 # Внутри вашего файла воркера (my_worker.py)
 @worker.skill("train_model")
 async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
@@ -548,16 +566,16 @@ async def check_config(context, task_files, actions):
 @s3_ops_bp.handler("fast_processing")
 async def fast_process(context, task_files, actions):
     # ... логика ...
-    
+
     # Записываем результат обратно в S3
     await task_files.write_text("result.txt", "Done fast.")
-    
+
     # Или работаем с папками рекурсивно
     # await task_files.download("dataset/") # Скачает s3://.../dataset/ в локальную папку
     # await task_files.upload("output_folder") # Загрузит локальную папку в s3://.../output_folder/
 
     actions.go_to("finished")
-```
+````
 
 ### **Рецепт 22b: Работа с большими файлами через S3 (Со стороны Воркера)**
 
@@ -567,6 +585,7 @@ async def fast_process(context, task_files, actions):
 SDK для Воркеров имеет встроенную поддержку S3. Если в параметрах задачи (`params`) встречается значение, начинающееся с `s3://`, SDK автоматически скачает файл во временную директорию и подменит URI на локальный путь. Аналогично, если ваш обработчик возвращает локальный путь к файлу, SDK загрузит его в S3 и вернет Оркестратору `s3://` URI.
 
 **Предварительные требования:**
+
 - Установите зависимость `obstore`: `pip install avtomatika-worker[s3]`
 - Настройте переменные окружения для доступа к S3:
   ```bash
@@ -577,6 +596,7 @@ SDK для Воркеров имеет встроенную поддержку S
   ```
 
 #### **Шаг 1: Код в Воркере**
+
 Воркеру не нужно знать о S3. Он просто работает с локальными файлами.
 
 ```python
@@ -603,7 +623,9 @@ async def process_video(params: dict, **kwargs) -> dict:
 ```
 
 #### **Шаг 2: Создание Блупринта**
+
 Блупринт просто передает S3 URI как параметр.
+
 ```python
 @s3_pipeline.handler(is_start=True)
 async def start_s3_task(context, actions):
@@ -616,9 +638,11 @@ async def start_s3_task(context, actions):
 ```
 
 #### **Шаг 3: Запуск задачи**
+
 ```bash
 curl -X POST ... -d '{"s3_uri": "s3://my-bucket/raw_videos/movie.mp4"}'
 ```
+
 После выполнения в `state_history` задачи появится результат с новым S3 URI, например: `{"processed_video_path": "s3://my-processing-bucket/processed_movie.mp4"}`.
 
 ### **Рецепт 22: Управление логикой повторов с помощью типов ошибок**
@@ -632,6 +656,7 @@ curl -X POST ... -d '{"s3_uri": "s3://my-bucket/raw_videos/movie.mp4"}'
 - `INVALID_INPUT_ERROR`: Задача немедленно помечается как `failed`.
 
 #### **Шаг 1: Код в Воркере**
+
 ```python
 # my_api_worker.py
 @worker.skill("fetch_external_data")
@@ -655,7 +680,9 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 ```
 
 #### **Шаг 2: Создание Блупринта**
+
 Блупринт может иметь разные ветки для разных исходов.
+
 ```python
 @error_handling_bp.handler(is_start=True)
 async def start_api_call(context, actions):
@@ -678,7 +705,8 @@ async def handle_failure(context, actions):
     else:
         print(f"Job {context.job_id} failed.")
 ```
-```
+
+````
 
 #### **Шаг 2: Проверка в Оркестраторе**
 После выполнения задачи вы можете запросить ее статус и увидеть `progress_updates` в `state_history`:
@@ -693,7 +721,7 @@ async def handle_failure(context, actions):
     ]
   }
 }
-```
+````
 
 ### **Рецепт 22: Вложенные Блупринты (Sub-blueprints)**
 
@@ -790,13 +818,15 @@ async def main_failed(context, actions):
 
 **Предварительное требование:**
 Для работы этой функции в вашей системе должен быть установлен **Graphviz**.
--   **Debian/Ubuntu:** `sudo apt-get install graphviz`
--   **macOS (Homebrew):** `brew install graphviz`
--   **Windows:** Установите с официального сайта и добавьте в `PATH`.
+
+- **Debian/Ubuntu:** `sudo apt-get install graphviz`
+- **macOS (Homebrew):** `brew install graphviz`
+- **Windows:** Установите с официального сайта и добавьте в `PATH`.
 
 **Пример:**
+
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F
 
 # Возьмем пайплайн с условной логикой из другого рецепта
 conditional_pipeline = Blueprint(name="conditional_flow")
@@ -805,11 +835,11 @@ conditional_pipeline = Blueprint(name="conditional_flow")
 async def start(context, actions):
     actions.go_to("process_data")
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'A'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "A")
 async def process_a(context, actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler("process_data").when("context.initial_data.type == 'B'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "B")
 async def process_b(context, actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
@@ -826,6 +856,7 @@ if __name__ == "__main__":
     # Эта команда создаст файл 'conditional_flow_diagram.png' в текущей директории
     conditional_pipeline.render_graph("conditional_flow_diagram", format="png")
 ```
+
 Запуск этого скрипта создаст изображение, наглядно показывающее все возможные пути выполнения задания в этом блупринте.
 
 ### **Рецепт 22: Частичное обновление состояния Воркера (PATCH)**
@@ -848,12 +879,14 @@ async def update_load(session, new_load):
 **Задача:** Настроить для разных клиентов разные лимиты использования (квоты) и использовать их кастомные параметры внутри блупринтов.
 
 **Концепция:**
+
 1.  **Конфигурация:** Вся информация о клиентах, включая их токен, план и квоты, определяется в файле `clients.toml`.
 2.  **Загрузка при старте:** При запуске Оркестратор считывает этот файл и загружает данные о квотах в Redis.
 3.  **Проверка квоты:** Специальное Quota Middleware автоматически проверяет и уменьшает счетчик "попыток" для каждого запроса к API. Если попытки закончились, запрос будет отклонен с ошибкой `429 Too Many Requests`.
 4.  **Доступ к параметрам:** Внутри хендлера блупринта вы можете получить доступ ко всем статическим параметрам клиента (например, его план или список языков) через объект `context.client.config`.
 
 #### **Шаг 1: Настройка `clients.toml`**
+
 ```toml
 [client_premium]
 token = "user_token_vip"
@@ -869,6 +902,7 @@ languages = ["en"]
 ```
 
 #### **Шаг 2: Использование в Блупринте**
+
 ```python
 from avtomatika import Blueprint
 
@@ -918,10 +952,12 @@ async def premium_failed(context, actions):
 #### **Назначение `is_start=True` хендлера**
 
 Начальный хендлер — это "входные ворота" вашего пайплайна. Это идеальное место для:
+
 1.  **Валидации и подготовки данных:** Проверьте, что все необходимые данные присутствуют, и подготовьте `state_history` для последующих шагов.
 2.  **Начальной маршрутизации:** Примите решение о первом реальном шаге на основе входных данных.
 
 **Пример:**
+
 ```python
 from avtomatika import Blueprint
 
@@ -966,11 +1002,13 @@ async def invalid_input_failed(context, actions):
 Конечные хендлеры — это "выход" из вашего пайплайна. Они выполняют финальные действия и **не должны** содержать вызовов `actions.go_to()` или `dispatch_task()`.
 
 **Ключевые использования:**
+
 1.  **Финальное логирование и уведомления:** Записать итог работы, отправить email или сообщение в Slack.
 2.  **Очистка ресурсов:** Удалить временные файлы, созданные в процессе работы.
 3.  **Обработка разных исходов:** Вы можете иметь несколько конечных состояний для разных результатов (успех, ошибка, отклонение и т.д.).
 
 **Пример:**
+
 ```python
 from avtomatika import Blueprint
 import os
@@ -1003,6 +1041,7 @@ async def handle_rejection(context, actions):
     # send_rejection_notification(context.initial_data.get("user_email"), rejection_reason)
 
 ```
+
 Использование `is_start` и `is_end` таким образом делает ваши пайплайны более структурированными, надежными и легкими для понимания.
 
 ### **Рецепт 22: Маршрутизация задач на основе требований к ресурсам**
@@ -1048,6 +1087,7 @@ async def start_gpu_task(context, actions):
 **Решение:** Оркестратор автоматически управляет контекстом трассировки OpenTelemetry. Контекст создается при получении API-запроса, передается воркеру вместе с задачей, а затем возвращается обратно с результатом. Это позволяет объединить все операции в единую трассу.
 
 **Как это работает:**
+
 1.  **Начало трассы:** При вызове `POST /api/...` Оркестратор создает корневой спан для нового задания.
 2.  **Оркестратор -> Воркер:** При вызове `actions.dispatch_task(...)`, `Dispatcher` автоматически инжектирует W3C Trace Context в заголовки HTTP-запроса к воркеру.
 3.  **Воркер:** Эмулятор воркера извлекает контекст из заголовков и создает дочерний спан на время выполнения задачи.
@@ -1105,8 +1145,8 @@ print(f"Job ID: {job_id}, Data: {retrieved_data}")
 
 con.close()
 ```
-*Примечание: SQLite нативно поддерживает тип данных JSON, что упрощает хранение сложных вложенных структур.*
 
+_Примечание: SQLite нативно поддерживает тип данных JSON, что упрощает хранение сложных вложенных структур._
 
 #### **Рецепт 22: Асинхронная работа с PostgreSQL**
 
@@ -1156,7 +1196,8 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-*Примечание: Использование `JSONB` в PostgreSQL предпочтительнее, чем `JSON`, так как он хранится в бинарном формате и позволяет создавать индексы по ключам внутри JSON-документа.*
+
+_Примечание: Использование `JSONB` в PostgreSQL предпочтительнее, чем `JSON`, так как он хранится в бинарном формате и позволяет создавать индексы по ключам внутри JSON-документа._
 
 ---
 
@@ -1168,15 +1209,16 @@ if __name__ == "__main__":
 
 История выполнения по умолчанию отключена. Чтобы ее включить, необходимо задать переменную окружения `HISTORY_DATABASE_URI`.
 
-*   **Для использования SQLite:**
-    ```bash
-    export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
-    ```
+- **Для использования SQLite:**
 
-*   **Для использования PostgreSQL:**
-    ```bash
-    export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
-    ```
+  ```bash
+  export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
+  ```
+
+- **Для использования PostgreSQL:**
+  ```bash
+  export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
+  ```
 
 После установки этой переменной Оркестратор автоматически начнет записывать события в указанную базу данных.
 
@@ -1184,36 +1226,37 @@ if __name__ == "__main__":
 
 Когда история включена, становится доступен новый эндпоинт для ее получения.
 
-*   **Запрос:**
-    ```bash
-    curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
-    ```
+- **Запрос:**
 
-*   **Пример ответа:**
-    ```json
-    [
-        {
-            "event_id": "a1b2c3d4-...",
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:00.123Z",
-            "state": "start",
-            "event_type": "state_started",
-            "duration_ms": null,
-            "context_snapshot": { "... (полное состояние задачи на момент начала) ..." }
-        },
-        {
-            "event_id": "e5f6g7h8-...",
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:01.456Z",
-            "state": "start",
-            "event_type": "state_finished",
-            "duration_ms": 1333,
-            "next_state": "processing",
-            "context_snapshot": { "... (состояние задачи после выполнения хендлера) ..." }
-        }
-    ]
-    ```
-Этот эндпоинт позволяет получить полную, пошаговую хронологию выполнения любой задачи для детального анализа и отладки.
+  ```bash
+  curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
+  ```
+
+- **Пример ответа:**
+  `json
+  [
+      {
+          "event_id": "a1b2c3d4-...",
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:00.123Z",
+          "state": "start",
+          "event_type": "state_started",
+          "duration_ms": null,
+          "context_snapshot": { "... (полное состояние задачи на момент начала) ..." }
+      },
+      {
+          "event_id": "e5f6g7h8-...",
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:01.456Z",
+          "state": "start",
+          "event_type": "state_finished",
+          "duration_ms": 1333,
+          "next_state": "processing",
+          "context_snapshot": { "... (состояние задачи после выполнения хендлера) ..." }
+      }
+  ]
+  `
+  Этот эндпоинт позволяет получить полную, пошаговую хронологию выполнения любой задачи для детального анализа и отладки.
 
 ---
 
@@ -1239,4 +1282,5 @@ holon_bridge = MatryoshkaBridge(engine)
 if __name__ == "__main__":
     holon_bridge.run()
 ```
-*Примечание: Все события и прогресс из внутреннего оркестратора будут автоматически «всплывать» (bubble) в родительскую сеть с сохранением цепочки идентичности.*
+
+_Примечание: Все события и прогресс из внутреннего оркестратора будут автоматически «всплывать» (bubble) в родительскую сеть с сохранением цепочки идентичности._

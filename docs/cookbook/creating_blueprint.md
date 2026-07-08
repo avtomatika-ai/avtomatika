@@ -33,11 +33,12 @@ order_pipeline = Blueprint(
 
 Each step in your process is a "state" with an attached "handler" function.
 
--   Decorator `@blueprint.handler("state_name")` binds function to state.
--   **Initial State** must be exactly one, marked with `is_start=True`.
--   **Final States** can be multiple, marked with `is_end=True`.
+- Decorator `@blueprint.handler("state_name")` binds function to state.
+- **Initial State** must be exactly one, marked with `is_start=True`.
+- **Final States** can be multiple, marked with `is_end=True`.
 
 The handler receives arguments via **Dependency Injection**. You can request:
+
 - `initial_data`: Original job input.
 - `actions`: `ActionFactory` object to control the process.
 - `state_history`: Full job history.
@@ -67,7 +68,7 @@ async def dispatch_to_worker(initial_data: dict, actions: ActionFactory):
     actions.dispatch_task(
         task_type="check_inventory",  # Task type worker understands
         params={"items": initial_data.get("items")},
-        
+
         # Define where process goes depending on worker response
         transitions={
             "success": "inventory_ok",      # If worker returns status="success"
@@ -116,6 +117,7 @@ async def finished_successfully(actions: ActionFactory):
 In your application's main file where you run `OrchestratorEngine`, register the created blueprint.
 
 When you call `register_blueprint()`, the engine automatically performs a **integrity validation check**. It ensures that:
+
 1.  The blueprint has exactly one start state.
 2.  All transitions lead to existing states (no "dangling" transitions).
 3.  All states are reachable from the start state (no "dead code").
@@ -139,3 +141,29 @@ engine.run()
 ```
 
 After this, you can create tasks by sending POST requests to `/api/v1/jobs/process_order`.
+
+## Step 5: Conditional Transitions with `F`
+
+To route the flow based on runtime context, pass a `FastF` expression from `fast-filter` directly into `@bp.handler()`. Conditions are JIT-compiled for zero overhead on hot paths.
+
+```python
+from avtomatika import F  # Re-exported from fast-filter
+
+# Route based on initial_data at runtime
+@order_pipeline.handler("decide_priority", F.initial_data["priority"] == "express")
+async def handle_express(actions: ActionFactory):
+    actions.go_to("express_lane")
+
+# Default fallback when no condition matches
+@order_pipeline.handler("decide_priority")
+async def handle_standard(actions: ActionFactory):
+    actions.go_to("standard_lane")
+```
+
+**Key rules:**
+
+- Import `F` from `avtomatika` (it is re-exported automatically).
+- Pass any `FastF` expression directly to the handler decorator — not a string.
+- If no condition matches **and** no default handler is registered, a `ValueError` is raised.
+- Missing attributes safely return `False`, never raise.
+- Multiple conditions for the same state are evaluated in **registration order** — first match wins.

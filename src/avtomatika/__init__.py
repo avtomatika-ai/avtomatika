@@ -20,6 +20,7 @@ try:
 except Exception:
     __version__ = "0.0.0-dev"
 
+from fast_filter import F, FastF
 from rxon.validators import is_valid_identifier, validate_identifier
 
 from . import telemetry
@@ -32,6 +33,8 @@ from .storage.base import StorageBackend
 __all__ = [
     "ActionFactory",
     "Blueprint",
+    "F",
+    "FastF",
     "JobContext",
     "OrchestratorEngine",
     "StorageBackend",

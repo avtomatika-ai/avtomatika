@@ -32,18 +32,20 @@ uvicorn app:app --host 0.0.0.0 --port 8080
 docker-compose up --build
 ```
 
--   **Orchestrator API** будет доступен по адресу `http://localhost:8080`.
+- **Orchestrator API** будет доступен по адресу `http://localhost:8080`.
 
 ### Запуск тестов
 
 Крайне **важно** запускать тесты после внесения любых изменений.
 
 **1. Настройка окружения:**
+
 ```bash
 pip install -e ".[all,test]"
 ```
 
 **2. Запуск тестов:**
+
 ```bash
 pytest tests/
 ```

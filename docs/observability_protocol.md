@@ -11,30 +11,38 @@ This document describes the end-to-end telemetry propagation logic between the O
 The sequence ensures that a single "trace thread" follows the task from the initial API call to the actual execution on a remote worker and back.
 
 ### Step 1: Task Dispatch (Orchestrator)
+
 When the `JobExecutor` decides to send a task to a worker:
+
 1.  It creates a child span for the dispatch operation.
 2.  It uses the OpenTelemetry `TextMapPropagator` to "inject" the current span context into a dictionary.
 3.  This dictionary is stored in the `tracing_context` field of the task payload.
 4.  **Optionality**: If OTel is disabled in the Orchestrator, `tracing_context` will be empty.
 
 ### Step 2: Task Receipt (Worker)
+
 When the Worker receives a task via the `poll` response:
+
 1.  It checks for the `tracing_context` key in the task data.
 2.  **Logic**:
-    *   **If present AND OTel is enabled on Worker**: Worker "extracts" the context and starts its own span as a child of the Orchestrator's span.
-    *   **If absent OR OTel is disabled on Worker**: Worker executes the task normally without any telemetry overhead.
+    - **If present AND OTel is enabled on Worker**: Worker "extracts" the context and starts its own span as a child of the Orchestrator's span.
+    - **If absent OR OTel is disabled on Worker**: Worker executes the task normally without any telemetry overhead.
 
 ### Step 3: Result Submission (Worker)
+
 Once execution is finished:
+
 1.  **If OTel is enabled on Worker**: Worker injects its current span context into the `tracing_context` field of the `result` message.
 2.  **If OTel is disabled**: The `result` message is sent without any tracing metadata.
 
 ### Step 4: Result Processing (Orchestrator)
+
 When the Orchestrator receives the `result` message:
+
 1.  It checks for `tracing_context` in the result payload.
 2.  **Logic**:
-    *   **If present**: Orchestrator links the received context to its own "Result Processing" span. This creates a visual "jump" in Jaeger between the two systems.
-    *   **If absent**: Orchestrator proceeds with its own internal tracing. No errors or warnings are generated.
+    - **If present**: Orchestrator links the received context to its own "Result Processing" span. This creates a visual "jump" in Jaeger between the two systems.
+    - **If absent**: Orchestrator proceeds with its own internal tracing. No errors or warnings are generated.
 
 ---
 
@@ -43,6 +51,7 @@ When the Orchestrator receives the `result` message:
 The `tracing_context` is a standard field at the root of RXON task and result objects.
 
 **Example Task Payload (Orchestrator → Worker):**
+
 ```json
 {
   "task_id": "...",
@@ -55,6 +64,7 @@ The `tracing_context` is a standard field at the root of RXON task and result ob
 ```
 
 **Example Result Payload (Worker → Orchestrator):**
+
 ```json
 {
   "job_id": "...",
@@ -81,6 +91,7 @@ The system is designed with **Zero-Friction** in mind:
 ## 4. Implementation Checklist for Worker SDKs
 
 To support full observability, a Worker SDK should:
+
 1.  [ ] Check for `tracing_context` in received tasks.
 2.  [ ] If OTel is available, use `extract(tracing_context)` to set the parent span.
 3.  [ ] Create a span named `Worker:Execute:{task_type}`.

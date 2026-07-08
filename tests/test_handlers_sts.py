@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from rxon.models import TokenResponse
+from rxon.utils import to_dict
 
 from avtomatika.config import Config
 from avtomatika.engine import OrchestratorEngine
@@ -91,5 +92,5 @@ async def test_issue_token_with_mtls(engine):
 
         response = await engine.handle_rxon_message("sts_token", payload=None, context=context)
 
-        assert response == expected_token._asdict()
+        assert response == to_dict(expected_token)
         engine.worker_service.issue_access_token.assert_awaited_once_with("worker-1")

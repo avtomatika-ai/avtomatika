@@ -320,11 +320,12 @@ async def get_workers_handler(request: web.Request) -> web.Response:
 async def get_worker_catalog_handler(request: web.Request) -> web.Response:
     """Aggregates all unique skills and their contracts from online workers."""
     engine = request.app[ENGINE_KEY]
-    now = monotonic()
+    monotonic()
 
     cache = engine.worker_catalog_cache
-    if cache["data"] is not None and now < cache["expires_at"]:
-        return json_response(cache["data"])
+    catalog_cached = cache.get("data")
+    if catalog_cached is not None:
+        return json_response(catalog_cached)
 
     workers = await engine.storage.get_available_workers()
 
@@ -361,7 +362,6 @@ async def get_worker_catalog_handler(request: web.Request) -> web.Response:
         item["average_reputation"] = round(item.pop("total_reputation") / item["providers_count"], 4)
 
     cache["data"] = catalog
-    cache["expires_at"] = now + 10.0
 
     return json_response(catalog)
 

@@ -126,7 +126,7 @@ async def test_parallel_branch_isolation_happy_path(engine, redis_storage):
                 "worker_id": "worker-a",
                 "status": "success",
                 "data": {"res": "A"},
-                "timestamp": time.time(),
+                "timestamp": int(time.time()),
                 "security": {"signature": "sig-a", "signer_id": "worker-a"},
             },
             authenticated_worker_id="worker-a",
@@ -141,7 +141,7 @@ async def test_parallel_branch_isolation_happy_path(engine, redis_storage):
                 "worker_id": "worker-b",
                 "status": "success",
                 "data": {"res": "B"},
-                "timestamp": time.time(),
+                "timestamp": int(time.time()),
                 "security": {"signature": "sig-b", "signer_id": "worker-b"},
             },
             authenticated_worker_id="worker-b",
@@ -203,7 +203,7 @@ async def test_atomic_aggregation_concurrency(engine, redis_storage):
                     "worker_id": f"worker-{i}",
                     "status": "success",
                     "data": {"val": i},
-                    "timestamp": time.time(),
+                    "timestamp": int(time.time()),
                     "security": {"signature": "s", "signer_id": f"worker-{i}"},
                 },
                 authenticated_worker_id=f"worker-{i}",
@@ -242,7 +242,7 @@ async def test_independent_branch_timeouts(engine, redis_storage):
     )
 
     # Expire only t1
-    now = time.time()
+    now = int(time.time())
     await redis_storage.add_job_to_watch(f"{job_id}:{tid_1}", now - 10)
     await redis_storage.add_job_to_watch(f"{job_id}:{tid_2}", now + 100)
 

@@ -8,7 +8,6 @@
 from collections.abc import Awaitable, Callable
 from hashlib import sha256
 from logging import getLogger
-from time import time
 from typing import Any
 
 from aiohttp import web
@@ -32,8 +31,8 @@ async def verify_worker_auth(
     cert_identity: str | None,
     worker_id_hint: str | None,
     metrics: Metrics,
-    token_hash_cache: dict[str, tuple[float, str]],
-    fernet_cache: dict[str, Any] | None = None,
+    token_hash_cache: Any,
+    fernet_cache: Any | None = None,
 ) -> tuple[str, str]:
     """
     Verifies worker authentication using token or mTLS.
@@ -68,24 +67,10 @@ async def verify_worker_auth(
             # Mixed mode
             raise PermissionError(f"Unauthorized: Missing {AUTH_HEADER_WORKER} header or client certificate.")
 
-        now = time()
-        if token in token_hash_cache:
-            expiry, hashed_provided_token = token_hash_cache[token]
-            if now > expiry:
-                del token_hash_cache[token]
-                hashed_provided_token = sha256(token.encode()).hexdigest()
-                token_hash_cache[token] = (now + 60.0, hashed_provided_token)
-        else:
+        hashed_provided_token = token_hash_cache.get(token)
+        if hashed_provided_token is None:
             hashed_provided_token = sha256(token.encode()).hexdigest()
-            if len(token_hash_cache) >= 10000:
-                # Simple cleanup of expired items if cache is full
-                expired_keys = [k for k, v in token_hash_cache.items() if now > v[0]]
-                for k in expired_keys:
-                    del token_hash_cache[k]
-                if len(token_hash_cache) >= 10000:
-                    token_hash_cache.clear()
-
-            token_hash_cache[token] = (now + 60.0, hashed_provided_token)
+            token_hash_cache[token] = hashed_provided_token
 
         token_worker_id: str | None = await storage.verify_worker_access_token(hashed_provided_token)
         if token_worker_id:

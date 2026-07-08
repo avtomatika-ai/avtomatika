@@ -70,7 +70,7 @@ def sign_pure(data, secret, ignore=None):
 @pytest.mark.asyncio
 async def test_register_worker_full_object_signature(worker_service, config):
     worker_id = "worker-1"
-    timestamp = time.time()
+    timestamp = int(time.time())
     reg = WorkerRegistration(worker_id=worker_id, worker_type="test-worker", timestamp=timestamp)
 
     # Sign with our new 'pure' logic
@@ -87,7 +87,7 @@ async def test_process_task_result_full_object_signature(worker_service, config,
     worker_id = "worker-1"
     job_id = "job-1"
     task_id = "task-1"
-    timestamp = time.time()
+    timestamp = int(time.time())
 
     await storage.register_worker(worker_id, {"worker_id": worker_id}, 60)
     await storage.save_job_state(
@@ -117,7 +117,7 @@ async def test_process_task_result_tamper_metadata(worker_service, config, stora
     worker_id = "worker-1"
     job_id = "job-1"
     task_id = "task-1"
-    timestamp = time.time()
+    timestamp = int(time.time())
 
     await storage.register_worker(worker_id, {"worker_id": worker_id}, 60)
     await storage.save_job_state(
@@ -144,7 +144,7 @@ async def test_heartbeat_full_object_signature(worker_service, config, storage):
     worker_id = "worker-1"
     await storage.register_worker(worker_id, {"worker_id": worker_id}, 60)
 
-    hb = Heartbeat(worker_id=worker_id, status="ready", timestamp=time.time())
+    hb = Heartbeat(worker_id=worker_id, status="ready", timestamp=int(time.time()))
 
     signature = sign_pure(hb, config.GLOBAL_WORKER_TOKEN)
     hb_dict = to_dict(hb)
@@ -157,7 +157,7 @@ async def test_heartbeat_full_object_signature(worker_service, config, storage):
 @pytest.mark.asyncio
 async def test_process_worker_event_bubbling_safe_full_signature(worker_service, config):
     worker_id = "worker-1"
-    timestamp = time.time()
+    timestamp = int(time.time())
 
     event = WorkerEventPayload(
         event_id="ev-1",
@@ -186,7 +186,7 @@ async def test_process_worker_event_bubbling_safe_full_signature(worker_service,
 @pytest.mark.asyncio
 async def test_missing_signature_rejected(worker_service, config):
     worker_id = "worker-1"
-    reg = WorkerRegistration(worker_id=worker_id, timestamp=time.time())
+    reg = WorkerRegistration(worker_id=worker_id, timestamp=int(time.time()))
     reg_dict = to_dict(reg)
     # Intentionally omitted security dict
     with pytest.raises(PermissionError, match="Missing required security context"):
@@ -198,7 +198,7 @@ async def test_timestamp_boundary_conditions(worker_service, config):
     """Boundary test: 60s is OK, 61s is REJECTED."""
     worker_id = "boundary-worker"
 
-    ts_60 = time.time() - 60
+    ts_60 = int(time.time() - 60)
     reg_60 = WorkerRegistration(worker_id=worker_id, timestamp=ts_60)
     sig_60 = sign_pure(reg_60, config.GLOBAL_WORKER_TOKEN)
     reg_dict_60 = to_dict(reg_60)
@@ -207,7 +207,7 @@ async def test_timestamp_boundary_conditions(worker_service, config):
     # Should not raise
     await worker_service.register_worker(reg_dict_60, worker_id)
 
-    ts_61 = time.time() - 61
+    ts_61 = int(time.time() - 61)
     reg_61 = WorkerRegistration(worker_id=worker_id, timestamp=ts_61)
     sig_61 = sign_pure(reg_61, config.GLOBAL_WORKER_TOKEN)
     reg_dict_61 = to_dict(reg_61)
@@ -242,7 +242,7 @@ async def test_missing_timestamp_rejected(worker_service, config):
 @pytest.mark.asyncio
 async def test_future_timestamp_rejected(worker_service, config):
     worker_id = "worker-1"
-    reg = WorkerRegistration(worker_id=worker_id, timestamp=time.time() + 100)  # Clock skew from future
+    reg = WorkerRegistration(worker_id=worker_id, timestamp=int(time.time() + 100))  # Clock skew from future
     signature = sign_pure(reg, config.GLOBAL_WORKER_TOKEN)
     reg_dict = to_dict(reg)
     reg_dict["security"] = {"signature": signature, "signer_id": worker_id}
@@ -253,7 +253,7 @@ async def test_future_timestamp_rejected(worker_service, config):
 @pytest.mark.asyncio
 async def test_none_stripping_resilience(worker_service, config):
     worker_id = "worker-1"
-    reg = WorkerRegistration(worker_id=worker_id, timestamp=time.time())
+    reg = WorkerRegistration(worker_id=worker_id, timestamp=int(time.time()))
     signature = sign_pure(reg, config.GLOBAL_WORKER_TOKEN)
     reg_dict = to_dict(reg)
 
@@ -275,7 +275,7 @@ async def test_event_type_spoofing_rejected(worker_service, config):
         origin_worker_id=worker_id,
         event_type="progress",
         payload={"progress": 0.5},
-        timestamp=time.time(),
+        timestamp=int(time.time()),
     )
 
     signature = sign_pure(event, config.GLOBAL_WORKER_TOKEN, ignore=["bubbling_chain"])

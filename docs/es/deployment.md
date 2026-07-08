@@ -26,18 +26,20 @@ uvicorn app:app --host 0.0.0.0 --port 8080
 docker-compose up --build
 ```
 
--   **Orchestrator API** estará disponible en `http://localhost:8080`.
+- **Orchestrator API** estará disponible en `http://localhost:8080`.
 
 ### Ejecución de Pruebas
 
 Es **crucial** ejecutar las pruebas después de realizar cambios.
 
 **1. Configurar el entorno:**
+
 ```bash
 pip install -e ".[all,test]"
 ```
 
 **2. Ejecutar pruebas:**
+
 ```bash
 pytest tests/
 ```

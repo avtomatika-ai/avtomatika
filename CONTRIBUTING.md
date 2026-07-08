@@ -13,12 +13,13 @@ We welcome contributions! Please follow these guidelines:
 ## Testing
 
 Run the test suite specifically for the orchestrator:
+
 ```bash
 pytest tests/
 ```
 
 ## Standards
 
--   Ensure all changes are linted with **Ruff**.
--   All new functions must have type hints and pass **Mypy** checks.
--   Follow the existing style of state-machine handlers.
+- Ensure all changes are linted with **Ruff**.
+- All new functions must have type hints and pass **Mypy** checks.
+- Follow the existing style of state-machine handlers.

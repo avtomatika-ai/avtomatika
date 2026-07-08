@@ -18,7 +18,7 @@ class Metrics:
     Avoiding global variables for better testability and clean architecture.
     """
 
-    def __init__(self, meter: Any, instrument_cache: dict[str, Any] | None = None):
+    def __init__(self, meter: Any, instrument_cache: Any | None = None):
         # without using global module-level variables.
         self._cache = instrument_cache if instrument_cache is not None else {}
 
@@ -148,7 +148,7 @@ class Metrics:
             self._gauge_values[name] = value
 
 
-def create_metrics(instrument_cache: dict[str, Any] | None = None) -> Metrics:
+def create_metrics(instrument_cache: Any | None = None) -> Metrics:
     """Factory to create a Metrics instance using the global OTel meter.
     Takes an optional cache to ensure idempotency across multiple instances.
     """

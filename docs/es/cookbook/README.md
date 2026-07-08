@@ -11,6 +11,7 @@ Este recetario proporciona una colección de recetas para construir flujos de tr
 ### **Receta 1: Creación de un Pipeline Lineal Simple**
 
 **Tarea:** Crear un pipeline que ejecute secuencialmente tres pasos: A -> B -> C.
+
 ```python
 from avtomatika import Blueprint
 
@@ -48,6 +49,7 @@ async def failed(job_id, actions):
 ### **Receta 2: Implementación de "Humano en el Bucle" (Moderación)**
 
 **Tarea:** Pausar el pipeline después del paso `generate_data` y esperar la aprobación de un moderador.
+
 ```python
 from avtomatika import Blueprint
 
@@ -100,6 +102,7 @@ async def process_approved_handler(actions):
 
 **Concepto:**
 El paralelismo se logra llamando a `actions.dispatch_task()` múltiples veces en un manejador.
+
 1.  **Lanzamiento:** En un manejador regular, llama a `dispatch_task` para cada tarea paralela. **Requisito clave:** todas estas llamadas deben apuntar al mismo estado en `transitions`. Este estado será el punto de agregación.
 2.  **Agregación:** El manejador para el estado agregador está marcado con el decorador especial `@blueprint.aggregator(...)`. El Orquestador no llamará a este manejador hasta que **todas** las tareas que conducen a este estado se completen.
 3.  **Acceso a Resultados:** Dentro del manejador agregador, los resultados de todas las tareas paralelas están disponibles en `context.aggregation_results`. Este es un diccionario donde la clave es `task_id` y el valor es el resultado devuelto por el worker.
@@ -165,7 +168,8 @@ async def failed(job_id, actions):
     logger.error(f"Trabajo {job_id} falló.")
 
 ```
-*Nota: Si al menos una de las tareas paralelas falla (transita al estado `failed`), el manejador agregador no será llamado y todo el `Job` transitará inmediatamente al estado `failed`.*
+
+_Nota: Si al menos una de las tareas paralelas falla (transita al estado `failed`), el manejador agregador no será llamado y todo el `Job` transitará inmediatamente al estado `failed`._
 
 ### **Receta 4: Configuración de Worker para Múltiples Orquestadores**
 
@@ -174,10 +178,11 @@ async def failed(job_id, actions):
 **Concepto:**
 `worker_sdk` admite dos modos para trabajar con múltiples Orquestadores, configurados a través de variables de entorno. El worker se registrará automáticamente y enviará latidos a todos los Orquestadores en la lista.
 
--   `FAILOVER` (predeterminado): El worker sondea a los Orquestadores en el orden en que aparecen en la configuración. Si el Orquestador principal no está disponible, el Worker cambia automáticamente al siguiente en la lista.
--   `ROUND_ROBIN`: El worker sondea a cada Orquestador en la lista secuencialmente, permitiendo la distribución de carga.
+- `FAILOVER` (predeterminado): El worker sondea a los Orquestadores en el orden en que aparecen en la configuración. Si el Orquestador principal no está disponible, el Worker cambia automáticamente al siguiente en la lista.
+- `ROUND_ROBIN`: El worker sondea a cada Orquestador en la lista secuencialmente, permitiendo la distribución de carga.
 
 **Cómo configurar:**
+
 1.  **`ORCHESTRATORS_CONFIG`**: En lugar de `ORCHESTRATOR_URL`, usa esta variable para pasar una cadena JSON que describa todos los Orquestadores disponibles.
 2.  **`MULTI_ORCHESTRATOR_MODE`**: Establece el valor en `FAILOVER` o `ROUND_ROBIN`.
 
@@ -198,6 +203,7 @@ python -m your_worker_module
 ```
 
 #### **Ejemplo 2: Configuración para Equilibrio de Carga (Round Robin)**
+
 ```bash
 # El worker sondeará 'orchestrator-1' y 'orchestrator-2' secuencialmente.
 export ORCHESTRATORS_CONFIG='[
@@ -210,12 +216,13 @@ export MULTI_ORCHESTRATOR_MODE="ROUND_ROBIN"
 # Ejecutar worker
 python -m your_worker_module
 ```
-*Nota: Esta configuración se realiza exclusivamente en el lado del Worker y es completamente transparente para el Orquestador. Cada Orquestador ve este Worker como un ejecutor normal registrado.*
 
-### **Receta 5: Enrutamiento Condicional con .when()**
+_Nota: Esta configuración se realiza exclusivamente en el lado del Worker y es completamente transparente para el Orquestador. Cada Orquestador ve este Worker como un ejecutor normal registrado._
+
+### **Receta 5: Enrutamiento Condicional**
 
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F
 
 multilingual_pipeline = Blueprint(
     name="multilingual_flow",
@@ -228,11 +235,11 @@ async def start_multilingual(actions):
     # Este paso solo pasa el control más adelante, donde se activará la lógica condicional
     actions.go_to("process_text")
 
-@multilingual_pipeline.handler("process_text").when("initial_data.language == 'en'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "en")
 async def process_english_text(initial_data, actions):
     actions.dispatch_task(task_type="process_en", params=initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler("process_text").when("initial_data.language == 'de'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "de")
 async def process_german_text(initial_data, actions):
     actions.dispatch_task(task_type="process_de", params=initial_data, transitions={"success": "finished"})
 
@@ -268,7 +275,8 @@ async def start_critical_task(initial_data, actions):
 async def critical_finished(job_id, actions):
     print(f"Tarea crítica {job_id} terminada.")
 ```
-*Nota: Estrategias disponibles: `default`, `round_robin`, `least_connections`.*
+
+_Nota: Estrategias disponibles: `default`, `round_robin`, `least_connections`._
 
 ### **Receta 7: Gestión de Prioridad de Tareas**
 
@@ -303,8 +311,8 @@ async def priority_finished(job_id, actions):
     print(f"Tarea {job_id} terminada.")
 
 ```
-*Nota: Si múltiples tareas tienen la misma prioridad, se ejecutarán en orden de llegada (FIFO) dentro de esa prioridad.*
 
+_Nota: Si múltiples tareas tienen la misma prioridad, se ejecutarán en orden de llegada (FIFO) dentro de esa prioridad._
 
 ### **Receta 8: Optimización de Costos con `cheapest` y `max_cost`**
 
@@ -339,13 +347,15 @@ async def cost_optimized_finished(actions):
 async def cost_optimized_failed(actions):
     print("El trabajo falló porque ningún worker cumplió con los criterios de costo.")
 ```
-*Nota: La estrategia `cheapest` utiliza el campo `cost_per_second` del worker. Si ningún worker cumple con `max_cost`, el pipeline no encontrará un ejecutor y fallará.*
+
+_Nota: La estrategia `cheapest` utiliza el campo `cost_per_second` del worker. Si ningún worker cumple con `max_cost`, el pipeline no encontrará un ejecutor y fallará._
 
 ### **Receta 9: Uso de Almacenes de Datos (`data_stores`)**
 
 **Tarea:** Usar almacenamiento persistente compartido (`data_store`) para intercambiar datos entre diferentes estados o incluso diferentes ejecuciones del mismo pipeline. Por ejemplo, para implementar un contador o caché.
 
 **Concepto:**
+
 1.  **Inicialización:** Al crear un blueprint, puedes "adjuntar" uno o más almacenes de datos a él. Cada almacén es esencialmente un envoltorio de Redis que proporciona acceso clave-valor.
 2.  **Acceso en Manejadores:** Dentro de cualquier manejador de este blueprint, puedes acceder a estos almacenes a través de `data_stores`.
 3.  **Persistencia:** Los datos en `data_store` persisten entre llamadas a manejadores e incluso entre diferentes `job_id` del mismo blueprint.
@@ -385,9 +395,9 @@ async def show_result(job_id, state_history, actions):
 
 **Cómo funciona:**
 
--   `analytics_bp.add_data_store("request_counter", ...)` crea una instancia de `AsyncDictStore` que vive tanto como viva el Orquestador.
--   `data_stores.request_counter` proporciona acceso a esta instancia. `data_stores` es un objeto dinámico cuyos atributos corresponden a los nombres de los almacenes creados.
--   Cada vez que ejecutes este pipeline (`/v1/jobs/analytics`), incrementará **el mismo** contador porque `data_store` está vinculado al blueprint, no al `job_id` específico.
+- `analytics_bp.add_data_store("request_counter", ...)` crea una instancia de `AsyncDictStore` que vive tanto como viva el Orquestador.
+- `data_stores.request_counter` proporciona acceso a esta instancia. `data_stores` es un objeto dinámico cuyos atributos corresponden a los nombres de los almacenes creados.
+- Cada vez que ejecutes este pipeline (`/v1/jobs/analytics`), incrementará **el mismo** contador porque `data_store` está vinculado al blueprint, no al `job_id` específico.
 
 ### **Receta 10: Cancelación de una Tarea en Ejecución**
 
@@ -395,6 +405,7 @@ async def show_result(job_id, state_history, actions):
 
 **Concepto:**
 El sistema soporta un mecanismo de cancelación híbrido que funciona con o sin WebSocket.
+
 1.  **Solicitud de Cancelación:** Envías una solicitud `POST` al punto final de la API `/api/v1/jobs/{job_id}/cancel`.
 2.  **Establecimiento de Bandera:** El Orquestador establece inmediatamente una bandera en Redis señalando la solicitud de cancelación.
 3.  **Notificación Push (WebSocket):** Si el Worker está conectado vía WebSocket, el Orquestador envía adicionalmente el comando `cancel_task` para una reacción inmediata.
@@ -403,6 +414,7 @@ El sistema soporta un mecanismo de cancelación híbrido que funciona con o sin 
 6.  **Finalización:** El pipeline transita al estado especificado en `transitions` para el estado `"cancelled"`.
 
 #### **Paso 1: Código del Worker**
+
 El Worker debe llamar periódicamente a `worker.check_for_cancellation`.
 
 ```python
@@ -424,7 +436,9 @@ async def process_video(params: dict, task_id: str, job_id: str) -> dict:
 ```
 
 #### **Paso 2: Creación del Blueprint**
+
 El blueprint debe tener una transición para el nuevo estado `cancelled`.
+
 ```python
 from avtomatika import Blueprint
 
@@ -460,21 +474,24 @@ async def task_cancelled(actions):
 ```
 
 #### **Paso 3: Ejecutar Trabajo**
+
 ```bash
 # Ejecutar Trabajo y obtener su ID
-curl -X POST http://localhost:8080/api/v1/jobs/cancellable 
--H "Content-Type: application/json" 
--H "X-Client-Token: your-secret-orchestrator-token" 
+curl -X POST http://localhost:8080/api/v1/jobs/cancellable
+-H "Content-Type: application/json"
+-H "X-Client-Token: your-secret-orchestrator-token"
 -d '{"video_url": "..."}'
 # Respuesta: {"status": "accepted", "job_id": "YOUR_JOB_ID"}
 ```
 
 #### **Paso 4: Cancelar Trabajo**
+
 ```bash
 # Enviar solicitud de cancelación usando el job_id recibido
-curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel 
+curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel
 -H "X-Client-Token: your-secret-orchestrator-token"
 ```
+
 Verás el mensaje de cancelación en los logs del Worker, y el `Job` en el Orquestador transitará al estado `task_cancelled`.
 
 ### **Receta 11: Envío de Progreso de Tarea**
@@ -485,7 +502,9 @@ Verás el mensaje de cancelación en los logs del Worker, y el `Job` en el Orque
 Al igual que la cancelación, esta característica funciona vía WebSocket. El Worker puede enviar eventos de progreso, que el Orquestador guarda en `state_history` del `Job` correspondiente.
 
 #### **Paso 1: Código en Worker**
+
 El Worker debe llamar periódicamente a `worker.send_progress()`.
+
 ```python
 # Dentro de tu archivo de worker (my_worker.py)
 @worker.skill("train_model")
@@ -504,15 +523,17 @@ async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
 ```
 
 #### **Paso 2: Verificación en Orquestador**
+
 Después de la ejecución de la tarea, puedes solicitar el estado y ver `progress_updates` en `state_history`:
+
 ```json
 {
   "id": "YOUR_JOB_ID",
   "current_state": "finished",
   "state_history": {
     "progress_updates": [
-      {"progress": 0.1, "message": "Época 1 completada", "timestamp": "..."},
-      {"progress": 0.2, "message": "Época 2 completada", "timestamp": "..."}
+      { "progress": 0.1, "message": "Época 1 completada", "timestamp": "..." },
+      { "progress": 0.2, "message": "Época 2 completada", "timestamp": "..." }
     ]
   }
 }
@@ -526,6 +547,7 @@ Después de la ejecución de la tarea, puedes solicitar el estado y ver `progres
 Cuando el soporte S3 está habilitado en el Orquestador, puedes solicitar el argumento `task_files` en tus manejadores. Este objeto proporciona métodos auxiliares para interactuar con la carpeta S3 del trabajo (`jobs/{job_id}/`) sin gestionar conexiones manualmente.
 
 **Prerrequisito:**
+
 - Orquestador configurado con `S3_ENDPOINT_URL`, etc.
 - Dependencias instaladas: `pip install avtomatika[s3]`
 
@@ -564,10 +586,10 @@ async def check_config(context, task_files, actions):
 @s3_ops_bp.handler("fast_processing")
 async def fast_process(context, task_files, actions):
     # ... lógica ...
-    
+
     # Escribir resultado de vuelta a S3
     await task_files.write_text("result.txt", "Hecho rápido.")
-    
+
     # O subir un directorio completo recursivamente
     # await task_files.download("dataset/") # Descarga s3://.../dataset/ a local
     # await task_files.upload("output_folder") # Sube carpeta local a s3://.../output_folder/
@@ -583,6 +605,7 @@ async def fast_process(context, task_files, actions):
 El SDK del Worker tiene soporte S3 integrado. Si los parámetros de la tarea (`params`) contienen un valor que comienza con `s3://`, el SDK descarga automáticamente el archivo al directorio temporal y sustituye el URI con la ruta local. De manera similar, si tu manejador devuelve una ruta de archivo local, el SDK la sube a S3 y devuelve el URI `s3://` al Orquestador.
 
 **Prerrequisitos:**
+
 - Instalar dependencia `obstore`: `pip install avtomatika-worker[s3]`
 - Configurar variables de entorno para acceso a S3:
   ```bash
@@ -593,6 +616,7 @@ El SDK del Worker tiene soporte S3 integrado. Si los parámetros de la tarea (`p
   ```
 
 #### **Paso 1: Código en Worker**
+
 El Worker no necesita saber sobre S3. Simplemente trabaja con archivos locales.
 
 ```python
@@ -619,7 +643,9 @@ async def process_video(params: dict, **kwargs) -> dict:
 ```
 
 #### **Paso 2: Creación del Blueprint**
+
 El Blueprint simplemente pasa el URI S3 como parámetro.
+
 ```python
 @s3_pipeline.handler(is_start=True)
 async def start_s3_task(actions):
@@ -632,9 +658,11 @@ async def start_s3_task(actions):
 ```
 
 #### **Paso 3: Ejecutar Tarea**
+
 ```bash
 curl -X POST ... -d '{"s3_uri": "s3://my-bucket/raw_videos/movie.mp4"}'
 ```
+
 Después de la ejecución, `state_history` de la tarea contendrá el resultado con el nuevo URI S3, por ejemplo: `{"processed_video_path": "s3://my-processing-bucket/processed_movie.mp4"}`.
 
 ### **Receta 13: Gestión de Lógica de Reintento con Tipos de Error**
@@ -648,6 +676,7 @@ El Orquestador por defecto reintenta cualquier tarea fallida (`TRANSIENT_ERROR`)
 - `INVALID_INPUT_ERROR`: Tarea marcada inmediatamente como `failed`.
 
 #### **Paso 1: Código en Worker**
+
 ```python
 # my_api_worker.py
 @worker.skill("fetch_external_data")
@@ -671,7 +700,9 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 ```
 
 #### **Paso 2: Creación del Blueprint**
+
 El Blueprint puede tener diferentes ramas para diferentes resultados.
+
 ```python
 @error_handling_bp.handler(is_start=True)
 async def start_api_call(actions):
@@ -789,13 +820,15 @@ async def main_failed(actions):
 
 **Prerrequisito:**
 **Graphviz** debe estar instalado en tu sistema para que esta función funcione.
--   **Debian/Ubuntu:** `sudo apt-get install graphviz`
--   **macOS (Homebrew):** `brew install graphviz`
--   **Windows:** Instalar desde el sitio oficial y agregar al `PATH`.
+
+- **Debian/Ubuntu:** `sudo apt-get install graphviz`
+- **macOS (Homebrew):** `brew install graphviz`
+- **Windows:** Instalar desde el sitio oficial y agregar al `PATH`.
 
 **Ejemplo:**
+
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F
 
 # Tomar pipeline de lógica condicional de otra receta
 conditional_pipeline = Blueprint(name="conditional_flow")
@@ -804,11 +837,11 @@ conditional_pipeline = Blueprint(name="conditional_flow")
 async def start(actions):
     actions.go_to("process_data")
 
-@conditional_pipeline.handler("process_data").when("initial_data.type == 'A'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "A")
 async def process_a(actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler("process_data").when("initial_data.type == 'B'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "B")
 async def process_b(actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
@@ -825,6 +858,7 @@ if __name__ == "__main__":
     # Este comando crea 'conditional_flow_diagram.png' en el directorio actual
     conditional_pipeline.render_graph("conditional_flow_diagram", format="png")
 ```
+
 Ejecutar este script crea una imagen que muestra claramente todas las rutas de ejecución posibles en este blueprint.
 
 ### **Receta 16: Actualización Parcial del Estado del Worker (PATCH)**
@@ -847,12 +881,14 @@ async def update_load(session, new_load):
 **Tarea:** Configurar diferentes límites de uso (cuotas) para diferentes clientes y usar sus parámetros personalizados dentro de blueprints.
 
 **Concepto:**
+
 1.  **Configuración:** Toda la información del cliente, incluido token, plan y cuotas, se define en `clients.toml`.
 2.  **Carga al Inicio:** Al inicio, el Orquestador lee este archivo y carga los datos de cuota en Redis.
 3.  **Verificación de Cuota:** El Middleware de Cuota especial verifica y decrementa automáticamente el contador de "intentos" para cada solicitud API. Si se agotan los intentos, la solicitud se rechaza con `429 Too Many Requests`.
 4.  **Acceso a Parámetros:** Dentro del manejador del blueprint, puedes acceder a todos los parámetros estáticos del cliente (por ejemplo, plan o lista de idiomas) a través de `context.client.config`.
 
 #### **Paso 1: Configuración de `clients.toml`**
+
 ```toml
 [client_premium]
 token = "user_token_vip"
@@ -868,6 +904,7 @@ languages = ["en"]
 ```
 
 #### **Paso 2: Uso en Blueprint**
+
 ```python
 from avtomatika import Blueprint
 
@@ -917,10 +954,12 @@ async def premium_failed(actions):
 #### **Propósito del Manejador `is_start=True`**
 
 El manejador inicial es la "puerta de entrada" de tu pipeline. Lugar ideal para:
+
 1.  **Validación y Preparación de Datos:** Verificar que todos los datos necesarios estén presentes y preparar `state_history` para los pasos siguientes.
 2.  **Enrutamiento Inicial:** Decidir el primer paso real basado en los datos de entrada.
 
 **Ejemplo:**
+
 ```python
 from avtomatika import Blueprint
 
@@ -965,11 +1004,13 @@ async def invalid_input_failed(actions):
 Los manejadores finales son la "salida" de tu pipeline. Realizan acciones finales y **no deben** contener llamadas a `actions.go_to()` o `dispatch_task()`.
 
 **Usos Clave:**
+
 1.  **Registro Final y Notificación:** Registrar resultado, enviar correo electrónico o mensaje de Slack.
 2.  **Limpieza de Recursos:** Eliminar archivos temporales creados durante el proceso.
 3.  **Manejo de Resultados:** Puedes tener múltiples estados finales para diferentes resultados (éxito, fallo, rechazo, etc.).
 
 **Ejemplo:**
+
 ```python
 from avtomatika import Blueprint
 import os
@@ -1002,6 +1043,7 @@ async def handle_rejection(actions):
     # send_rejection_notification(initial_data.get("user_email"), rejection_reason)
 
 ```
+
 Usar `is_start` e `is_end` de esta manera hace que tus pipelines sean más estructurados, fiables y fáciles de entender.
 
 ### **Receta 19: Enrutamiento de Tareas Basado en Requisitos de Recursos**
@@ -1047,6 +1089,7 @@ async def start_gpu_task(actions):
 **Solución:** El Orquestador gestiona automáticamente el contexto de rastreo de OpenTelemetry. El contexto se crea al recibir la solicitud API, se pasa al worker con la tarea y se devuelve con el resultado. Permite combinar todas las operaciones en una sola traza.
 
 **Cómo funciona:**
+
 1.  **Inicio de Traza:** En la llamada `POST /api/...`, el Orquestador crea un tramo raíz para el nuevo trabajo.
 2.  **Orquestador -> Worker:** En la llamada `actions.dispatch_task(...)`, el `Dispatcher` inyecta automáticamente el Contexto de Rastreo W3C en los encabezados de la solicitud HTTP al worker.
 3.  **Worker:** El emulador del worker extrae el contexto de los encabezados y crea un tramo hijo para la duración de la ejecución de la tarea.
@@ -1104,8 +1147,8 @@ print(f"ID Trabajo: {job_id}, Datos: {retrieved_data}")
 
 con.close()
 ```
-*Nota: SQLite soporta nativamente el tipo de datos JSON, simplificando el almacenamiento de estructuras anidadas complejas.*
 
+_Nota: SQLite soporta nativamente el tipo de datos JSON, simplificando el almacenamiento de estructuras anidadas complejas._
 
 #### **Receta 22: Interacción Asíncrona con PostgreSQL**
 
@@ -1155,7 +1198,8 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-*Nota: Usar `JSONB` en PostgreSQL es preferible sobre `JSON` ya que se almacena en formato binario y permite crear índices sobre claves dentro del documento JSON.*
+
+_Nota: Usar `JSONB` en PostgreSQL es preferible sobre `JSON` ya que se almacena en formato binario y permite crear índices sobre claves dentro del documento JSON._
 
 ---
 
@@ -1167,15 +1211,16 @@ if __name__ == "__main__":
 
 El historial de ejecución está deshabilitado por defecto. Para habilitarlo, establece la variable de entorno `HISTORY_DATABASE_URI`.
 
-*   **Para SQLite:**
-    ```bash
-    export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
-    ```
+- **Para SQLite:**
 
-*   **Para PostgreSQL:**
-    ```bash
-    export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
-    ```
+  ```bash
+  export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
+  ```
+
+- **Para PostgreSQL:**
+  ```bash
+  export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
+  ```
 
 Después de configurar esta variable, el Orquestador comienza automáticamente a registrar eventos en la base de datos especificada.
 
@@ -1183,36 +1228,37 @@ Después de configurar esta variable, el Orquestador comienza automáticamente a
 
 Cuando el historial está habilitado, un nuevo punto final se vuelve disponible.
 
-*   **Solicitud:**
-    ```bash
-    curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
-    ```
+- **Solicitud:**
 
-*   **Ejemplo de Respuesta:**
-    ```json
-    [
-        {
-            "event_id": "a1b2c3d4-...".
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:00.123Z",
-            "state": "start",
-            "event_type": "state_started",
-            "duration_ms": null,
-            "context_snapshot": { "... (estado completo del trabajo al inicio) ..." }
-        },
-        {
-            "event_id": "e5f6g7h8-...".
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:01.456Z",
-            "state": "start",
-            "event_type": "state_finished",
-            "duration_ms": 1333,
-            "next_state": "processing",
-            "context_snapshot": { "... (estado del trabajo después de ejecución del manejador) ..." }
-        }
-    ]
-    ```
-Este punto final proporciona una línea de tiempo paso a paso completa de cualquier tarea para un análisis y depuración detallados.
+  ```bash
+  curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
+  ```
+
+- **Ejemplo de Respuesta:**
+  `json
+  [
+      {
+          "event_id": "a1b2c3d4-...".
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:00.123Z",
+          "state": "start",
+          "event_type": "state_started",
+          "duration_ms": null,
+          "context_snapshot": { "... (estado completo del trabajo al inicio) ..." }
+      },
+      {
+          "event_id": "e5f6g7h8-...".
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:01.456Z",
+          "state": "start",
+          "event_type": "state_finished",
+          "duration_ms": 1333,
+          "next_state": "processing",
+          "context_snapshot": { "... (estado del trabajo después de ejecución del manejador) ..." }
+      }
+  ]
+  `
+  Este punto final proporciona una línea de tiempo paso a paso completa de cualquier tarea para un análisis y depuración detallados.
 
 ---
 
@@ -1224,6 +1270,7 @@ Este punto final proporciona una línea de tiempo paso a paso completa de cualqu
 El sistema admite un modelo de autenticación híbrido. Se da prioridad al token individual vinculado a `worker_id`. Si no se encuentra, el sistema verifica el `WORKER_TOKEN` compartido para compatibilidad con versiones anteriores.
 
 #### **Paso 1: Configuración del Orquestador**
+
 Define tokens individuales en el archivo `workers.toml` en el directorio raíz del Orquestador.
 
 ```toml
@@ -1235,9 +1282,11 @@ token = "super-secret-token-for-worker-1"
 [worker-002]
 token = "another-unique-token-for-worker-2"
 ```
+
 El Orquestador carga estos tokens en Redis al inicio.
 
 #### **Paso 2: Configuración del Worker**
+
 El Worker debe pasar su ID y token único. Configura las variables de entorno:
 
 ```bash
@@ -1250,6 +1299,9 @@ export WORKER_INDIVIDUAL_TOKEN="super-secret-token-for-worker-1"
 ```
 
 #### **Paso 3: Lanzamiento**
+
 Ejecuta el Orquestador y el Worker. El Worker se autentica usando `WORKER_ID` y `WORKER_INDIVIDUAL_TOKEN`. Las solicitudes de workers con token inválido o no listados en `workers.toml` (si no se establece `WORKER_TOKEN` compartido) serán rechazadas con `401 Unauthorized`.
+
+```
 
 ```

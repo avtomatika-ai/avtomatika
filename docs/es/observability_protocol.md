@@ -11,30 +11,38 @@ Este documento describe la lógica de propagación de telemetría de extremo a e
 La secuencia garantiza que un único "hilo de rastreo" siga la tarea desde la llamada inicial a la API hasta la ejecución real en un worker remoto y de regreso.
 
 ### Paso 1: Despacho de Tarea (Orquestador)
+
 Cuando el `JobExecutor` decide enviar una tarea a un worker:
+
 1.  Crea un span hijo para la operación de despacho.
 2.  Utiliza el `TextMapPropagator` de OpenTelemetry para "inyectar" el contexto del span actual en un diccionario.
 3.  Este diccionario se almacena en el campo `tracing_context` de la carga útil de la tarea.
 4.  **Opcionalidad**: Si OTel está desactivado en el Orquestador, `tracing_context` estará vacío o ausente.
 
 ### Paso 2: Recepción de Tarea (Worker)
+
 Cuando el Worker recibe una tarea a través de la respuesta `poll`:
+
 1.  Verifica la clave `tracing_context` en los datos de la tarea.
 2.  **Lógica**:
-    *   **Si está presente Y OTel está habilitado en el Worker**: El Worker "extrae" el contexto y comienza su propio span como un hijo del span del Orquestador.
-    *   **Si está ausente O OTel está deshabilitado en el Worker**: El Worker ejecuta la tarea normalmente sin ninguna sobrecarga de telemetría.
+    - **Si está presente Y OTel está habilitado en el Worker**: El Worker "extrae" el contexto y comienza su propio span como un hijo del span del Orquestador.
+    - **Si está ausente O OTel está deshabilitado en el Worker**: El Worker ejecuta la tarea normalmente sin ninguna sobrecarga de telemetría.
 
 ### Paso 3: Envío de Resultados (Worker)
+
 Una vez finalizada la ejecución:
+
 1.  **Si OTel está habilitado en el Worker**: El Worker inyecta su contexto de span actual en el campo `tracing_context` del mensaje `result`.
 2.  **Si OTel está deshabilitado**: El mensaje `result` se envía sin metadatos de rastreo.
 
 ### Paso 4: Procesamiento de Resultados (Orquestador)
+
 Cuando el Orquestador recibe el mensaje `result`:
+
 1.  Verifica el `tracing_context` en la carga útil del resultado.
 2.  **Lógica**:
-    *   **Si está presente**: El Orquestador vincula el contexto recibido a su propio span de "Procesamiento de Resultados". Esto crea un "salto" visual en Jaeger entre los dos sistemas.
-    *   **Si está ausente**: El Orquestador procede con su propio rastreo interno. No se generan errores ni advertencias.
+    - **Si está presente**: El Orquestador vincula el contexto recibido a su propio span de "Procesamiento de Resultados". Esto crea un "salto" visual en Jaeger entre los dos sistemas.
+    - **Si está ausente**: El Orquestador procede con su propio rastreo interno. No se generan errores ni advertencias.
 
 ---
 
@@ -43,6 +51,7 @@ Cuando el Orquestador recibe el mensaje `result`:
 El `tracing_context` es un campo estándar en la raíz de los objetos de tarea y resultado de RXON.
 
 **Ejemplo de Carga Útil de Tarea (Orquestador → Worker):**
+
 ```json
 {
   "task_id": "...",
@@ -55,6 +64,7 @@ El `tracing_context` es un campo estándar en la raíz de los objetos de tarea y
 ```
 
 **Ejemplo de Carga Útil de Resultado (Worker → Orquestador):**
+
 ```json
 {
   "job_id": "...",
@@ -81,6 +91,7 @@ El sistema está diseñado pensando en **Zero-Friction**:
 ## 4. Lista de Verificación para SDKs de Worker
 
 Para soportar la observabilidad completa, un SDK de Worker debería:
+
 1.  [ ] Verificar el `tracing_context` en las tareas recibidas.
 2.  [ ] Si OTel está disponible, usar `extract(tracing_context)` para establecer el span padre.
 3.  [ ] Crear un span llamado `Worker:Execute:{task_type}`.

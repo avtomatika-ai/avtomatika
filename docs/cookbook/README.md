@@ -11,6 +11,7 @@ This cookbook provides a collection of recipes for building workflows (blueprint
 ### **Recipe 1: Creating a Simple Linear Pipeline**
 
 **Task:** Create a pipeline that sequentially executes three steps: A -> B -> C.
+
 ```python
 from avtomatika import Blueprint
 
@@ -48,6 +49,7 @@ async def failed(job_id, actions):
 ### **Recipe 2: Implementing "Human-in-the-Loop" (Moderation)**
 
 **Task:** Pause the pipeline after `generate_data` step and wait for approval from a moderator.
+
 ```python
 from avtomatika import Blueprint
 
@@ -100,6 +102,7 @@ async def process_approved_data(actions):
 
 **Concept:**
 Parallelism is achieved by calling `actions.dispatch_task()` multiple times in one handler.
+
 1.  **Launch:** In a regular handler, call `dispatch_task` for each parallel task. **Key requirement:** all these calls must point to the same state in `transitions`. This state will be the aggregation point.
 2.  **Aggregation:** The handler for the aggregator state is marked with the special decorator `@blueprint.aggregator(...)`. The Orchestrator will not call this handler until **all** tasks leading to this state are completed.
 3.  **Accessing Results:** Inside the aggregator handler, results of all parallel tasks are available in `context.aggregation_results`. This is a dictionary where the key is `task_id` and the value is the result returned by the worker.
@@ -165,7 +168,8 @@ async def failed(job_id, actions):
     logger.error(f"Job {job_id} failed.")
 
 ```
-*Note: If at least one of the parallel tasks fails (transitions to `failed` state), the aggregator handler will not be called, and the entire `Job` will immediately transition to `failed` state.*
+
+_Note: If at least one of the parallel tasks fails (transitions to `failed` state), the aggregator handler will not be called, and the entire `Job` will immediately transition to `failed` state._
 
 ### **Recipe 4: Configuring Worker for Multiple Orchestrators**
 
@@ -174,10 +178,11 @@ async def failed(job_id, actions):
 **Concept:**
 `worker_sdk` supports two modes for working with multiple Orchestrators, configured via environment variables. The worker will automatically register and send heartbeats to all Orchestrators in the list.
 
--   `FAILOVER` (default): Worker polls Orchestrators in the order they appear in configuration. If the main Orchestrator becomes unavailable, Worker automatically switches to the next one in the list.
--   `ROUND_ROBIN`: Worker polls each Orchestrator in the list sequentially, allowing load distribution.
+- `FAILOVER` (default): Worker polls Orchestrators in the order they appear in configuration. If the main Orchestrator becomes unavailable, Worker automatically switches to the next one in the list.
+- `ROUND_ROBIN`: Worker polls each Orchestrator in the list sequentially, allowing load distribution.
 
 **How to configure:**
+
 1.  **`ORCHESTRATORS_CONFIG`**: Instead of `ORCHESTRATOR_URL`, use this variable to pass a JSON string describing all available Orchestrators.
 2.  **`MULTI_ORCHESTRATOR_MODE`**: Set value to `FAILOVER` or `ROUND_ROBIN`.
 
@@ -198,6 +203,7 @@ python -m your_worker_module
 ```
 
 #### **Example 2: Configuration for Load Balancing (Round Robin)**
+
 ```bash
 # Worker will poll 'orchestrator-1' and 'orchestrator-2' sequentially.
 export ORCHESTRATORS_CONFIG='[
@@ -210,12 +216,13 @@ export MULTI_ORCHESTRATOR_MODE="ROUND_ROBIN"
 # Run worker
 python -m your_worker_module
 ```
-*Note: This configuration is done exclusively on the Worker side and is completely transparent to the Orchestrator. Each Orchestrator sees this Worker as a normal, registered executor.*
 
-### **Recipe 5: Conditional Routing with .when()**
+_Note: This configuration is done exclusively on the Worker side and is completely transparent to the Orchestrator. Each Orchestrator sees this Worker as a normal, registered executor._
+
+### **Recipe 5: Conditional Routing**
 
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F  # F is re-exported from fast-filter
 
 multilingual_pipeline = Blueprint(
     name="multilingual_flow",
@@ -228,11 +235,11 @@ async def start_multilingual(actions):
     # This step just passes control further, where conditional logic will trigger
     actions.go_to("process_text")
 
-@multilingual_pipeline.handler("process_text").when("initial_data.language == 'en'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "en")
 async def process_english_text(initial_data, actions):
     actions.dispatch_task(task_type="process_en", params=initial_data, transitions={"success": "finished"})
 
-@multilingual_pipeline.handler("process_text").when("initial_data.language == 'de'")
+@multilingual_pipeline.handler("process_text", F.initial_data["language"] == "de")
 async def process_german_text(initial_data, actions):
     actions.dispatch_task(task_type="process_de", params=initial_data, transitions={"success": "finished"})
 
@@ -268,7 +275,8 @@ async def start_critical_task(initial_data, actions):
 async def critical_finished(job_id, actions):
     print(f"Critical task {job_id} finished.")
 ```
-*Note: Available strategies: `default`, `round_robin`, `least_connections`.*
+
+_Note: Available strategies: `default`, `round_robin`, `least_connections`._
 
 ### **Recipe 7: Managing Task Priority**
 
@@ -303,8 +311,8 @@ async def priority_finished(job_id, actions):
     print(f"Task {job_id} finished.")
 
 ```
-*Note: If multiple tasks have the same priority, they will be executed in arrival order (FIFO) within that priority.*
 
+_Note: If multiple tasks have the same priority, they will be executed in arrival order (FIFO) within that priority._
 
 ### **Recipe 8: Cost Optimization with `cheapest` and `max_cost`**
 
@@ -339,13 +347,15 @@ async def cost_optimized_finished(actions):
 async def cost_optimized_failed(actions):
     print("Job failed because no workers met the cost criteria.")
 ```
-*Note: `cheapest` strategy uses worker's `cost_per_second` field. If no worker meets `max_cost`, pipeline won't find an executor and will fail.*
+
+_Note: `cheapest` strategy uses worker's `cost_per_second` field. If no worker meets `max_cost`, pipeline won't find an executor and will fail._
 
 ### **Recipe 9: Using Data Stores (`data_stores`)**
 
 **Task:** Use shared persistent storage (`data_store`) to exchange data between different states or even different runs of the same pipeline. For example, to implement a counter or cache.
 
 **Concept:**
+
 1.  **Initialization:** When creating a blueprint, you can "attach" one or more data stores to it. Each store is essentially a Redis wrapper providing key-value access.
 2.  **Access in Handlers:** Inside any handler of this blueprint, you can access these stores via `data_stores`.
 3.  **Persistence:** Data in `data_store` persists between handler calls and even between different `job_id` of the same blueprint.
@@ -385,9 +395,9 @@ async def show_result(job_id, state_history, actions):
 
 **How it works:**
 
--   `analytics_bp.add_data_store("request_counter", ...)` creates an `AsyncDictStore` instance that lives as long as the Orchestrator lives.
--   `data_stores.request_counter` provides access to this instance. `data_stores` is a dynamic object whose attributes correspond to created store names.
--   Every time you run this pipeline (`/v1/jobs/analytics`), it will increment **the same** counter because `data_store` is bound to blueprint, not specific `job_id`.
+- `analytics_bp.add_data_store("request_counter", ...)` creates an `AsyncDictStore` instance that lives as long as the Orchestrator lives.
+- `data_stores.request_counter` provides access to this instance. `data_stores` is a dynamic object whose attributes correspond to created store names.
+- Every time you run this pipeline (`/v1/jobs/analytics`), it will increment **the same** counter because `data_store` is bound to blueprint, not specific `job_id`.
 
 ### **Recipe 10: Cancelling a Running Task**
 
@@ -395,6 +405,7 @@ async def show_result(job_id, state_history, actions):
 
 **Concept:**
 System supports hybrid cancellation mechanism working with or without WebSocket.
+
 1.  **Cancellation Request:** You send `POST` request to API endpoint `/api/v1/jobs/{job_id}/cancel`.
 2.  **Flag Setting:** Orchestrator immediately sets a flag in Redis signaling cancellation request.
 3.  **Push Notification (WebSocket):** If Worker is connected via WebSocket, Orchestrator additionally sends `cancel_task` command for immediate reaction.
@@ -403,6 +414,7 @@ System supports hybrid cancellation mechanism working with or without WebSocket.
 6.  **Completion:** Pipeline transitions to state specified in `transitions` for `"cancelled"` status.
 
 #### **Step 1: Worker Code**
+
 Worker must periodically call `worker.check_for_cancellation`.
 
 ```python
@@ -424,7 +436,9 @@ async def process_video(params: dict, task_id: str, job_id: str) -> dict:
 ```
 
 #### **Step 2: Blueprint Creation**
+
 Blueprint must have transition for new `cancelled` status.
+
 ```python
 from avtomatika import Blueprint
 
@@ -460,6 +474,7 @@ async def task_cancelled(job_id, actions):
 ```
 
 #### **Step 3: Run Job**
+
 ```bash
 # Run Job and get its ID
 curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
@@ -470,11 +485,13 @@ curl -X POST http://localhost:8080/api/v1/jobs/cancellable \
 ```
 
 #### **Step 4: Cancel Job**
+
 ```bash
 # Send cancellation request using received job_id
 curl -X POST http://localhost:8080/api/v1/jobs/YOUR_JOB_ID/cancel \
 -H "X-Client-Token: your-secret-orchestrator-token"
 ```
+
 You will see cancellation message in Worker logs, and `Job` in Orchestrator will transition to `task_cancelled` state.
 
 ### **Recipe 11: Sending Task Progress**
@@ -485,7 +502,9 @@ You will see cancellation message in Worker logs, and `Job` in Orchestrator will
 Like cancellation, this feature works via WebSocket. Worker can send progress events, which Orchestrator saves in `state_history` of the corresponding `Job`.
 
 #### **Step 1: Code in Worker**
+
 Worker must periodically call `worker.send_progress()`.
+
 ```python
 # Inside your worker file (my_worker.py)
 @worker.skill("train_model")
@@ -504,15 +523,17 @@ async def train_model_handler(params: dict, task_id: str, job_id: str) -> dict:
 ```
 
 #### **Step 2: Verification in Orchestrator**
+
 After task execution, you can request status and see `progress_updates` in `state_history`:
+
 ```json
 {
   "id": "YOUR_JOB_ID",
   "current_state": "finished",
   "state_history": {
     "progress_updates": [
-      {"progress": 0.1, "message": "Epoch 1 completed", "timestamp": "..."},
-      {"progress": 0.2, "message": "Epoch 2 completed", "timestamp": "..."}
+      { "progress": 0.1, "message": "Epoch 1 completed", "timestamp": "..." },
+      { "progress": 0.2, "message": "Epoch 2 completed", "timestamp": "..." }
     ]
   }
 }
@@ -526,6 +547,7 @@ After task execution, you can request status and see `progress_updates` in `stat
 When S3 support is enabled in the Orchestrator, you can request the `task_files` argument in your handlers. This object provides helper methods to interact with the job's S3 folder (`jobs/{job_id}/`) without managing connections manually.
 
 **Prerequisite:**
+
 - Orchestrator configured with `S3_ENDPOINT_URL`, etc.
 - Dependencies installed: `pip install avtomatika[s3]`
 
@@ -564,10 +586,10 @@ async def check_config(context, task_files, actions):
 @s3_ops_bp.handler("fast_processing")
 async def fast_process(context, task_files, actions):
     # ... logic ...
-    
+
     # Write result back to S3
     await task_files.write_text("result.txt", "Done fast.")
-    
+
     # Or upload an entire directory recursively
     # await task_files.download("dataset/") # Downloads s3://.../dataset/ to local
     # await task_files.upload("output_folder") # Uploads local folder to s3://.../output_folder/
@@ -583,6 +605,7 @@ async def fast_process(context, task_files, actions):
 Worker SDK has built-in S3 support. If task parameters (`params`) contain a value starting with `s3://`, SDK automatically downloads file to temp directory and substitutes URI with local path. Similarly, if your handler returns local file path, SDK uploads it to S3 and returns `s3://` URI to Orchestrator.
 
 **Prerequisites:**
+
 - Install `obstore` dependency: `pip install avtomatika-worker[s3]`
 - Configure environment variables for S3 access:
   ```bash
@@ -593,6 +616,7 @@ Worker SDK has built-in S3 support. If task parameters (`params`) contain a valu
   ```
 
 #### **Step 1: Code in Worker**
+
 Worker doesn't need to know about S3. It just works with local files.
 
 ```python
@@ -619,7 +643,9 @@ async def process_video(params: dict, **kwargs) -> dict:
 ```
 
 #### **Step 2: Blueprint Creation**
+
 Blueprint simply passes S3 URI as parameter.
+
 ```python
 @s3_pipeline.handler(is_start=True)
 async def start_s3_task(initial_data, actions):
@@ -632,9 +658,11 @@ async def start_s3_task(initial_data, actions):
 ```
 
 #### **Step 3: Run Task**
+
 ```bash
 curl -X POST ... -d '{"s3_uri": "s3://my-bucket/raw_videos/movie.mp4"}'
 ```
+
 After execution, task `state_history` will contain result with new S3 URI, e.g.: `{"processed_video_path": "s3://my-processing-bucket/processed_movie.mp4"}`.
 
 ### **Recipe 13: Retry Logic Management with Error Types**
@@ -648,6 +676,7 @@ Orchestrator defaults to retrying any failed task (`TRANSIENT_ERROR`). However, 
 - `INVALID_INPUT_ERROR`: Task immediately marked as `failed`.
 
 #### **Step 1: Code in Worker**
+
 ```python
 # my_api_worker.py
 @worker.skill("fetch_external_data")
@@ -671,7 +700,9 @@ async def fetch_data(params: dict, **kwargs) -> dict:
 ```
 
 #### **Step 2: Blueprint Creation**
+
 Blueprint can have different branches for different outcomes.
+
 ```python
 @error_handling_bp.handler(is_start=True)
 async def start_api_call(initial_data, actions):
@@ -789,13 +820,15 @@ async def main_failed(actions):
 
 **Prerequisite:**
 **Graphviz** must be installed in your system for this feature to work.
--   **Debian/Ubuntu:** `sudo apt-get install graphviz`
--   **macOS (Homebrew):** `brew install graphviz`
--   **Windows:** Install from official site and add to `PATH`.
+
+- **Debian/Ubuntu:** `sudo apt-get install graphviz`
+- **macOS (Homebrew):** `brew install graphviz`
+- **Windows:** Install from official site and add to `PATH`.
 
 **Example:**
+
 ```python
-from avtomatika import Blueprint
+from avtomatika import Blueprint, F
 
 # Take conditional logic pipeline from other recipe
 conditional_pipeline = Blueprint(name="conditional_flow")
@@ -804,11 +837,11 @@ conditional_pipeline = Blueprint(name="conditional_flow")
 async def start(actions):
     actions.go_to("process_data")
 
-@conditional_pipeline.handler("process_data").when("initial_data.type == 'A'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "A")
 async def process_a(actions):
     actions.dispatch_task(task_type="task_a", transitions={"success": "finished", "failure": "failed"})
 
-@conditional_pipeline.handler("process_data").when("initial_data.type == 'B'")
+@conditional_pipeline.handler("process_data", F.initial_data["type"] == "B")
 async def process_b(actions):
     actions.dispatch_task(task_type="task_b", transitions={"success": "finished", "failure": "failed"})
 
@@ -825,6 +858,7 @@ if __name__ == "__main__":
     # This command creates 'conditional_flow_diagram.png' in current directory
     conditional_pipeline.render_graph("conditional_flow_diagram", format="png")
 ```
+
 Running this script creates image clearly showing all possible execution paths in this blueprint.
 
 ### **Recipe 16: Partial Worker State Update (PATCH)**
@@ -847,12 +881,14 @@ async def update_load(session, new_load):
 **Task:** Configure different usage limits (quotas) for different clients and use their custom parameters inside blueprints.
 
 **Concept:**
+
 1.  **Configuration:** All client info including token, plan, and quotas is defined in `clients.toml`.
 2.  **Load on Startup:** At startup, Orchestrator reads this file and loads quota data into Redis.
 3.  **Quota Check:** Special Quota Middleware automatically checks and decrements "attempts" counter for each API request. If attempts exhausted, request rejected with `429 Too Many Requests`.
 4.  **Parameter Access:** Inside blueprint handler, you can access all static client parameters (e.g., plan or language list) via `context.client.config`.
 
 #### **Step 1: `clients.toml` Configuration**
+
 ```toml
 [client_premium]
 token = "user_token_vip"
@@ -868,6 +904,7 @@ languages = ["en"]
 ```
 
 #### **Step 2: Usage in Blueprint**
+
 ```python
 from avtomatika import Blueprint
 
@@ -917,10 +954,12 @@ async def premium_failed(actions):
 #### **Purpose of `is_start=True` Handler**
 
 Initial handler is "entry gate" of your pipeline. Ideal place for:
+
 1.  **Validation and Data Prep:** Verify all necessary data present and prepare `state_history` for subsequent steps.
 2.  **Initial Routing:** Decide first real step based on input data.
 
 **Example:**
+
 ```python
 from avtomatika import Blueprint
 
@@ -965,11 +1004,13 @@ async def invalid_input_failed(job_id, actions):
 Final handlers are "exit" of your pipeline. They perform final actions and **must not** contain calls to `actions.go_to()` or `dispatch_task()`.
 
 **Key Uses:**
+
 1.  **Final Logging and Notification:** Log result, send email or Slack message.
 2.  **Resource Cleanup:** Delete temporary files created during process.
 3.  **Handling Outcomes:** You can have multiple end states for different results (success, failure, rejection, etc.).
 
 **Example:**
+
 ```python
 from avtomatika import Blueprint
 import os
@@ -1002,6 +1043,7 @@ async def handle_rejection(job_id, state_history, actions):
     # send_rejection_notification(initial_data.get("user_email"), rejection_reason)
 
 ```
+
 Using `is_start` and `is_end` this way makes your pipelines more structured, reliable, and easier to understand.
 
 ### **Recipe 19: Routing Tasks Based on Resource Requirements**
@@ -1047,6 +1089,7 @@ async def start_gpu_task(initial_data, actions):
 **Solution:** Orchestrator automatically manages OpenTelemetry trace context. Context created on API request receipt, passed to worker with task, and returned back with result. Allows combining all operations into single trace.
 
 **How it works:**
+
 1.  **Trace Start:** On `POST /api/...` call, Orchestrator creates root span for new job.
 2.  **Orchestrator -> Worker:** On `actions.dispatch_task(...)` call, `Dispatcher` automatically injects W3C Trace Context into HTTP request headers to worker.
 3.  **Worker:** Worker emulator extracts context from headers and creates child span for task execution duration.
@@ -1104,8 +1147,8 @@ print(f"Job ID: {job_id}, Data: {retrieved_data}")
 
 con.close()
 ```
-*Note: SQLite natively supports JSON data type, simplifying complex nested structure storage.*
 
+_Note: SQLite natively supports JSON data type, simplifying complex nested structure storage._
 
 #### **Recipe 22: Asynchronous PostgreSQL Interaction**
 
@@ -1155,7 +1198,8 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-*Note: Using `JSONB` in PostgreSQL is preferred over `JSON` as it's stored in binary format and allows creating indexes on keys inside JSON document.*
+
+_Note: Using `JSONB` in PostgreSQL is preferred over `JSON` as it's stored in binary format and allows creating indexes on keys inside JSON document._
 
 ---
 
@@ -1167,15 +1211,16 @@ if __name__ == "__main__":
 
 Execution history is disabled by default. To enable, set `HISTORY_DATABASE_URI` environment variable.
 
-*   **For SQLite:**
-    ```bash
-    export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
-    ```
+- **For SQLite:**
 
-*   **For PostgreSQL:**
-    ```bash
-    export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
-    ```
+  ```bash
+  export HISTORY_DATABASE_URI="sqlite:path/to/your_history.db"
+  ```
+
+- **For PostgreSQL:**
+  ```bash
+  export HISTORY_DATABASE_URI="postgresql://user:password@hostname/dbname"
+  ```
 
 After setting this variable, Orchestrator automatically starts recording events to specified database.
 
@@ -1183,36 +1228,37 @@ After setting this variable, Orchestrator automatically starts recording events 
 
 When history is enabled, new endpoint becomes available.
 
-*   **Request:**
-    ```bash
-    curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
-    ```
+- **Request:**
 
-*   **Response Example:**
-    ```json
-    [
-        {
-            "event_id": "a1b2c3d4-...".
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:00.123Z",
-            "state": "start",
-            "event_type": "state_started",
-            "duration_ms": null,
-            "context_snapshot": { "... (full job state at start) ..." }
-        },
-        {
-            "event_id": "e5f6g7h8-...".
-            "job_id": "job_123",
-            "timestamp": "2024-08-27T10:00:01.456Z",
-            "state": "start",
-            "event_type": "state_finished",
-            "duration_ms": 1333,
-            "next_state": "processing",
-            "context_snapshot": { "... (job state after handler execution) ..." }
-        }
-    ]
-    ```
-This endpoint provides full step-by-step timeline of any task for detailed analysis and debugging.
+  ```bash
+  curl http://localhost:8080/api/jobs/{job_id}/history -H "X-Client-Token: your_token"
+  ```
+
+- **Response Example:**
+  `json
+  [
+      {
+          "event_id": "a1b2c3d4-...".
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:00.123Z",
+          "state": "start",
+          "event_type": "state_started",
+          "duration_ms": null,
+          "context_snapshot": { "... (full job state at start) ..." }
+      },
+      {
+          "event_id": "e5f6g7h8-...".
+          "job_id": "job_123",
+          "timestamp": "2024-08-27T10:00:01.456Z",
+          "state": "start",
+          "event_type": "state_finished",
+          "duration_ms": 1333,
+          "next_state": "processing",
+          "context_snapshot": { "... (job state after handler execution) ..." }
+      }
+  ]
+  `
+  This endpoint provides full step-by-step timeline of any task for detailed analysis and debugging.
 
 ---
 
@@ -1224,6 +1270,7 @@ This endpoint provides full step-by-step timeline of any task for detailed analy
 System supports hybrid authentication model. Priority given to individual token bound to `worker_id`. If not found, system checks shared `WORKER_TOKEN` for backward compatibility.
 
 #### **Step 1: Orchestrator Configuration**
+
 Define individual tokens in `workers.toml` file in Orchestrator root directory.
 
 ```toml
@@ -1235,9 +1282,11 @@ token = "super-secret-token-for-worker-1"
 [worker-002]
 token = "another-unique-token-for-worker-2"
 ```
+
 Orchestrator loads these tokens into Redis at startup.
 
 #### **Step 2: Worker Configuration**
+
 Worker must pass its ID and unique token. Configure environment variables:
 
 ```bash
@@ -1250,6 +1299,9 @@ export WORKER_INDIVIDUAL_TOKEN="super-secret-token-for-worker-1"
 ```
 
 #### **Step 3: Launch**
+
 Run Orchestrator and Worker. Worker authenticates using `WORKER_ID` and `WORKER_INDIVIDUAL_TOKEN`. Requests from workers with invalid token or not listed in `workers.toml` (if shared `WORKER_TOKEN` not set) will be rejected with `401 Unauthorized`.
+
+```
 
 ```

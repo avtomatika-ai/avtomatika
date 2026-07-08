@@ -16,11 +16,11 @@ from zstandard import ZstdCompressor
 Handler = Callable[[web.Request], Awaitable[web.Response]]
 
 
-def _compress_gzip(data: bytes) -> bytes:
+def _compress_gzip(data: bytes | bytearray | memoryview) -> bytes:
     """Compresses data using gzip in a way that works reliably."""
     buf = BytesIO()
     with GzipFile(fileobj=buf, mode="wb", compresslevel=9) as f:
-        f.write(data)
+        f.write(bytes(data))
     return buf.getvalue()
 
 

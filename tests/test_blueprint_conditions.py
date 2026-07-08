@@ -1,32 +1,17 @@
-from unittest.mock import MagicMock
-
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 # Copyright (c) 2025-2026 Dmitrii Gagarin aka madgagarin
+from unittest.mock import MagicMock
+
 import pytest
-from src.avtomatika.blueprint import OPERATORS, Blueprint, Condition, ConditionalHandler, _parse_condition
+from fast_filter import F
+from src.avtomatika.blueprint import Blueprint, ConditionalHandler
 
-
-def test_parse_condition_valid():
-    condition_str = "context.initial_data.status == 'completed'"
-    condition = _parse_condition(condition_str)
-    assert isinstance(condition, Condition)
-    assert condition.area == "initial_data"
-    assert condition.field == "status"
-    assert condition.op == OPERATORS["=="]
-    assert condition.value == "completed"
-
-
-def test_parse_condition_invalid_format():
-    with pytest.raises(ValueError, match="Invalid condition string format"):
-        _parse_condition("invalid condition")
-
-
-def test_parse_condition_unsupported_operator():
-    with pytest.raises(ValueError, match="Invalid condition string format"):
-        _parse_condition("context.initial_data.status ** 'completed'")
+# ---------------------------------------------------------------------------
+# ConditionalHandler with FastF
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -36,7 +21,9 @@ def mock_blueprint():
 
 @pytest.fixture
 def conditional_handler(mock_blueprint):
-    return ConditionalHandler(mock_blueprint, "start", lambda: None, "context.initial_data.status == 'completed'")
+    """Handler that passes when initial_data.status == 'completed'."""
+    condition = F.initial_data["status"] == "completed"
+    return ConditionalHandler(mock_blueprint, "start", lambda: None, condition)
 
 
 def test_conditional_handler_evaluate_true(conditional_handler):
@@ -52,8 +39,8 @@ def test_conditional_handler_evaluate_false(conditional_handler):
 
 
 def test_conditional_handler_evaluate_missing_area(conditional_handler):
-    context = MagicMock()
-    del context.initial_data
+    """Missing attribute must return False gracefully, not raise."""
+    context = MagicMock(spec=[])  # no attributes at all
     assert conditional_handler.evaluate(context) is False
 
 
@@ -63,9 +50,70 @@ def test_conditional_handler_evaluate_missing_field(conditional_handler):
     assert conditional_handler.evaluate(context) is False
 
 
+def test_conditional_handler_evaluate_complex_condition(mock_blueprint):
+    """FastF allows arbitrary expressions impossible with old string syntax."""
+    condition = (F.data["score"] >= 80) & (F.data["active"] == True)  # noqa: E712
+    handler = ConditionalHandler(mock_blueprint, "check", lambda: None, condition)
+
+    context_ok = MagicMock()
+    context_ok.data = {"score": 90, "active": True}
+    assert handler.evaluate(context_ok) is True
+
+    context_fail = MagicMock()
+    context_fail.data = {"score": 70, "active": True}
+    assert handler.evaluate(context_fail) is False
+
+
+# ---------------------------------------------------------------------------
+# Blueprint.handler with direct FastF condition
+# ---------------------------------------------------------------------------
+
+
 @pytest.fixture
 def blueprint():
     return Blueprint("test_bp")
+
+
+def test_handler_decorator_condition_with_fastf(blueprint):
+    @blueprint.handler("start", F.initial_data["status"] == "completed")
+    def handler(context, actions):
+        pass
+
+    assert len(blueprint.conditional_handlers) == 1
+    assert blueprint.conditional_handlers[0].state == "start"
+
+
+def test_handler_decorator_condition_evaluates_correctly(blueprint):
+    @blueprint.handler("start", F.result["ok"] == True)  # noqa: E712
+    def handler(context, actions):
+        pass
+
+    ctx_true = MagicMock()
+    ctx_true.result = {"ok": True}
+    assert blueprint.conditional_handlers[0].evaluate(ctx_true) is True
+
+    ctx_false = MagicMock()
+    ctx_false.result = {"ok": False}
+    assert blueprint.conditional_handlers[0].evaluate(ctx_false) is False
+
+
+def test_handler_decorator_condition_invert(blueprint):
+    @blueprint.handler("start", ~(F.error["code"] == 404))
+    def handler(context, actions):
+        pass
+
+    ctx = MagicMock()
+    ctx.error = {"code": 404}
+    assert blueprint.conditional_handlers[0].evaluate(ctx) is False
+
+    ctx2 = MagicMock()
+    ctx2.error = {"code": 500}
+    assert blueprint.conditional_handlers[0].evaluate(ctx2) is True
+
+
+# ---------------------------------------------------------------------------
+# Other Blueprint decorator tests (unchanged logic)
+# ---------------------------------------------------------------------------
 
 
 def test_handler_decorator_duplicate_handler(blueprint):
@@ -90,15 +138,6 @@ def test_handler_decorator_duplicate_start_state(blueprint):
         @blueprint.handler("another_start", is_start=True)
         def handler2(context, actions):
             pass
-
-
-def test_handler_decorator_when(blueprint):
-    @blueprint.handler("start").when("context.initial_data.status == 'completed'")
-    def handler(context, actions):
-        pass
-
-    assert len(blueprint.conditional_handlers) == 1
-    assert blueprint.conditional_handlers[0].state == "start"
 
 
 def test_add_data_store_duplicate(blueprint):
@@ -156,3 +195,53 @@ def test_render_graph_no_filename(blueprint):
 
     source = blueprint.render_graph()
     assert "digraph" in source
+
+
+# ---------------------------------------------------------------------------
+# Direct condition arguments tests
+# ---------------------------------------------------------------------------
+
+
+def test_handler_decorator_direct_condition_with_state_name(blueprint):
+    @blueprint.handler("start", F.initial_data["status"] == "completed")
+    def handler(context, actions):
+        pass
+
+    assert len(blueprint.conditional_handlers) == 1
+    assert blueprint.conditional_handlers[0].state == "start"
+
+    ctx_true = MagicMock()
+    ctx_true.result = {}
+    ctx_true.initial_data = {"status": "completed"}
+    assert blueprint.conditional_handlers[0].evaluate(ctx_true) is True
+
+
+def test_handler_decorator_direct_condition_inferred_name(blueprint):
+    @blueprint.handler(F.initial_data["status"] == "completed")
+    def my_custom_state(context, actions):
+        pass
+
+    assert len(blueprint.conditional_handlers) == 1
+    assert blueprint.conditional_handlers[0].state == "my_custom_state"
+
+    ctx_true = MagicMock()
+    ctx_true.initial_data = {"status": "completed"}
+    assert blueprint.conditional_handlers[0].evaluate(ctx_true) is True
+
+
+def test_handler_decorator_direct_condition_keyword_arg(blueprint):
+    @blueprint.handler(condition=F.initial_data["status"] == "completed")
+    def my_custom_state(context, actions):
+        pass
+
+    assert len(blueprint.conditional_handlers) == 1
+    assert blueprint.conditional_handlers[0].state == "my_custom_state"
+
+
+def test_handler_decorator_direct_condition_with_is_start(blueprint):
+    @blueprint.handler("start", F.initial_data["status"] == "completed", is_start=True)
+    def handler(context, actions):
+        pass
+
+    assert len(blueprint.conditional_handlers) == 1
+    assert blueprint.start_state == "start"

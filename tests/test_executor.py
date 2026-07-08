@@ -21,6 +21,7 @@ def mock_engine():
     engine.history_storage = AsyncMock()
     engine.dispatcher = AsyncMock()
     engine.blueprints = {}
+    engine.blueprint_contracts = {}
     engine.app = MagicMock()
     engine.app.get.return_value = None  # Disable services by default
     engine.send_job_webhook = AsyncMock()

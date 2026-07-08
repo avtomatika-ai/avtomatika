@@ -11,6 +11,7 @@ from time import time
 from typing import Any
 from uuid import uuid4
 
+from cachebox import TTLCache
 from rxon.constants import WORKER_STATUS_DRAINING
 from rxon.models import InstalledArtifact, Resources, SkillInfo, TaskPayload
 from rxon.schema import validate_data
@@ -34,39 +35,26 @@ class Dispatcher:
         self.config = config
         self.metrics = metrics
         self._round_robin_indices: dict[str, int] = defaultdict(int)
-        self._worker_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._worker_cache_ttl = 2.0
+        self._worker_cache = TTLCache(maxsize=5000, global_ttl=2.0)
 
     async def _get_workers_cached(self, worker_ids: list[str]) -> list[dict[str, Any]]:
-        now = time()
-
         to_fetch_ids = []
         result_map = {}
 
         unique_ids = list(set(worker_ids))
         for wid in unique_ids:
-            if wid in self._worker_cache:
-                expiry, data = self._worker_cache[wid]
-                if now < expiry:
-                    result_map[wid] = data
-                    continue
+            data = self._worker_cache.get(wid)
+            if data is not None:
+                result_map[wid] = data
+                continue
             to_fetch_ids.append(wid)
 
         if to_fetch_ids:
             fetched = await self.storage.get_workers(to_fetch_ids)
             for w in fetched:
                 wid = w["worker_id"]
-                self._worker_cache[wid] = (now + self._worker_cache_ttl, w)
+                self._worker_cache[wid] = w
                 result_map[wid] = w
-
-        if len(self._worker_cache) > 5000:
-            expired_keys = [k for k, v in self._worker_cache.items() if now > v[0]]
-            for k in expired_keys:
-                del self._worker_cache[k]
-            if len(self._worker_cache) > 5000:
-                keys_to_del = list(self._worker_cache.keys())[:2500]
-                for k in keys_to_del:
-                    del self._worker_cache[k]
 
         return [result_map[wid] for wid in worker_ids if wid in result_map]
 

@@ -13,6 +13,7 @@ from secrets import token_urlsafe
 from time import monotonic, time
 from typing import Any
 
+import msgspec
 from aiohttp import web
 from rxon.constants import (
     ERROR_CODE_CONTRACT_VIOLATION,
@@ -317,7 +318,7 @@ class WorkerService:
         try:
             validated_res = from_dict(TaskResult, result_payload)
             if validated_res.worker_id is None:
-                validated_res = validated_res._replace(worker_id=authenticated_worker_id)
+                validated_res = msgspec.structs.replace(validated_res, worker_id=authenticated_worker_id)
 
             result_payload = to_dict(validated_res)
         except (AttributeError, TypeError, ValueError) as e:
@@ -669,7 +670,7 @@ class WorkerService:
         ):
             new_chain.append(authenticated_worker_id)
 
-        event = event._replace(bubbling_chain=new_chain)
+        event = msgspec.structs.replace(event, bubbling_chain=new_chain)
 
         if event.event_type == EVENT_TYPE_PROGRESS:
             target_id = event.target_job_id or event.target_task_id

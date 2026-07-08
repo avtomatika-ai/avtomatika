@@ -18,12 +18,12 @@ This file defines the list of API clients authorized to create jobs.
 
 The file consists of sections (tables), where the section name is the client's unique identifier (for logs and convenience).
 
-| Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `token` | String | **Yes** | Secret token the client must pass in `X-Client-Token` header. |
-| `plan` | String | No | Tariff plan name (e.g., "free", "premium"). Used in blueprints for logic. |
-| `monthly_attempts` | Integer | No | Monthly request quota. If set, Orchestrator will track and block requests exceeding the limit. |
-| `*` | Any | No | Any other fields (e.g., `languages`, `callback_url`) will be available in `context.client.params`. |
+| Field              | Type    | Mandatory | Description                                                                                        |
+| :----------------- | :------ | :-------- | :------------------------------------------------------------------------------------------------- |
+| `token`            | String  | **Yes**   | Secret token the client must pass in `X-Client-Token` header.                                      |
+| `plan`             | String  | No        | Tariff plan name (e.g., "free", "premium"). Used in blueprints for logic.                          |
+| `monthly_attempts` | Integer | No        | Monthly request quota. If set, Orchestrator will track and block requests exceeding the limit.     |
+| `*`                | Any     | No        | Any other fields (e.g., `languages`, `callback_url`) will be available in `context.client.params`. |
 
 ### Example
 
@@ -57,15 +57,16 @@ This file is used to configure individual worker authentication. This is a safer
 
 The file consists of sections, where the section name must **exactly match** the `worker_id` the worker uses when registering.
 
-| Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `token` | String | **Yes** | Individual secret token for this worker. |
-| `description` | String | No | Worker description for administrators. |
+| Field         | Type   | Mandatory | Description                              |
+| :------------ | :----- | :-------- | :--------------------------------------- |
+| `token`       | String | **Yes**   | Individual secret token for this worker. |
+| `description` | String | No        | Worker description for administrators.   |
 
 ### Security Features
-*   At startup, Orchestrator calculates SHA-256 hash of the token and stores only the hash in memory (Redis). The original token is not stored anywhere.
-*   Upon incoming request from a worker, the hash of the provided token is compared with the stored one.
-*   **Performance Optimization:** Token hashes are cached in Orchestrator memory to minimize CPU usage during frequent heartbeats.
+
+- At startup, Orchestrator calculates SHA-256 hash of the token and stores only the hash in memory (Redis). The original token is not stored anywhere.
+- Upon incoming request from a worker, the hash of the provided token is compared with the stored one.
+- **Performance Optimization:** Token hashes are cached in Orchestrator memory to minimize CPU usage during frequent heartbeats.
 
 ### Example
 
@@ -92,17 +93,17 @@ This file configures the Native Scheduler, allowing you to run blueprints period
 
 Each section represents a scheduled job. The section name serves as the job's unique identifier.
 
-| Field | Type | Mandatory | Description |
-| :--- | :--- | :--- | :--- |
-| `blueprint` | String | **Yes** | The name of the blueprint to execute. |
-| `input_data` | Dictionary | No | Initial data payload for the job. Defaults to empty dict. |
-| `dispatch_timeout` | Integer | No | Queue expiration (seconds). Task fails if not picked up by a worker. |
-| `result_timeout` | Integer | No | Execution deadline (seconds). Absolute time since creation for result. |
-| `interval_seconds` | Integer | *One of* | Run job every N seconds. |
-| `daily_at` | String | *One of* | Run daily at specific time ("HH:MM"). |
-| `weekly_days` | List[String] | *One of* | Run on specific days ("mon", "tue", ...) at `time`. |
-| `monthly_dates` | List[Integer] | *One of* | Run on specific dates (1-31) at `time`. |
-| `time` | String | *One of* | Required for `weekly_days` and `monthly_dates`. Format "HH:MM". |
+| Field              | Type          | Mandatory | Description                                                            |
+| :----------------- | :------------ | :-------- | :--------------------------------------------------------------------- |
+| `blueprint`        | String        | **Yes**   | The name of the blueprint to execute.                                  |
+| `input_data`       | Dictionary    | No        | Initial data payload for the job. Defaults to empty dict.              |
+| `dispatch_timeout` | Integer       | No        | Queue expiration (seconds). Task fails if not picked up by a worker.   |
+| `result_timeout`   | Integer       | No        | Execution deadline (seconds). Absolute time since creation for result. |
+| `interval_seconds` | Integer       | _One of_  | Run job every N seconds.                                               |
+| `daily_at`         | String        | _One of_  | Run daily at specific time ("HH:MM").                                  |
+| `weekly_days`      | List[String]  | _One of_  | Run on specific days ("mon", "tue", ...) at `time`.                    |
+| `monthly_dates`    | List[Integer] | _One of_  | Run on specific dates (1-31) at `time`.                                |
+| `time`             | String        | _One of_  | Required for `weekly_days` and `monthly_dates`. Format "HH:MM".        |
 
 **Note on Timezones:** All time fields are interpreted according to the global `TZ` environment variable (default "UTC").
 
@@ -143,56 +144,59 @@ This forces the Orchestrator to re-read the file and update token hashes in Redi
 
 In addition to configuration files, the Orchestrator is configured via environment variables.
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `API_HOST` | Host to bind the API server to. | `0.0.0.0` |
-| `API_PORT` | Port to bind the API server to. | `8080` |
-| `ENABLE_CLIENT_API` | **Pure Holon Mode:** If set to `false`, disables the Client API (`/api/v1/...`). The Orchestrator will only accept tasks from a parent via RXON (Worker Interface). | `true` |
-| `REDIS_HOST` | Hostname of the Redis server. Required for production. | `""` (MemoryStorage) |
-| `REDIS_PORT` | Redis server port. | `6379` |
-| `REDIS_DB` | Redis database index. | `0` |
-| `INSTANCE_ID` | **Important for Scaling:** Unique identifier for this Orchestrator instance. Used as consumer name in Redis Streams. Defaults to hostname if not set. | `hostname` |
-| `CLIENT_TOKEN` | Global token for API clients (fallback if `clients.toml` not used). | `secure-orchestrator-token` |
-| `GLOBAL_WORKER_TOKEN` | Global token for workers (fallback if `workers.toml` not used). | `secure-worker-token` |
-| `CLIENT_API_PREFIX` | **Configurable API path:** The segment of the URL for the Client API. If set to empty, API will be at root. | `api` |
-| `WORKERS_CONFIG_PATH` | Path to `workers.toml`. | `""` |
-| `CLIENTS_CONFIG_PATH` | Path to `clients.toml`. | `""` |
-| `SCHEDULES_CONFIG_PATH` | Path to `schedules.toml`. | `""` |
-| `BLUEPRINTS_DIR` | Path to a directory with Python files containing `Blueprint` instances to be loaded automatically. | `""` |
-| `TZ` | **Global Timezone:** Affects scheduler triggers, log timestamps, and history API output (e.g., "Europe/Moscow", "UTC"). | `UTC` |
-| `LOG_LEVEL` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
-| `LOG_FORMAT` | Log format (`text` or `json`). | `json` |
-| `WORKER_TIMEOUT_SECONDS` | Default deadline for a worker to complete a task (used if no `result_timeout` set). | `300` |
-| `WORKER_POLL_TIMEOUT_SECONDS` | Timeout for long-polling task requests from workers. | `30` |
-| `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Interval for updating worker TTL (used for health checks). | `60` |
-| `JOB_MAX_RETRIES` | Maximum number of retries for transient task failures. | `3` |
-| `WATCHER_INTERVAL_SECONDS` | Interval for the Watcher background process to check for timed-out jobs. | `20` |
-| `WATCHER_LIMIT` | Maximum number of timed-out jobs processed per single Watcher cycle. | `500` |
-| `STRICT_EVENT_VALIDATION` | If `true`, Orchestrator will reject worker events not declared in their schemas. | `true` |
-| `REPUTATION_MIN_THRESHOLD` | Minimum reputation score for a worker to be considered for dispatching. | `0.3` |
-| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Reputation penalty for data contract violation. | `0.2` |
-| `REPUTATION_PENALTY_TASK_FAILURE` | Reputation penalty for critical or permanent task failure. | `0.05` |
-| `REPUTATION_REWARD_SUCCESS` | Reputation reward for each successfully completed task. | `0.001` |
-| `EXECUTOR_MAX_CONCURRENT_JOBS` | Maximum number of concurrent jobs (handlers) processed by the Orchestrator. | `1000` |
-| `DISPATCHER_SOFT_LIMIT` | **Overflow Strategy:** Maximum number of tasks in a worker's private queue before dispatching to more expensive candidates. | `3` |
-| `DISPATCHER_MAX_CANDIDATES` | Maximum number of suitable workers checked by Dispatcher during compliance filtering. | `50` |
-| `WORK_STEALING_ENABLED` | **Work Stealing:** If `true`, idle workers can atomically steal tasks from heavily loaded colleagues. | `true` |
-| `HISTORY_DATABASE_URI` | URI for history storage (`sqlite:///...` or `postgresql://...`). | `""` (Disabled) |
-| `RATE_LIMITING_ENABLED` | Enable rate limiting middleware. | `true` |
-| `RATE_LIMIT_LIMIT` | Default maximum number of requests allowed per period for general API endpoints. | `100` |
-| `RATE_LIMIT_PERIOD` | Rate limiting period in seconds. | `60` |
-| `RATE_LIMIT_HEARTBEAT_LIMIT` | Specific limit for worker heartbeat requests per period. | `120` |
-| `RATE_LIMIT_POLL_LIMIT` | Specific limit for worker task poll requests per period. | `60` |
-| `MAX_TRANSITIONS_PER_JOB` | **Infinite Loop Protection:** Maximum number of state transitions allowed for a single job before it is terminated. | `100` |
-| `DETAILED_API_RESPONSES` | **Detailed API Responses:** If `false` (default), the job status API returns only a minimal set of fields. | `false` |
+| Variable                                | Description                                                                                                                                                         | Default                     |
+| :-------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :-------------------------- |
+| `API_HOST`                              | Host to bind the API server to.                                                                                                                                     | `0.0.0.0`                   |
+| `API_PORT`                              | Port to bind the API server to.                                                                                                                                     | `8080`                      |
+| `ENABLE_CLIENT_API`                     | **Pure Holon Mode:** If set to `false`, disables the Client API (`/api/v1/...`). The Orchestrator will only accept tasks from a parent via RXON (Worker Interface). | `true`                      |
+| `REDIS_HOST`                            | Hostname of the Redis server. Required for production.                                                                                                              | `""` (MemoryStorage)        |
+| `REDIS_PORT`                            | Redis server port.                                                                                                                                                  | `6379`                      |
+| `REDIS_DB`                              | Redis database index.                                                                                                                                               | `0`                         |
+| `INSTANCE_ID`                           | **Important for Scaling:** Unique identifier for this Orchestrator instance. Used as consumer name in Redis Streams. Defaults to hostname if not set.               | `hostname`                  |
+| `CLIENT_TOKEN`                          | Global token for API clients (fallback if `clients.toml` not used).                                                                                                 | `secure-orchestrator-token` |
+| `GLOBAL_WORKER_TOKEN`                   | Global token for workers (fallback if `workers.toml` not used).                                                                                                     | `secure-worker-token`       |
+| `CLIENT_API_PREFIX`                     | **Configurable API path:** The segment of the URL for the Client API. If set to empty, API will be at root.                                                         | `api`                       |
+| `WORKERS_CONFIG_PATH`                   | Path to `workers.toml`.                                                                                                                                             | `""`                        |
+| `CLIENTS_CONFIG_PATH`                   | Path to `clients.toml`.                                                                                                                                             | `""`                        |
+| `SCHEDULES_CONFIG_PATH`                 | Path to `schedules.toml`.                                                                                                                                           | `""`                        |
+| `BLUEPRINTS_DIR`                        | Path to a directory with Python files containing `Blueprint` instances to be loaded automatically.                                                                  | `""`                        |
+| `TZ`                                    | **Global Timezone:** Affects scheduler triggers, log timestamps, and history API output (e.g., "Europe/Moscow", "UTC").                                             | `UTC`                       |
+| `LOG_LEVEL`                             | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`).                                                                                                                | `INFO`                      |
+| `LOG_FORMAT`                            | Log format (`text` or `json`).                                                                                                                                      | `json`                      |
+| `WORKER_TIMEOUT_SECONDS`                | Default deadline for a worker to complete a task (used if no `result_timeout` set).                                                                                 | `300`                       |
+| `WORKER_POLL_TIMEOUT_SECONDS`           | Timeout for long-polling task requests from workers.                                                                                                                | `30`                        |
+| `WORKER_HEALTH_CHECK_INTERVAL_SECONDS`  | Interval for updating worker TTL (used for health checks).                                                                                                          | `60`                        |
+| `JOB_MAX_RETRIES`                       | Maximum number of retries for transient task failures.                                                                                                              | `3`                         |
+| `WATCHER_INTERVAL_SECONDS`              | Interval for the Watcher background process to check for timed-out jobs.                                                                                            | `20`                        |
+| `WATCHER_LIMIT`                         | Maximum number of timed-out jobs processed per single Watcher cycle.                                                                                                | `500`                       |
+| `STRICT_EVENT_VALIDATION`               | If `true`, Orchestrator will reject worker events not declared in their schemas.                                                                                    | `true`                      |
+| `REPUTATION_MIN_THRESHOLD`              | Minimum reputation score for a worker to be considered for dispatching.                                                                                             | `0.3`                       |
+| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Reputation penalty for data contract violation.                                                                                                                     | `0.2`                       |
+| `REPUTATION_PENALTY_TASK_FAILURE`       | Reputation penalty for critical or permanent task failure.                                                                                                          | `0.05`                      |
+| `REPUTATION_REWARD_SUCCESS`             | Reputation reward for each successfully completed task.                                                                                                             | `0.001`                     |
+| `EXECUTOR_MAX_CONCURRENT_JOBS`          | Maximum number of concurrent jobs (handlers) processed by the Orchestrator.                                                                                         | `1000`                      |
+| `DISPATCHER_SOFT_LIMIT`                 | **Overflow Strategy:** Maximum number of tasks in a worker's private queue before dispatching to more expensive candidates.                                         | `3`                         |
+| `DISPATCHER_MAX_CANDIDATES`             | Maximum number of suitable workers checked by Dispatcher during compliance filtering.                                                                               | `50`                        |
+| `WORK_STEALING_ENABLED`                 | **Work Stealing:** If `true`, idle workers can atomically steal tasks from heavily loaded colleagues.                                                               | `true`                      |
+| `HISTORY_DATABASE_URI`                  | URI for history storage (`sqlite:///...` or `postgresql://...`).                                                                                                    | `""` (Disabled)             |
+| `RATE_LIMITING_ENABLED`                 | Enable rate limiting middleware.                                                                                                                                    | `true`                      |
+| `RATE_LIMIT_LIMIT`                      | Default maximum number of requests allowed per period for general API endpoints.                                                                                    | `100`                       |
+| `RATE_LIMIT_PERIOD`                     | Rate limiting period in seconds.                                                                                                                                    | `60`                        |
+| `RATE_LIMIT_HEARTBEAT_LIMIT`            | Specific limit for worker heartbeat requests per period.                                                                                                            | `120`                       |
+| `RATE_LIMIT_POLL_LIMIT`                 | Specific limit for worker task poll requests per period.                                                                                                            | `60`                        |
+| `MAX_TRANSITIONS_PER_JOB`               | **Infinite Loop Protection:** Maximum number of state transitions allowed for a single job before it is terminated.                                                 | `100`                       |
+| `DETAILED_API_RESPONSES`                | **Detailed API Responses:** If `false` (default), the job status API returns only a minimal set of fields.                                                          | `false`                     |
 
 ### 429 Response (Too Many Requests)
+
 When a limit is exceeded, the Orchestrator returns a standard **`Retry-After`** HTTP header.
+
 > **Note:** This header is returned **only to workers** (requests to `/_worker/*`) to assist with smart backoff strategies. Regular API clients receive a 429 without the wait time.
 
 ---
 
 ### Job Status Response Format
+
 The system supports two levels of detail for the `GET /api/v1/jobs/{id}` endpoint:
 
 1. **Compact Mode** (Default, `DETAILED_API_RESPONSES=false`):
@@ -201,40 +205,41 @@ The system supports two levels of detail for the `GET /api/v1/jobs/{id}` endpoin
    - `status` — Current lifecycle status.
    - `result` — Data from the latest completed step.
    - `blueprint_name` — Name of the blueprint.
-   
-   *Note:* The `?fields=...` parameter in this mode is restricted only to these 4 fields.
+
+   _Note:_ The `?fields=...` parameter in this mode is restricted only to these 4 fields.
 
 2. **Detailed Mode** (`DETAILED_API_RESPONSES=true`):
    Returns the full job state object, including `state_history`, `initial_data`, `client_config`, etc. In this mode, the `?fields` parameter can be used to request any field.
-| `WORKER_AUTH_MODE` | **Authentication mode:** `mixed` (tokens+mTLS), `mtls-only` (strict mTLS + STS tokens), or `token-only`. | `mixed` |
+   | `WORKER_AUTH_MODE` | **Authentication mode:** `mixed` (tokens+mTLS), `mtls-only` (strict mTLS + STS tokens), or `token-only`. | `mixed` |
 
 ### Security & TLS (mTLS)
 
 Configure these variables to enable HTTPS and Mutual TLS (Zero Trust).
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `TLS_ENABLED` | Enable HTTPS server. | `false` |
-| `TLS_CERT_PATH` | Path to the server's SSL certificate (`.crt`). Required if TLS enabled. | `""` |
-| `TLS_KEY_PATH` | Path to the server's private key (`.key`). Required if TLS enabled. | `""` |
-| `TLS_CA_PATH` | Path to the CA certificate bundle to verify client certificates. | `""` |
-| `TLS_REQUIRE_CLIENT_CERT` | If `true`, the server will reject connections without a valid client certificate (mTLS). | `false` |
-| `REDIS_ENCRYPTION_KEY` | **Envelope Encryption:** If provided, static worker tokens are stored encrypted in Redis (AES-GCM). | `""` |
+| Variable                  | Description                                                                                         | Default |
+| :------------------------ | :-------------------------------------------------------------------------------------------------- | :------ |
+| `TLS_ENABLED`             | Enable HTTPS server.                                                                                | `false` |
+| `TLS_CERT_PATH`           | Path to the server's SSL certificate (`.crt`). Required if TLS enabled.                             | `""`    |
+| `TLS_KEY_PATH`            | Path to the server's private key (`.key`). Required if TLS enabled.                                 | `""`    |
+| `TLS_CA_PATH`             | Path to the CA certificate bundle to verify client certificates.                                    | `""`    |
+| `TLS_REQUIRE_CLIENT_CERT` | If `true`, the server will reject connections without a valid client certificate (mTLS).            | `false` |
+| `REDIS_ENCRYPTION_KEY`    | **Envelope Encryption:** If provided, static worker tokens are stored encrypted in Redis (AES-GCM). | `""`    |
 
 ### Worker Authentication Performance
-To minimize CPU overhead during frequent heartbeats, Orchestrator caches verified worker token hashes in memory for **60 seconds**. This means changes to `workers.toml` may take up to a minute to propagate unless a manual reload is triggered via the API.
+
+To minimize CPU overhead during frequent heartbeats, Orchestrator caches verified worker token hashes in memory for **60 seconds** (powered by the high-performance Rust-based `cachebox.TTLCache` under the hood). This means changes to `workers.toml` may take up to a minute to propagate unless a manual reload is triggered via the API.
 
 ### S3 Storage (Optional)
 
 Configure these variables to enable S3 Payload Offloading.
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `S3_ENDPOINT_URL` | URL of the S3-compatible storage. **Required** to enable S3. | `""` |
-| `S3_ACCESS_KEY` | Access Key ID. **Required**. | `""` |
-| `S3_SECRET_KEY` | Secret Access Key. **Required**. | `""` |
-| `S3_DEFAULT_BUCKET` | Default bucket name for job payloads. | `avtomatika-payloads` |
-| `S3_REGION` | S3 Region. | `us-east-1` |
-| `S3_MAX_CONCURRENCY` | Maximum number of concurrent connections to S3 across all jobs. Prevents file descriptor exhaustion. | `100` |
-| `S3_AUTO_CLEANUP` | If `true`, automatically deletes S3 files and local temporary artifacts when a job completes or fails. | `true` |
-| `TASK_FILES_DIR` | Local directory for temporary file storage during job execution. | `/tmp/avtomatika-payloads` |
+| Variable             | Description                                                                                            | Default                    |
+| :------------------- | :----------------------------------------------------------------------------------------------------- | :------------------------- |
+| `S3_ENDPOINT_URL`    | URL of the S3-compatible storage. **Required** to enable S3.                                           | `""`                       |
+| `S3_ACCESS_KEY`      | Access Key ID. **Required**.                                                                           | `""`                       |
+| `S3_SECRET_KEY`      | Secret Access Key. **Required**.                                                                       | `""`                       |
+| `S3_DEFAULT_BUCKET`  | Default bucket name for job payloads.                                                                  | `avtomatika-payloads`      |
+| `S3_REGION`          | S3 Region.                                                                                             | `us-east-1`                |
+| `S3_MAX_CONCURRENCY` | Maximum number of concurrent connections to S3 across all jobs. Prevents file descriptor exhaustion.   | `100`                      |
+| `S3_AUTO_CLEANUP`    | If `true`, automatically deletes S3 files and local temporary artifacts when a job completes or fails. | `true`                     |
+| `TASK_FILES_DIR`     | Local directory for temporary file storage during job execution.                                       | `/tmp/avtomatika-payloads` |

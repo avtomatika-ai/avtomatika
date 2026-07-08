@@ -21,12 +21,13 @@
 This document serves as a comprehensive guide for developers looking to build pipelines (blueprints) and embed the Orchestrator into their applications.
 
 ## Table of Contents
+
 - [Core Concept: Orchestrator, Blueprints, and Workers](#core-concept-orchestrator-blueprints-and-workers)
 - [Installation](#installation)
 - [Quick Start: Usage as a Library](#quick-start-usage-as-a-library)
 - [Key Concepts: JobContext and Actions](#key-concepts-jobcontext-and-actions)
 - [Blueprint Cookbook: Key Features](#blueprint-cookbook-key-features)
-  - [Conditional Transitions (.when())](#conditional-transitions-when)
+  - [Conditional Transitions](#conditional-transitions)
   - [Delegating Tasks to Workers (dispatch_task)](#delegating-tasks-to-workers-dispatch_task)
   - [Parallel Execution and Aggregation (Fan-out/Fan-in)](#parallel-execution-and-aggregation-fan-outfan-in)
   - [Dependency Injection (DataStore)](#dependency-injection-datastore)
@@ -45,81 +46,91 @@ This document serves as a comprehensive guide for developers looking to build pi
 
 The project is based on a simple yet powerful architectural pattern that separates process logic from execution logic.
 
-*   **Orchestrator (OrchestratorEngine)** — The Director. It manages the entire process from start to finish, tracks state, handles errors, and decides what should happen next. It does not perform business tasks itself.
-*   **Blueprints (Blueprint)** — The Script. Each blueprint is a detailed plan (a state machine) for a specific business process. It describes the steps (states) and the rules for transitioning between them.
-*   **Workers (Worker)** — The Team of Specialists. These are independent, specialized executors. Each worker knows how to perform a specific set of tasks (e.g., "process video," "send email") and reports back to the Orchestrator.
+- **Orchestrator (OrchestratorEngine)** — The Director. It manages the entire process from start to finish, tracks state, handles errors, and decides what should happen next. It does not perform business tasks itself.
+- **Blueprints (Blueprint)** — The Script. Each blueprint is a detailed plan (a state machine) for a specific business process. It describes the steps (states) and the rules for transitioning between them.
+- **Workers (Worker)** — The Team of Specialists. These are independent, specialized executors. Each worker knows how to perform a specific set of tasks (e.g., "process video," "send email") and reports back to the Orchestrator.
 
 ### Why does this matter?
+
 In the **HLN** architecture, the Orchestrator acts as a "Ghost" (Internal logic), while Workers act as "Shells" (Execution interface). Thanks to the **Shell-Stacking** principle, any Orchestrator can be encased in a worker shell, allowing for the construction of infinite fractal networks (**Holarchies**).
 
 ## Ecosystem
 
 Avtomatika is part of a larger ecosystem:
 
-*   **[Avtomatika Protocol](https://github.com/avtomatika-ai/rxon)**: Shared package containing protocol definitions, data models, and utilities ensuring consistency across all components.
-*   **[Avtomatika Worker SDK](https://github.com/avtomatika-ai/avtomatika-worker)**: The official Python SDK for building workers that connect to this engine.
-*   **[HLN Protocol](https://github.com/avtomatika-ai/hln)**: The architectural specification and manifesto behind the system (Hierarchical Logic Network).
-*   **[Full Example](https://github.com/avtomatika-ai/avtomatika-full-example)**: A complete reference project demonstrating the engine and workers in action.
+- **[Avtomatika Protocol](https://github.com/avtomatika-ai/rxon)**: Shared package containing protocol definitions, data models, and utilities ensuring consistency across all components.
+- **[Avtomatika Worker SDK](https://github.com/avtomatika-ai/avtomatika-worker)**: The official Python SDK for building workers that connect to this engine.
+- **[HLN Protocol](https://github.com/avtomatika-ai/hln)**: The architectural specification and manifesto behind the system (Hierarchical Logic Network).
+- **[Full Example](https://github.com/avtomatika-ai/avtomatika-full-example)**: A complete reference project demonstrating the engine and workers in action.
 
 ## Installation
 
-*   **Install the core engine only:**
-    ```bash
-    pip install avtomatika
-    ```
+- **Install the core engine only:**
 
-*   **Install with Redis support (recommended for production):**
-    ```bash
-    pip install "avtomatika[redis]"
-    ```
+  ```bash
+  pip install avtomatika
+  ```
 
-*   **Install with history storage support (SQLite, PostgreSQL):**
-    ```bash
-    pip install "avtomatika[history]"
-    ```
+- **Install with Redis support (recommended for production):**
 
-*   **Install with telemetry support (OpenTelemetry):**
-    ```bash
-    pip install "avtomatika[telemetry]"
-    ```
+  ```bash
+  pip install "avtomatika[redis]"
+  ```
 
-*   **Install with S3 support (Payload Offloading):**
-    ```bash
-    pip install "avtomatika[s3]"
-    ```
+- **Install with history storage support (SQLite, PostgreSQL):**
 
-*   **Install all dependencies, including for testing:**
-    ```bash
-    pip install "avtomatika[all,test]"
-    ```
+  ```bash
+  pip install "avtomatika[history]"
+  ```
+
+- **Install with telemetry support (OpenTelemetry):**
+
+  ```bash
+  pip install "avtomatika[telemetry]"
+  ```
+
+- **Install with S3 support (Payload Offloading):**
+
+  ```bash
+  pip install "avtomatika[s3]"
+  ```
+
+- **Install all dependencies, including for testing:**
+  ```bash
+  pip install "avtomatika[all,test]"
+  ```
 
 ## Job Statuses
 
 Avtomatika jobs move through various states:
 
-| Status | Type | Description |
-| :--- | :--- | :--- |
-| `pending` | Intermediate | Job created, waiting for queue. |
-| `running` | Intermediate | Active execution of blueprint logic or tasks. |
-| `waiting_for_worker` | Intermediate | Task dispatched, waiting for a worker to pick it up. |
-| `waiting_for_human` | Intermediate | Paused, awaiting manual approval via webhook. |
-| `waiting_for_parallel` | Intermediate | Waiting for completion of all parallel sub-tasks. |
-| `finished` | **Terminal** | Successfully completed. **Result is visible.** |
-| `failed` | **Terminal** | Logic or worker failure. **Result is visible.** |
-| `cancelled` | **Terminal** | Manually cancelled by user or system. |
-| `error` | **Terminal** | Critical system or infrastructure error. |
-| `quarantined` | **Terminal** | Flagged for manual review (e.g., data contract violation). |
+| Status                 | Type         | Description                                                |
+| :--------------------- | :----------- | :--------------------------------------------------------- |
+| `pending`              | Intermediate | Job created, waiting for queue.                            |
+| `running`              | Intermediate | Active execution of blueprint logic or tasks.              |
+| `waiting_for_worker`   | Intermediate | Task dispatched, waiting for a worker to pick it up.       |
+| `waiting_for_human`    | Intermediate | Paused, awaiting manual approval via webhook.              |
+| `waiting_for_parallel` | Intermediate | Waiting for completion of all parallel sub-tasks.          |
+| `finished`             | **Terminal** | Successfully completed. **Result is visible.**             |
+| `failed`               | **Terminal** | Logic or worker failure. **Result is visible.**            |
+| `cancelled`            | **Terminal** | Manually cancelled by user or system.                      |
+| `error`                | **Terminal** | Critical system or infrastructure error.                   |
+| `quarantined`          | **Terminal** | Flagged for manual review (e.g., data contract violation). |
 
 ### Modern Observability
+
 Avtomatika is built with deep observability in mind using the **OpenTelemetry** standard. It provides:
+
 - **Distributed Tracing**: Track requests across the entire HLN network (Orchestrator ↔ Worker).
 - **Real-time Metrics**: Monitor queue lengths, worker health, and job latencies.
 - **OTLP Native**: Push telemetry data directly to Jaeger, Prometheus, or Grafana.
 
 To enable telemetry support during installation:
+
 ```bash
 pip install "avtomatika[telemetry]"
 ```
+
 See the [**Observability Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/observability.md) for configuration details.
 
 ## Quick Start: Usage as a Library
@@ -177,7 +188,7 @@ engine.register_blueprint(bp)
 # 5. Define the main entrypoint to run the server
 async def main():
     await engine.start()
-    
+
     try:
         await asyncio.Event().wait()
     finally:
@@ -194,12 +205,13 @@ if __name__ == "__main__":
 
 The `OrchestratorEngine` offers two ways to start the server:
 
-*   **`engine.run()`**: This is a simple, **blocking** method. It's useful for dedicated scripts where the orchestrator is the only major component. It handles starting and stopping the server for you. You should not use this inside an `async def` function that is part of a larger application, as it can conflict with the event loop.
+- **`engine.run()`**: This is a simple, **blocking** method. It's useful for dedicated scripts where the orchestrator is the only major component. It handles starting and stopping the server for you. You should not use this inside an `async def` function that is part of a larger application, as it can conflict with the event loop.
 
-*   **`await engine.start()`** and **`await engine.stop()`**: These are the non-blocking methods for integrating the engine into a larger `asyncio` application.
-    *   `start()` sets up and starts the web server in the background.
-    *   `stop()` gracefully shuts down the server and cleans up resources.
+- **`await engine.start()`** and **`await engine.stop()`**: These are the non-blocking methods for integrating the engine into a larger `asyncio` application.
+  - `start()` sets up and starts the web server in the background.
+  - `stop()` gracefully shuts down the server and cleans up resources.
     The "Quick Start" example above demonstrates the correct way to use these methods.
+
 ## Handler Arguments & Dependency Injection
 
 State handlers are the core of your workflow logic. Avtomatika provides a powerful dependency injection system to make writing handlers clean and efficient.
@@ -210,15 +222,15 @@ Instead of receiving a single, large `context` object, your handler can ask for 
 
 The following arguments can be injected by name:
 
-*   **From the core job context:**
-    *   `job_id` (str): The ID of the current job.
-    *   `initial_data` (dict): The data the job was created with.
-    *   `state_history` (dict): A dictionary for storing and passing data between steps. Data returned by workers is automatically merged into this dictionary.
-    *   `actions` (ActionFactory): The object used to tell the orchestrator what to do next (e.g., `actions.go_to(...)`).
-    *   `client` (ClientConfig): Information about the API client that started the job.
-    *   `data_stores` (SimpleNamespace): Access to shared resources like database connections or caches.
-*   **From worker results:**
-    *   Any key from a dictionary returned by a previous worker can be injected by name.
+- **From the core job context:**
+  - `job_id` (str): The ID of the current job.
+  - `initial_data` (dict): The data the job was created with.
+  - `state_history` (dict): A dictionary for storing and passing data between steps. Data returned by workers is automatically merged into this dictionary.
+  - `actions` (ActionFactory): The object used to tell the orchestrator what to do next (e.g., `actions.go_to(...)`).
+  - `client` (ClientConfig): Information about the API client that started the job.
+  - `data_stores` (SimpleNamespace): Access to shared resources like database connections or caches.
+- **From worker results:**
+  - Any key from a dictionary returned by a previous worker can be injected by name.
 
 ### Example: Dependency Injection
 
@@ -243,11 +255,11 @@ async def publish_video(
 
 This is the most important injected argument. It tells the orchestrator what to do next. **Only one** `actions` method can be called in a single handler.
 
-*   `actions.go_to("next_state")`: Moves the job to a new state.
-*   `actions.dispatch_task(...)`: Delegates work to a Worker.
-*   `actions.dispatch_parallel(...)`: Runs multiple tasks at once.
-*   `actions.await_human_approval(...)`: Pauses the workflow for external input.
-*   `actions.run_blueprint(...)`: Starts a child workflow.
+- `actions.go_to("next_state")`: Moves the job to a new state.
+- `actions.dispatch_task(...)`: Delegates work to a Worker.
+- `actions.dispatch_parallel(...)`: Runs multiple tasks at once.
+- `actions.await_human_approval(...)`: Pauses the workflow for external input.
+- `actions.run_blueprint(...)`: Starts a child workflow.
 
 ### Granular Dependency Injection
 
@@ -262,13 +274,14 @@ async def analyze(initial_data, state_history, actions):
 ```
 
 Available arguments for injection:
-*   `actions`: The `ActionFactory` (required for control).
-*   `job_id`, `current_state`, `initial_data`, `state_history`: Core job fields.
-*   `data_stores`: Access to shared memory/database stores.
-*   `task_files`: Access to S3/Local files for the job.
-*   `aggregation_results`: Results from parallel tasks.
-*   `client`: Client configuration and plan info.
-*   `tracing_context`: Distributed tracing metadata.
+
+- `actions`: The `ActionFactory` (required for control).
+- `job_id`, `current_state`, `initial_data`, `state_history`: Core job fields.
+- `data_stores`: Access to shared memory/database stores.
+- `task_files`: Access to S3/Local files for the job.
+- `aggregation_results`: Results from parallel tasks.
+- `client`: Client configuration and plan info.
+- `tracing_context`: Distributed tracing metadata.
 
 ## Key Concepts: JobContext and Actions
 
@@ -276,38 +289,60 @@ Available arguments for injection:
 
 Avtomatika is engineered for high-load environments with thousands of concurrent workers.
 
-*   **Standardized Holon Matching (RXON)**:
-    *   **Unified Matching**: Migrated to the formalized `rxon` matching logic. All resource checks (CPU, RAM, GPU, custom properties) are now strictly governed by the HLN protocol standard.
-    *   **Smart Numeric Comparison**: Automatically performs **GE (Greater or Equal)** checks for numbers (e.g., minimum VRAM or RAM), ensuring flexible but reliable dispatching.
-    *   **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
-    *   **Overflow Strategy**: Automatically spills load to more expensive workers if cheaper ones are saturated.
-    *   **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues at O(1) speed.
-*   **Self-Regulating Reputation**:
-    *   **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
-    *   **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
-*   **Contract-First & Zero Trust**:
-    *   **Identity Chain Verification**: Validates the entire bubbling path for events in deep holarchies.
-    *   **mTLS & STS**: Mutual authentication and short-lived token rotation for secure communication.
-    *   **Signature Support**: Ready for protocol-level digital signatures for end-to-end task verification.
-    *   **Atomic State Management**: Uses Redis transactions and Lua scripts to ensure consistency under extreme parallel loads.
+- **Standardized Holon Matching (RXON)**:
+  - **Unified Matching**: Migrated to the formalized `rxon` matching logic. All resource checks (CPU, RAM, GPU, custom properties) are now strictly governed by the HLN protocol standard.
+  - **Smart Numeric Comparison**: Automatically performs **GE (Greater or Equal)** checks for numbers (e.g., minimum VRAM or RAM), ensuring flexible but reliable dispatching.
+  - **Hot Cache & Skill Awareness**: Prioritizes workers that already have specific AI models loaded.
+  - **Overflow Strategy**: Automatically spills load to more expensive workers if cheaper ones are saturated.
+  - **Work Stealing**: Idle workers can atomically steal tasks from heavily loaded colleagues at O(1) speed.
+- **Self-Regulating Reputation**:
+  - **Penalty System**: Immediate reputation slashing for contract violations (-0.2) or permanent task failures (-0.05).
+  - **Recovery Loop**: Small reputation rewards for every successful task completion (+0.001), encouraging consistent quality.
+- **Contract-First & Zero Trust**:
+  - **Identity Chain Verification**: Validates the entire bubbling path for events in deep holarchies.
+  - **mTLS & STS**: Mutual authentication and short-lived token rotation for secure communication.
+  - **Signature Support**: Ready for protocol-level digital signatures for end-to-end task verification.
+  - **Atomic State Management**: Uses Redis transactions and Lua scripts to ensure consistency under extreme parallel loads.
 
 ## Blueprint Cookbook: Key Features
 
-### 1. Conditional Transitions (`.when()`)
+### 1. Conditional Transitions
 
-Use `.when()` to create conditional logic branches. The condition string is evaluated by the engine before the handler is called, so it still uses the `context.` prefix. The handler itself, however, can use dependency injection.
+Pass conditions directly to `@bp.handler()` to create conditional logic branches. Conditions are declarative **`FastF` expressions** from the `fast-filter` library, compiled into native Python lambdas on first evaluation for maximum performance.
 
 ```python
-# The `.when()` condition still refers to `context`.
-@bp.handler().when("context.initial_data.type == 'urgent'")
+from avtomatika import F  # F is re-exported from fast-filter
+
+# Simple equality check on initial_data (inferred state name "decision_step")
+@bp.handler(F.initial_data["type"] == "urgent")
 async def decision_step(actions):
     actions.go_to("urgent_processing")
 
-# The default handler if no `.when()` condition matches.
+# Compound condition with logical AND (custom state name "decision_step")
+@bp.handler("decision_step", (F.initial_data["priority"] >= 8) & (F.initial_data["active"] == True))
+async def high_priority_step(actions):
+    actions.go_to("priority_lane")
+
+# The default handler if no condition matches.
 @bp.handler
 async def decision_step(actions):
     actions.go_to("normal_processing")
 ```
+
+**Supported condition syntax:**
+
+| Pattern                   | Example                             |
+| ------------------------- | ----------------------------------- |
+| Attribute access          | `F.status == "done"`                |
+| Dict/item access          | `F.data["key"] == 42`               |
+| Logical AND / OR / NOT    | `(F.x > 0) & (F.y < 10)`, `~F.flag` |
+| Comparison operators      | `F.score >= 80`, `F.retries < 3`    |
+| `in` / `not_in`           | `F.role.in_(["admin", "mod"])`      |
+| Regexp (uses `re.search`) | `F.text.regexp(r"^done")`           |
+| List aggregators          | `(F.tags[...] == "vip").any()`      |
+| Custom function           | `F.value.func(my_predicate)`        |
+
+> **Note:** Missing attributes and `None` intermediate values are handled safely — they return `False` instead of raising `AttributeError`. This is a deliberate improvement over `magic-filter`.
 
 ### 2. Delegating Tasks to Workers (`dispatch_task`)
 
@@ -327,6 +362,7 @@ async def transcode_video(initial_data, actions):
         }
     )
 ```
+
 If the worker returns a status not listed in `transitions`, the job will automatically transition to a failed state.
 
 ### 3. Parallel Execution and Aggregation (Fan-out/Fan-in)
@@ -386,10 +422,10 @@ async def get_from_cache(data_stores):
 
 Avtomatika includes a built-in distributed scheduler. It allows you to trigger blueprints periodically (interval, daily, weekly, monthly) without external tools like cron.
 
-*   **Configuration:** Defined in `schedules.toml`.
-*   **Timezone Aware:** Supports global timezone configuration (e.g., `TZ="Europe/Moscow"`).
-*   **Expiration Support:** Supports `dispatch_timeout` and `result_timeout` to ensure tasks don't run or complete too late.
-*   **Distributed Locking:** Safe to run with multiple orchestrator instances; jobs are guaranteed to run only once per interval using distributed locks (Redis/Memory).
+- **Configuration:** Defined in `schedules.toml`.
+- **Timezone Aware:** Supports global timezone configuration (e.g., `TZ="Europe/Moscow"`).
+- **Expiration Support:** Supports `dispatch_timeout` and `result_timeout` to ensure tasks don't run or complete too late.
+- **Distributed Locking:** Safe to run with multiple orchestrator instances; jobs are guaranteed to run only once per interval using distributed locks (Redis/Memory).
 
 ```toml
 # schedules.toml example
@@ -407,22 +443,22 @@ The orchestrator can send asynchronous notifications to an external system when 
 
 Orchestrator provides first-class support for handling large files via S3-compatible storage, powered by the high-performance `obstore` library (Rust bindings).
 
-*   **Memory Safe (Streaming)**: Uses streaming for uploads and downloads, allowing processing of files larger than available RAM without OOM errors.
-*   **Managed Mode**: The Orchestrator manages file lifecycle (automatic cleanup of S3 objects and local temporary files on job completion).
-*   **Dependency Injection**: Use the `task_files` argument in your handlers to easily read/write data.
-*   **Directory Support**: Supports recursive download and upload of entire directories.
+- **Memory Safe (Streaming)**: Uses streaming for uploads and downloads, allowing processing of files larger than available RAM without OOM errors.
+- **Managed Mode**: The Orchestrator manages file lifecycle (automatic cleanup of S3 objects and local temporary files on job completion).
+- **Dependency Injection**: Use the `task_files` argument in your handlers to easily read/write data.
+- **Directory Support**: Supports recursive download and upload of entire directories.
 
 ```python
 @bp.handler
 async def process_data(task_files, actions):
     # Streaming download of a large file
     local_path = await task_files.download("large_dataset.csv")
-    
+
     # ... process data ...
-    
+
     # Upload results
     await task_files.write_json("results.json", {"status": "done"})
-    
+
     actions.go_to("finished")
 ```
 
@@ -430,12 +466,13 @@ async def process_data(task_files, actions):
 
 All external API endpoints are strictly versioned and prefixed with `/api/v1/`.
 
-*   **Events:**
-    *   `job_finished`: The job reached a final success state.
-    *   `job_failed`: The job failed (e.g., due to an error or invalid input).
-    *   `job_quarantined`: The job was moved to quarantine after repeated failures.
+- **Events:**
+  - `job_finished`: The job reached a final success state.
+  - `job_failed`: The job failed (e.g., due to an error or invalid input).
+  - `job_quarantined`: The job was moved to quarantine after repeated failures.
 
 **Example Request:**
+
 ```json
 POST /api/v1/jobs/my_flow
 {
@@ -449,15 +486,16 @@ POST /api/v1/jobs/my_flow
 ```
 
 **Example Webhook Payload:**
+
 ```json
 {
-    "event": "job_finished",
-    "job_id": "123e4567-e89b-12d3-a456-426614174000",
-    "status": "finished",
-    "result": {
-        "output_path": "/videos/result.mp4"
-    },
-    "error": null
+  "event": "job_finished",
+  "job_id": "123e4567-e89b-12d3-a456-426614174000",
+  "status": "finished",
+  "result": {
+    "output_path": "/videos/result.mp4"
+  },
+  "error": null
 }
 ```
 
@@ -469,9 +507,9 @@ The orchestrator's behavior can be configured through environment variables. Add
 
 ### Configuration Files
 
--   **`clients.toml`**: Defines API clients, their tokens, plans, and quotas.
--   **`workers.toml`**: Defines individual tokens for workers to enhance security. Supports **fnmatch patterns** (e.g., `cpu-worker-*`) for dynamic scaling.
--   **`schedules.toml`**: Defines periodic tasks (CRON-like) for the native scheduler.
+- **`clients.toml`**: Defines API clients, their tokens, plans, and quotas.
+- **`workers.toml`**: Defines individual tokens for workers to enhance security. Supports **fnmatch patterns** (e.g., `cpu-worker-*`) for dynamic scaling.
+- **`schedules.toml`**: Defines periodic tasks (CRON-like) for the native scheduler.
 
 For detailed specifications and examples, please refer to the [**Configuration Guide**](https://github.com/avtomatika-ai/avtomatika/blob/main/docs/configuration.md).
 
@@ -479,47 +517,49 @@ For detailed specifications and examples, please refer to the [**Configuration G
 
 The orchestrator handles failures based on the `error.code` field in a worker's response.
 
-*   **TRANSIENT_ERROR**: Temporary errors (network, timeouts). Automatic retries.
-*   **PERMANENT_ERROR**: Permanent errors (logic, security). Immediate quarantine.
-*   **INVALID_INPUT_ERROR**: Data errors. Job fails immediately.
+- **TRANSIENT_ERROR**: Temporary errors (network, timeouts). Automatic retries.
+- **PERMANENT_ERROR**: Permanent errors (logic, security). Immediate quarantine.
+- **INVALID_INPUT_ERROR**: Data errors. Job fails immediately.
 
 ### Security & Stability Guardrails
 
-*   **Exponential Backoff:** Core loops (`JobExecutor`, `Watcher`) automatically implement exponential backoff on infrastructure failures.
-*   **Job Hijacking Protection:** Only the assigned worker can submit task results.
-*   **Infinite Loop Protection:** `MAX_TRANSITIONS_PER_JOB` (default 100) terminates cycling blueprints.
-*   **Stale Result Protection:** Ignores results for timed-out or re-dispatched tasks.
+- **Exponential Backoff:** Core loops (`JobExecutor`, `Watcher`) automatically implement exponential backoff on infrastructure failures.
+- **Job Hijacking Protection:** Only the assigned worker can submit task results.
+- **Infinite Loop Protection:** `MAX_TRANSITIONS_PER_JOB` (default 100) terminates cycling blueprints.
+- **Stale Result Protection:** Ignores results for timed-out or re-dispatched tasks.
 
 ### Concurrency & Performance
 
-*   **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limits internal job handlers (default: `1000`).
-*   **`WATCHER_LIMIT`**: Number of timeouts checked per cycle (default: `500`).
-*   **`DISPATCHER_MAX_CANDIDATES`**: Limits worker compliance checks (default: `50`).
+- **`EXECUTOR_MAX_CONCURRENT_JOBS`**: Limits internal job handlers (default: `1000`).
+- **`WATCHER_LIMIT`**: Number of timeouts checked per cycle (default: `500`).
+- **`DISPATCHER_MAX_CANDIDATES`**: Limits worker compliance checks (default: `50`).
 
 ### High Availability & Distributed Locking
 
 Multiple Orchestrator instances can run behind a load balancer.
 
-*   **Stateless API:** All state is persisted in Redis.
-*   **Distributed Locking:** `Watcher` and `ReputationCalculator` use Redis `SET NX` locks.
+- **Stateless API:** All state is persisted in Redis.
+- **Distributed Locking:** `Watcher` and `ReputationCalculator` use Redis `SET NX` locks.
 
 ### Logging & Observability
 
-*   **Structured JSON Logging**: Easy to parse and index.
-*   **Asynchronous processing**: Non-blocking `QueueHandler` prevents event loop blocking.
-*   **Deep Observability**: OpenTelemetry-based tracing and metrics (via OTLP).
+- **Structured JSON Logging**: Easy to parse and index.
+- **Asynchronous processing**: Non-blocking `QueueHandler` prevents event loop blocking.
+- **Deep Observability**: OpenTelemetry-based tracing and metrics (via OTLP).
 
 ### Security & Data Protection
-*   **Zero Trust Security**: Mutual authentication (mTLS) and mandatory **HMAC SHA256** message signing to protect against data and worker spoofing.
-*   **Replay Protection**: Strict validation of `timestamp` with a 60-second window.
-*   **Identity Chain Integrity**: Mathematical verification of identity chains in holarchies (signature covers the entire signal path).
-*   **Envelope Encryption**: When `REDIS_ENCRYPTION_KEY` is provided, worker tokens are stored encrypted in Redis (AES-GCM).
-*   **Auth Modes**: Support for `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
-*   **Strict Client Isolation**: Jobs are strictly tied to the `client_token`. A client can only access, manage, or download files for jobs they created.
+
+- **Zero Trust Security**: Mutual authentication (mTLS) and mandatory **HMAC SHA256** message signing to protect against data and worker spoofing.
+- **Replay Protection**: Strict validation of `timestamp` with a 60-second window.
+- **Identity Chain Integrity**: Mathematical verification of identity chains in holarchies (signature covers the entire signal path).
+- **Envelope Encryption**: When `REDIS_ENCRYPTION_KEY` is provided, worker tokens are stored encrypted in Redis (AES-GCM).
+- **Auth Modes**: Support for `WORKER_AUTH_MODE` (`mixed`, `mtls-only`, `token-only`).
+- **Strict Client Isolation**: Jobs are strictly tied to the `client_token`. A client can only access, manage, or download files for jobs they created.
 
 ### Rate Limiting
 
 Granular, context-aware Redis-based rate limiter (Heartbeats: 120/min, Polling: 60/min, General: 100/min).
+
 > **Note:** Workers receive a standard **`Retry-After`** header on block to manage smart backoff strategies.
 
 ### Dynamic Blueprint Loading
@@ -527,6 +567,7 @@ Granular, context-aware Redis-based rate limiter (Heartbeats: 120/min, Polling: 
 Automatic loading from `BLUEPRINTS_DIR`. Scans, imports, and registers `.py` files on startup.
 
 ### Pure Holon Mode
+
 Disable public API with `ENABLE_CLIENT_API="false"` to only accept tasks via RXON from parent holons.
 
 ## Contributor Guide

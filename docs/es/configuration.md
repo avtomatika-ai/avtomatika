@@ -18,12 +18,12 @@ Este archivo define la lista de clientes API autorizados para crear trabajos.
 
 El archivo consta de secciones (tablas), donde el nombre de la sección es el identificador único del cliente.
 
-| Campo | Tipo | Obligatorio | Descripción |
-| :--- | :--- | :--- | :--- |
-| `token` | String | **Sí** | Token secreto que el cliente debe pasar en el encabezado `X-Client-Token`. |
-| `plan` | String | No | Nombre del plan de tarifa (ej. "free", "premium"). Usado en blueprints. |
-| `monthly_attempts` | Entero | No | Cuota mensual de solicitudes. |
-| `*` | Cualquiera | No | Cualquier otro campo estará disponible en `context.client.params`. |
+| Campo              | Tipo       | Obligatorio | Descripción                                                                |
+| :----------------- | :--------- | :---------- | :------------------------------------------------------------------------- |
+| `token`            | String     | **Sí**      | Token secreto que el cliente debe pasar en el encabezado `X-Client-Token`. |
+| `plan`             | String     | No          | Nombre del plan de tarifa (ej. "free", "premium"). Usado en blueprints.    |
+| `monthly_attempts` | Entero     | No          | Cuota mensual de solicitudes.                                              |
+| `*`                | Cualquiera | No          | Cualquier otro campo estará disponible en `context.client.params`.         |
 
 ### Ejemplo
 
@@ -50,14 +50,15 @@ Este archivo se utiliza para configurar la autenticación individual de los work
 
 El archivo consta de secciones, donde el nombre de la sección debe **coincidir exactamente** con el `worker_id` que utiliza el worker al registrarse.
 
-| Campo | Tipo | Obligatorio | Descripción |
-| :--- | :--- | :--- | :--- |
-| `token` | String | **Sí** | Token secreto individual para este worker. |
-| `description` | String | No | Descripción del worker para los administradores. |
+| Campo         | Tipo   | Obligatorio | Descripción                                      |
+| :------------ | :----- | :---------- | :----------------------------------------------- |
+| `token`       | String | **Sí**      | Token secreto individual para este worker.       |
+| `description` | String | No          | Descripción del worker para los administradores. |
 
 ### Características de Seguridad
-*   Al inicio, el Orquestador calcula el hash SHA-256 del token y solo almacena el hash en memoria (Redis). El token original no se guarda.
-*   **Optimización de Rendimiento:** Los hashes de los tokens se cachean en la memoria del Orquestador para minimizar el uso de CPU durante los latidos frecuentes.
+
+- Al inicio, el Orquestador calcula el hash SHA-256 del token y solo almacena el hash en memoria (Redis). El token original no se guarda.
+- **Optimización de Rendimiento:** Los hashes de los tokens se cachean en la memoria del Orquestador para minimizar el uso de CPU durante los latidos frecuentes.
 
 ### Ejemplo
 
@@ -83,17 +84,17 @@ Este archivo configura el Programador Nativo, permitiéndote ejecutar blueprints
 
 Cada sección representa un trabajo programado. El nombre de la sección sirve como identificador único.
 
-| Campo | Tipo | Obligatorio | Descripción |
-| :--- | :--- | :--- | :--- |
-| `blueprint` | String | **Sí** | El nombre del blueprint a ejecutar. |
-| `input_data` | Dictionary | No | Datos iniciales para el trabajo. |
-| `dispatch_timeout` | Entero | No | Expiración de la cola (segundos). |
-| `result_timeout` | Entero | No | Límite de tiempo absoluto para el resultado (segundos). |
-| `interval_seconds` | Entero | *Uno de* | Ejecutar cada N segundos. |
-| `daily_at` | String | *Uno de* | Ejecutar diariamente a una hora específica ("HH:MM"). |
-| `weekly_days` | List[String] | *Uno de* | Ejecutar en días específicos ("mon", "tue", ...) a la hora `time`. |
-| `monthly_dates` | List[Integer] | *Uno de* | Ejecutar en fechas específicas (1-31) a la hora `time`. |
-| `time` | String | *Uno de* | Requerido para `weekly_days` y `monthly_dates`. Formato "HH:MM". |
+| Campo              | Tipo          | Obligatorio | Descripción                                                        |
+| :----------------- | :------------ | :---------- | :----------------------------------------------------------------- |
+| `blueprint`        | String        | **Sí**      | El nombre del blueprint a ejecutar.                                |
+| `input_data`       | Dictionary    | No          | Datos iniciales para el trabajo.                                   |
+| `dispatch_timeout` | Entero        | No          | Expiración de la cola (segundos).                                  |
+| `result_timeout`   | Entero        | No          | Límite de tiempo absoluto para el resultado (segundos).            |
+| `interval_seconds` | Entero        | _Uno de_    | Ejecutar cada N segundos.                                          |
+| `daily_at`         | String        | _Uno de_    | Ejecutar diariamente a una hora específica ("HH:MM").              |
+| `weekly_days`      | List[String]  | _Uno de_    | Ejecutar en días específicos ("mon", "tue", ...) a la hora `time`. |
+| `monthly_dates`    | List[Integer] | _Uno de_    | Ejecutar en fechas específicas (1-31) a la hora `time`.            |
+| `time`             | String        | _Uno de_    | Requerido para `weekly_days` y `monthly_dates`. Formato "HH:MM".   |
 
 **Nota sobre Zonas Horarias:** Todos los campos de tiempo se interpretan de acuerdo con la variable de entorno global `TZ` (por defecto "UTC").
 
@@ -126,56 +127,59 @@ Esto obliga al Orquestador a volver a leer el archivo y actualizar los hashes de
 
 ## Variables de Entorno
 
-| Variable | Descripción | Predeterminado |
-| :--- | :--- | :--- |
-| `API_HOST` | Host para el servidor API. | `0.0.0.0` |
-| `API_PORT` | Puerto para el servidor API. | `8080` |
-| `ENABLE_CLIENT_API` | **Pure Holon Mode:** Si es `false`, deshabilita la API de Cliente (`/api/v1/...`). | `true` |
-| `REDIS_HOST` | Hostname del servidor Redis. Requerido para producción. | `""` |
-| `REDIS_PORT` | Puerto de Redis. | `6379` |
-| `REDIS_DB` | Índice de base de datos Redis. | `0` |
-| `INSTANCE_ID` | Identificador único para esta instancia del Orquestador. | `hostname` |
-| `CLIENT_TOKEN` | Token global para clientes API (respaldo). | `secure-orchestrator-token` |
-| `GLOBAL_WORKER_TOKEN` | Token global para workers (respaldo). | `secure-worker-token` |
-| `CLIENT_API_PREFIX` | **Ruta de API configurable:** Segmento de URL para la API de Cliente. Si está vacío, la API estará en la raíz. | `api` |
-| `WORKERS_CONFIG_PATH` | Ruta a `workers.toml`. | `""` |
-| `CLIENTS_CONFIG_PATH` | Ruta a `clients.toml`. | `""` |
-| `SCHEDULES_CONFIG_PATH` | Ruta a `schedules.toml`. | `""` |
-| `BLUEPRINTS_DIR` | Directorio con archivos Python de Blueprints. | `""` |
-| `TZ` | **Zona Horaria Global:** Afecta a disparadores y marcas de tiempo (ej. "Europe/Madrid"). | `UTC` |
-| `LOG_LEVEL` | Nivel de log (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` |
-| `LOG_FORMAT` | Formato de log (`text` o `json`). | `json` |
-| `WORKER_TIMEOUT_SECONDS` | Tiempo límite por defecto para que un worker complete una tarea. | `300` |
-| `WORKER_POLL_TIMEOUT_SECONDS` | Tiempo límite para peticiones de sondeo (polling) de tareas. | `30` |
-| `WORKER_HEALTH_CHECK_INTERVAL_SECONDS` | Intervalo para actualizar el TTL del worker. | `60` |
-| `JOB_MAX_RETRIES` | Máximo de reintentos para fallos transitorios. | `3` |
-| `WATCHER_INTERVAL_SECONDS` | Intervalo del proceso Watcher para verificar expiraciones. | `20` |
-| `WATCHER_LIMIT` | Número máximo de trabajos expirados procesados por ciclo de Watcher. | `500` |
-| `STRICT_EVENT_VALIDATION` | Si es `true`, rechaza eventos de workers no declarados en sus esquemas. | `true` |
-| `REPUTATION_MIN_THRESHOLD` | Puntuación mínima de reputación para asignar tareas a un worker. | `0.3` |
-| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Penalización de reputación por violación de contrato. | `0.2` |
-| `REPUTATION_PENALTY_TASK_FAILURE` | Penalización por fallo crítico de tarea. | `0.05` |
-| `REPUTATION_REWARD_SUCCESS` | Recompensa de reputación por tarea exitosa. | `0.001` |
-| `EXECUTOR_MAX_CONCURRENT_JOBS` | Número máximo de trabajos concurrentes procesados por el Orquestador. | `1000` |
-| `DISPATCHER_SOFT_LIMIT` | Límite suave de tareas en la cola de un worker antes del desbordamiento. | `3` |
-| `DISPATCHER_MAX_CANDIDATES` | Número máximo de workers adecuados verificados por el Dispatcher. | `50` |
-| `WORK_STEALING_ENABLED` | Si es `true`, los workers inactivos pueden robar tareas de colegas cargados. | `true` |
-| `HISTORY_DATABASE_URI` | URI para el almacenamiento de historial (`sqlite:///...` o `postgresql://...`). | `""` |
-| `RATE_LIMITING_ENABLED` | Habilitar middleware de límite de tasa. | `true` |
-| `RATE_LIMIT_LIMIT` | Límite máximo de solicitudes por periodo. | `100` |
-| `RATE_LIMIT_PERIOD` | Periodo de límite de tasa en segundos. | `60` |
-| `RATE_LIMIT_HEARTBEAT_LIMIT` | Límite específico para latidos (heartbeats). | `120` |
-| `RATE_LIMIT_POLL_LIMIT` | Límite específico para sondeo de tareas (polling). | `60` |
-| `MAX_TRANSITIONS_PER_JOB` | **Protección de Bucle Infinito:** Límite de transiciones por trabajo. | `100` |
-| `DETAILED_API_RESPONSES` | **Respuestas de API Detalladas:** Si es `false` (por defecto), la API de estado devuelve solo un conjunto básico de campos. | `false` |
+| Variable                                | Descripción                                                                                                                 | Predeterminado              |
+| :-------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------- | :-------------------------- |
+| `API_HOST`                              | Host para el servidor API.                                                                                                  | `0.0.0.0`                   |
+| `API_PORT`                              | Puerto para el servidor API.                                                                                                | `8080`                      |
+| `ENABLE_CLIENT_API`                     | **Pure Holon Mode:** Si es `false`, deshabilita la API de Cliente (`/api/v1/...`).                                          | `true`                      |
+| `REDIS_HOST`                            | Hostname del servidor Redis. Requerido para producción.                                                                     | `""`                        |
+| `REDIS_PORT`                            | Puerto de Redis.                                                                                                            | `6379`                      |
+| `REDIS_DB`                              | Índice de base de datos Redis.                                                                                              | `0`                         |
+| `INSTANCE_ID`                           | Identificador único para esta instancia del Orquestador.                                                                    | `hostname`                  |
+| `CLIENT_TOKEN`                          | Token global para clientes API (respaldo).                                                                                  | `secure-orchestrator-token` |
+| `GLOBAL_WORKER_TOKEN`                   | Token global para workers (respaldo).                                                                                       | `secure-worker-token`       |
+| `CLIENT_API_PREFIX`                     | **Ruta de API configurable:** Segmento de URL para la API de Cliente. Si está vacío, la API estará en la raíz.              | `api`                       |
+| `WORKERS_CONFIG_PATH`                   | Ruta a `workers.toml`.                                                                                                      | `""`                        |
+| `CLIENTS_CONFIG_PATH`                   | Ruta a `clients.toml`.                                                                                                      | `""`                        |
+| `SCHEDULES_CONFIG_PATH`                 | Ruta a `schedules.toml`.                                                                                                    | `""`                        |
+| `BLUEPRINTS_DIR`                        | Directorio con archivos Python de Blueprints.                                                                               | `""`                        |
+| `TZ`                                    | **Zona Horaria Global:** Afecta a disparadores y marcas de tiempo (ej. "Europe/Madrid").                                    | `UTC`                       |
+| `LOG_LEVEL`                             | Nivel de log (`DEBUG`, `INFO`, `WARNING`, `ERROR`).                                                                         | `INFO`                      |
+| `LOG_FORMAT`                            | Formato de log (`text` o `json`).                                                                                           | `json`                      |
+| `WORKER_TIMEOUT_SECONDS`                | Tiempo límite por defecto para que un worker complete una tarea.                                                            | `300`                       |
+| `WORKER_POLL_TIMEOUT_SECONDS`           | Tiempo límite para peticiones de sondeo (polling) de tareas.                                                                | `30`                        |
+| `WORKER_HEALTH_CHECK_INTERVAL_SECONDS`  | Intervalo para actualizar el TTL del worker.                                                                                | `60`                        |
+| `JOB_MAX_RETRIES`                       | Máximo de reintentos para fallos transitorios.                                                                              | `3`                         |
+| `WATCHER_INTERVAL_SECONDS`              | Intervalo del proceso Watcher para verificar expiraciones.                                                                  | `20`                        |
+| `WATCHER_LIMIT`                         | Número máximo de trabajos expirados procesados por ciclo de Watcher.                                                        | `500`                       |
+| `STRICT_EVENT_VALIDATION`               | Si es `true`, rechaza eventos de workers no declarados en sus esquemas.                                                     | `true`                      |
+| `REPUTATION_MIN_THRESHOLD`              | Puntuación mínima de reputación para asignar tareas a un worker.                                                            | `0.3`                       |
+| `REPUTATION_PENALTY_CONTRACT_VIOLATION` | Penalización de reputación por violación de contrato.                                                                       | `0.2`                       |
+| `REPUTATION_PENALTY_TASK_FAILURE`       | Penalización por fallo crítico de tarea.                                                                                    | `0.05`                      |
+| `REPUTATION_REWARD_SUCCESS`             | Recompensa de reputación por tarea exitosa.                                                                                 | `0.001`                     |
+| `EXECUTOR_MAX_CONCURRENT_JOBS`          | Número máximo de trabajos concurrentes procesados por el Orquestador.                                                       | `1000`                      |
+| `DISPATCHER_SOFT_LIMIT`                 | Límite suave de tareas en la cola de un worker antes del desbordamiento.                                                    | `3`                         |
+| `DISPATCHER_MAX_CANDIDATES`             | Número máximo de workers adecuados verificados por el Dispatcher.                                                           | `50`                        |
+| `WORK_STEALING_ENABLED`                 | Si es `true`, los workers inactivos pueden robar tareas de colegas cargados.                                                | `true`                      |
+| `HISTORY_DATABASE_URI`                  | URI para el almacenamiento de historial (`sqlite:///...` o `postgresql://...`).                                             | `""`                        |
+| `RATE_LIMITING_ENABLED`                 | Habilitar middleware de límite de tasa.                                                                                     | `true`                      |
+| `RATE_LIMIT_LIMIT`                      | Límite máximo de solicitudes por periodo.                                                                                   | `100`                       |
+| `RATE_LIMIT_PERIOD`                     | Periodo de límite de tasa en segundos.                                                                                      | `60`                        |
+| `RATE_LIMIT_HEARTBEAT_LIMIT`            | Límite específico para latidos (heartbeats).                                                                                | `120`                       |
+| `RATE_LIMIT_POLL_LIMIT`                 | Límite específico para sondeo de tareas (polling).                                                                          | `60`                        |
+| `MAX_TRANSITIONS_PER_JOB`               | **Protección de Bucle Infinito:** Límite de transiciones por trabajo.                                                       | `100`                       |
+| `DETAILED_API_RESPONSES`                | **Respuestas de API Detalladas:** Si es `false` (por defecto), la API de estado devuelve solo un conjunto básico de campos. | `false`                     |
 
 ### Respuesta 429 (Too Many Requests)
+
 Cuando se excede un límite, el Orquestador devuelve un encabezado HTTP estándar **`Retry-After`**.
+
 > **Nota:** Este encabezado se devuelve **solo a los workers** (solicitudes a `/_worker/*`) para ayudar con las estrategias de backoff. Los clientes normales de la API reciben un 429 sin el tiempo de espera.
 
 ---
 
 ### Formato de respuesta de estado del trabajo
+
 El sistema admite dos niveles de detalle para el endpoint `GET /api/v1/jobs/{id}`:
 
 1. **Modo Compacto** (Por defecto, `DETAILED_API_RESPONSES=false`):
@@ -184,36 +188,37 @@ El sistema admite dos niveles de detalle para el endpoint `GET /api/v1/jobs/{id}
    - `status` — Estado actual del ciclo de vida.
    - `result` — Resultado del último paso completado.
    - `blueprint_name` — Nombre del blueprint.
-   
-   *Nota:* El parámetro `?fields=...` en este modo está restringido solo a estos 4 campos.
+
+   _Nota:_ El parámetro `?fields=...` en este modo está restringido solo a estos 4 campos.
 
 2. **Modo Detallado** (`DETAILED_API_RESPONSES=true`):
    Devuelve el objeto completo del estado del trabajo, incluyendo `state_history`, `initial_data`, `client_config`, etc.
-| `WORKER_AUTH_MODE` | **Modo de autenticación:** `mixed` (tokens+mTLS), `mtls-only` (mTLS estricto + STS), `token-only`. | `mixed` |
+   | `WORKER_AUTH_MODE` | **Modo de autenticación:** `mixed` (tokens+mTLS), `mtls-only` (mTLS estricto + STS), `token-only`. | `mixed` |
 
 ### Seguridad y TLS (mTLS)
 
-| Variable | Descripción | Predeterminado |
-| :--- | :--- | :--- |
-| `TLS_ENABLED` | Habilitar servidor HTTPS. | `false` |
-| `TLS_CERT_PATH` | Ruta al certificado SSL del servidor (`.crt`). | `""` |
-| `TLS_KEY_PATH` | Ruta a la clave privada del servidor (`.key`). | `""` |
-| `TLS_CA_PATH` | Ruta al paquete CA para verificar certificados de cliente. | `""` |
-| `TLS_REQUIRE_CLIENT_CERT` | Si es `true`, el servidor rechazará conexiones sin certificado válido (mTLS). | `false` |
-| `REDIS_ENCRYPTION_KEY` | **Cifrado de Sobres:** Si se proporciona, los tokens de worker se cifran en Redis (AES-GCM). | `""` |
+| Variable                  | Descripción                                                                                  | Predeterminado |
+| :------------------------ | :------------------------------------------------------------------------------------------- | :------------- |
+| `TLS_ENABLED`             | Habilitar servidor HTTPS.                                                                    | `false`        |
+| `TLS_CERT_PATH`           | Ruta al certificado SSL del servidor (`.crt`).                                               | `""`           |
+| `TLS_KEY_PATH`            | Ruta a la clave privada del servidor (`.key`).                                               | `""`           |
+| `TLS_CA_PATH`             | Ruta al paquete CA para verificar certificados de cliente.                                   | `""`           |
+| `TLS_REQUIRE_CLIENT_CERT` | Si es `true`, el servidor rechazará conexiones sin certificado válido (mTLS).                | `false`        |
+| `REDIS_ENCRYPTION_KEY`    | **Cifrado de Sobres:** Si se proporciona, los tokens de worker se cifran en Redis (AES-GCM). | `""`           |
 
 ### Rendimiento de la autenticación de workers
-Para minimizar la sobrecarga de CPU durante los heartbeats frecuentes, el Orquestador almacena en caché los hashes de los tokens de los workers verificados en la memoria durante **60 segundos**. Esto significa que los cambios en `workers.toml` pueden tardar hasta un minuto en propagarse a menos que se active una recarga manual a través de la API.
+
+Para minimizar la sobrecarga de CPU durante los heartbeats frecuentes, el Orquestador almacena en caché los hashes de los tokens de los workers verificados en la memoria durante **60 segundos** (utilizando la caché rápida basada en Rust `cachebox.TTLCache` de fondo). Esto significa que los cambios en `workers.toml` pueden tardar hasta un minuto en propagarse a menos que se active una recarga manual a través de la API.
 
 ### Almacenamiento S3 (Opcional)
 
-| Variable | Descripción | Predeterminado |
-| :--- | :--- | :--- |
-| `S3_ENDPOINT_URL` | URL del almacenamiento compatible con S3. | `""` |
-| `S3_ACCESS_KEY` | ID de clave de acceso. | `""` |
-| `S3_SECRET_KEY` | Clave de acceso secreta. | `""` |
-| `S3_DEFAULT_BUCKET` | Nombre del bucket por defecto. | `avtomatika-payloads` |
-| `S3_REGION` | Región S3. | `us-east-1` |
-| `S3_MAX_CONCURRENCY` | Máximo de conexiones concurrentes a S3 para todo el clúster. | `100` |
-| `S3_AUTO_CLEANUP` | Si es `true`, borra automáticamente archivos S3 al finalizar el trabajo. | `true` |
-| `TASK_FILES_DIR` | Directorio local para almacenamiento temporal de archivos. | `/tmp/avtomatika-payloads` |
+| Variable             | Descripción                                                              | Predeterminado             |
+| :------------------- | :----------------------------------------------------------------------- | :------------------------- |
+| `S3_ENDPOINT_URL`    | URL del almacenamiento compatible con S3.                                | `""`                       |
+| `S3_ACCESS_KEY`      | ID de clave de acceso.                                                   | `""`                       |
+| `S3_SECRET_KEY`      | Clave de acceso secreta.                                                 | `""`                       |
+| `S3_DEFAULT_BUCKET`  | Nombre del bucket por defecto.                                           | `avtomatika-payloads`      |
+| `S3_REGION`          | Región S3.                                                               | `us-east-1`                |
+| `S3_MAX_CONCURRENCY` | Máximo de conexiones concurrentes a S3 para todo el clúster.             | `100`                      |
+| `S3_AUTO_CLEANUP`    | Si es `true`, borra automáticamente archivos S3 al finalizar el trabajo. | `true`                     |
+| `TASK_FILES_DIR`     | Directorio local para almacenamiento temporal de archivos.               | `/tmp/avtomatika-payloads` |

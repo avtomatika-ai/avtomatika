@@ -1,15 +1,16 @@
 from unittest.mock import MagicMock
 
 import pytest
+from fast_filter import F
 
 from avtomatika.blueprint import Blueprint
 
 
-def test_combine_when_and_default_handler():
-    """Verifies that .when() and a default handler can be used together for the same state."""
+def test_combine_condition_and_default_handler():
+    """Verifies that condition and a default handler can be used together for the same state."""
     bp = Blueprint("test")
 
-    @bp.handler("process").when("context.initial_data.x == 1")
+    @bp.handler("process", F.initial_data["x"] == 1)
     async def process_special(actions):
         pass
 
@@ -21,15 +22,15 @@ def test_combine_when_and_default_handler():
     assert bp.handlers["process"] == process_default
 
 
-def test_combine_when_and_default_handler_reverse_order():
-    """Verifies that .when() and a default handler work regardless of definition order."""
+def test_combine_condition_and_default_handler_reverse_order():
+    """Verifies that condition and a default handler work regardless of definition order."""
     bp = Blueprint("test")
 
     @bp.handler("process")
     async def process_default(actions):
         pass
 
-    @bp.handler("process").when("context.initial_data.x == 1")
+    @bp.handler("process", F.initial_data["x"] == 1)
     async def process_special(actions):
         pass
 
@@ -41,7 +42,7 @@ def test_no_handler_matches_error_message():
     """Verifies the error message when all conditions fail and no default handler exists."""
     bp = Blueprint("test")
 
-    @bp.handler("start").when("context.initial_data.x == 1")
+    @bp.handler("start", F.initial_data["x"] == 1)
     async def start_cond(actions):
         pass
 
@@ -94,15 +95,15 @@ def test_static_analysis_with_inferred_names():
     assert transitions["middle"] == {"end"}
 
 
-def test_multiple_when_conditions():
-    """Verifies that multiple .when() conditions can be registered for the same state."""
+def test_multiple_conditions():
+    """Verifies that multiple conditions can be registered for the same state."""
     bp = Blueprint("test")
 
-    @bp.handler("step").when("context.initial_data.v == 1")
+    @bp.handler("step", F.initial_data["v"] == 1)
     async def handler1(actions):
         return 1
 
-    @bp.handler("step").when("context.initial_data.v == 2")
+    @bp.handler("step", F.initial_data["v"] == 2)
     async def handler2(actions):
         return 2
 

@@ -10,10 +10,9 @@ import inspect
 import textwrap
 from collections.abc import Callable
 from logging import getLogger
-from operator import eq, ge, gt, le, lt, ne
-from re import compile as re_compile
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
+from fast_filter import FastF
 from graphviz import Digraph
 from rxon.schema import extract_json_schema
 
@@ -26,66 +25,17 @@ def _PLACEHOLDER():
     return None
 
 
-# Simple parser for expressions like "context.area.field operator value"
-CONDITION_REGEX = re_compile(
-    r"context\.(?P<area>\w+)\.(?P<field>\w+)\s*(?P<op>>=|<=|==|!=|>|<)\s*(?P<value>.*)",
-)
-
-OPERATORS = {
-    "==": eq,
-    "!=": ne,
-    ">": gt,
-    "<": lt,
-    ">=": ge,
-    "<=": le,
-}
-
-
-class Condition(NamedTuple):
-    area: str
-    field: str
-    op: Callable
-    value: Any
-
-
-def _parse_condition(condition_str: str) -> Condition:
-    match = CONDITION_REGEX.match(condition_str.strip())
-    if not match:
-        raise ValueError(f"Invalid condition string format: {condition_str}")
-
-    parts = match.groupdict()
-    op_str = parts["op"]
-    op_func = OPERATORS.get(op_str)
-    if not op_func:
-        raise ValueError(f"Unsupported operator: {op_str}")
-
-    value_str = parts["value"].strip().strip("'\"")
-    value: Any
-    try:
-        value = int(value_str)
-    except ValueError:
-        try:
-            value = float(value_str)
-        except ValueError:
-            value = value_str
-
-    return Condition(area=parts["area"], field=parts["field"], op=op_func, value=value)
-
-
 class ConditionalHandler:
-    def __init__(self, blueprint: "Blueprint", state: str, func: Callable, condition_str: str):
+    def __init__(self, blueprint: "Blueprint", state: str, func: Callable, condition: FastF):
         self.blueprint = blueprint
         self.state = state
         self.func = func
-        self.condition = _parse_condition(condition_str)
+        self._filter = condition
 
     def evaluate(self, context: Any) -> bool:
         try:
-            context_area = getattr(context, self.condition.area)
-            actual_value = context_area[self.condition.field]
-            result = self.condition.op(actual_value, self.condition.value)
-            return bool(result)
-        except (AttributeError, KeyError):
+            return bool(self._filter.resolve(context))
+        except Exception:
             return False
 
 
@@ -96,22 +46,31 @@ class HandlerDecorator:
         state: str | None = None,
         is_start: bool = False,
         is_end: bool = False,
+        condition: FastF | None = None,
     ):
         self._blueprint = blueprint
         self._state = state
         self._is_start = is_start
         self._is_end = is_end
+        self._condition = condition
 
     def __call__(self, func: Callable) -> Callable:
         state_name = self._state or func.__name__
 
-        existing_handler = self._blueprint.handlers.get(state_name)
-        if existing_handler and existing_handler is not _PLACEHOLDER:
-            raise ValueError(f"Default handler for state '{state_name}' is already registered.")
-        self._blueprint.handlers[state_name] = func
+        if self._condition is not None:
+            if state_name not in self._blueprint.handlers:
+                self._blueprint.handlers[state_name] = _PLACEHOLDER
+
+            handler = ConditionalHandler(self._blueprint, state_name, func, self._condition)
+            self._blueprint.conditional_handlers.append(handler)
+        else:
+            existing_handler = self._blueprint.handlers.get(state_name)
+            if existing_handler and existing_handler is not _PLACEHOLDER:
+                raise ValueError(f"Default handler for state '{state_name}' is already registered.")
+            self._blueprint.handlers[state_name] = func
 
         if self._is_start:
-            if self._blueprint.start_state is not None:
+            if self._blueprint.start_state is not None and self._blueprint.start_state != state_name:
                 raise ValueError(
                     f"Blueprint '{self._blueprint.name}' already has a start state: '{self._blueprint.start_state}'."
                 )
@@ -122,19 +81,6 @@ class HandlerDecorator:
 
         self._state = state_name
         return func
-
-    def when(self, condition_str: str) -> Callable:
-        def decorator(func: Callable) -> Callable:
-            state_name = self._state or func.__name__
-
-            if state_name not in self._blueprint.handlers:
-                self._blueprint.handlers[state_name] = _PLACEHOLDER
-
-            handler = ConditionalHandler(self._blueprint, state_name, func, condition_str)
-            self._blueprint.conditional_handlers.append(handler)
-            return func
-
-        return decorator
 
 
 class Blueprint:
@@ -182,10 +128,10 @@ class Blueprint:
 
     def handler(
         self,
-        state_or_func: str | Callable | None = None,
-        *,
+        *args: Any,
         is_start: bool = False,
         is_end: bool = False,
+        condition: FastF | None = None,
     ) -> Any:
         """Decorator for registering a state handler.
 
@@ -193,9 +139,10 @@ class Blueprint:
         decorated function's name.
 
         Args:
-            state_or_func: The name of the state or the function being decorated.
+            *args: Can be (state_name: str), (condition: FastF), or (state_name: str, condition: FastF).
             is_start: Whether this is the initial state of the blueprint.
             is_end: Whether this is a terminal state.
+            condition: An optional FastF condition.
 
         Examples:
             @bp.handler("start_state", is_start=True)
@@ -206,14 +153,53 @@ class Blueprint:
 
             @bp.handler
             async def process(actions): ...  # state name is "process"
-        """
-        if callable(state_or_func):
-            # Used as @bp.handler without parens
-            decorator = HandlerDecorator(self, state_or_func.__name__, is_start=is_start, is_end=is_end)
-            return decorator(state_or_func)
 
-        # Used as @bp.handler("state_name") or @bp.handler(is_start=True)
-        return HandlerDecorator(self, state_or_func, is_start=is_start, is_end=is_end)
+            # With conditions:
+            @bp.handler("process", F.initial_data["x"] == 1)
+            async def process_special(actions): ...
+
+            @bp.handler(F.initial_data["x"] == 1)
+            async def process_special(actions): ...  # state name is "process_special"
+        """
+        state_name = None
+        cond = condition
+
+        if len(args) == 1:
+            arg = args[0]
+            if isinstance(arg, FastF):
+                cond = arg
+            elif callable(arg):
+                # Used as @bp.handler without parens
+                decorator = HandlerDecorator(
+                    self,
+                    state=arg.__name__,
+                    is_start=is_start,
+                    is_end=is_end,
+                    condition=cond,
+                )
+                return decorator(arg)
+            elif isinstance(arg, str):
+                state_name = arg
+            elif arg is not None:
+                raise TypeError(f"Invalid handler argument type: {type(arg)}")
+        elif len(args) == 2:
+            if isinstance(args[0], str) and isinstance(args[1], FastF):
+                state_name = args[0]
+                cond = args[1]
+            else:
+                raise TypeError(
+                    f"Invalid handler arguments: expected (str, FastF), got ({type(args[0])}, {type(args[1])})"
+                )
+        elif len(args) > 2:
+            raise TypeError(f"handler() takes at most 2 positional arguments but {len(args)} were given")
+
+        return HandlerDecorator(
+            self,
+            state=state_name,
+            is_start=is_start,
+            is_end=is_end,
+            condition=cond,
+        )
 
     def aggregator(self, state_or_func: str | Callable | None = None) -> Any:
         """Decorator for registering an aggregator handler.
@@ -264,7 +250,7 @@ class Blueprint:
             "handlers": list(self.handlers.keys()),
             "aggregators": list(self.aggregator_handlers.keys()),
             "conditional_handlers": [
-                {"state": ch.state, "condition": str(ch.condition)} for ch in self.conditional_handlers
+                {"state": ch.state, "condition": repr(ch._filter)} for ch in self.conditional_handlers
             ],
             "events_schema": self.events_schema,
         }

@@ -51,7 +51,7 @@ def worker_service(storage, config, engine):
 async def test_b8_timestamp_replay_protection_fail(worker_service, config):
     """FAIL: Message timestamp is too old (Replay attempt)."""
     worker_id = "w1"
-    old_timestamp = time.time() - 300  # 5 minutes ago
+    old_timestamp = int(time.time() - 300)  # 5 minutes ago
 
     payload = {
         "worker_id": worker_id,
@@ -87,7 +87,7 @@ async def test_b8_task_result_worker_id_autofill(worker_service, storage):
         "task_id": "t1",
         "status": "success",
         "data": {"ok": True},
-        "timestamp": time.time(),
+        "timestamp": int(time.time()),
         "security": {"signature": "sig", "signer_id": worker_id},
     }
 
@@ -105,7 +105,7 @@ async def test_b8_metadata_propagation(worker_service, storage):
     """SUCCESS: Metadata and timestamp from result are propagated to job state."""
     worker_id = "w1"
     job_id = "job-meta"
-    ts = time.time()
+    ts = int(time.time())
 
     await storage.save_job_state(
         job_id,

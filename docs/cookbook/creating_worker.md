@@ -25,6 +25,7 @@ Create a Python file (e.g., `my_worker.py`) and import the `Worker` class.
 You can use **standard dictionaries** (no dependencies) or **Pydantic models** (for automatic validation).
 
 ### Option A: Simple Dictionary (No Pydantic)
+
 ```python
 @worker.skill("check_inventory")
 async def check_inventory_handler(params: dict, **kwargs) -> dict:
@@ -34,6 +35,7 @@ async def check_inventory_handler(params: dict, **kwargs) -> dict:
 ```
 
 ### Option B: Pydantic Model (Auto-validation)
+
 ```python
 from pydantic import BaseModel
 
@@ -48,27 +50,29 @@ async def check_inventory_handler(params: CheckParams, **kwargs) -> dict:
 ```
 
 # Example handler for long task with cooperative cancellation
+
 @worker.skill("long_running_task")
-async def long_task_handler(params: dict, **kwargs) -> dict:
-    task_id = kwargs["task_id"]
-    print(f"Starting long task {task_id}...")
-    
+async def long_task_handler(params: dict, \*\*kwargs) -> dict:
+task_id = kwargs["task_id"]
+print(f"Starting long task {task_id}...")
+
     for i in range(10):
         # Check if Orchestrator requested cancellation
         if await worker.check_for_cancellation(task_id):
             print(f"Cancellation detected for task {task_id}. Stopping...")
             return {"status": "cancelled", "message": "Task was cancelled by user."}
-        
+
         print(f"Step {i+1}/10 done...")
         await asyncio.sleep(2)
 
     return {"status": "success"}
 
-
 # 4. Run worker
-if __name__ == "__main__":
-    worker.run()
-```
+
+if **name** == "**main**":
+worker.run()
+
+````
 
 ## Step 3: Connection and Authentication Setup
 
@@ -87,14 +91,16 @@ WORKER_TOKEN=your-secret-worker-token
 
 # (Optional) Enable WebSocket for instant task cancellation
 WORKER_ENABLE_WEBSOCKETS=true
-```
+````
 
 ## Step 4: Launch
 
 Just run your Python file:
+
 ```bash
 python my_worker.py
 ```
+
 Worker will automatically connect to Orchestrator, register, and start polling for new tasks.
 
 ## Cancellation Mechanisms
